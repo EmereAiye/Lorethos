@@ -1,0 +1,66 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant sepia (&:where(.sepia, .sepia *));
+
+@layer base {
+  :root {
+    --font-display: 'Cormorant Garamond', Georgia, serif;
+    --font-reader: 'Literata', Georgia, serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+    
+    --brand-mulberry: #2D142C;
+    --brand-terracotta: #C85A32;
+    --canvas-day: #F9F6F0;
+    --canvas-night: #160C16;
+    --canvas-sepia: #F4ECE1;
+  }
+
+  html.dark {
+    background-color: #160C16;
+    color: #F9F6F0;
+  }
+
+  html.sepia {
+    background-color: #F4ECE1;
+    color: #2C1E18;
+  }
+
+  html:not(.dark):not(.sepia) {
+    background-color: #F9F6F0;
+    color: #2D142C;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+}
+
+.font-display {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+}
+
+.font-reader {
+  font-family: 'Literata', Georgia, serif;
+}
+
+.font-sans-ui {
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(45, 20, 44, 0.15);
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+
