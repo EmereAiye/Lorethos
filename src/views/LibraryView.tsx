@@ -1,6 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { Search, Filter, BookOpen, Star, SlidersHorizontal, ArrowUpDown } from 'lucide-react';
+import { Search, Filter, BookOpen, Star, SlidersHorizontal, ArrowUpDown, Sparkles, Loader2, ArrowRight, X } from 'lucide-react';
+
+interface AIRecommendation {
+  slug: string;
+  vibeTag: string;
+  reason: string;
+}
 
 export const LibraryView: React.FC = () => {
   const { stories, navigate, user } = useApp();
@@ -9,6 +15,49 @@ export const LibraryView: React.FC = () => {
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
   const [selectedTier, setSelectedTier] = useState<string>('All');
   const [sortBy, setSortBy] = useState<'popular' | 'rating' | 'chapters'>('popular');
+
+  const [moodPrompt, setMoodPrompt] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiCuratorNote, setAiCuratorNote] = useState<string | null>(null);
+  const [aiMatches, setAiMatches] = useState<AIRecommendation[]>([]);
+
+  const handleCurateStories = async (customPrompt?: string) => {
+    const query = (customPrompt ?? moodPrompt).trim();
+    if (!query) return;
+    if (customPrompt) setMoodPrompt(customPrompt);
+
+    setAiLoading(true);
+    setAiError(null);
+
+    try {
+      const res = await fetch('/api/ai/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          moodPrompt: query,
+          catalog: stories.map(s => ({
+            slug: s.slug,
+            title: s.title,
+            genre: s.genre,
+            author: s.author,
+            tags: s.tags,
+            synopsis: s.synopsis
+          }))
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Unable to fetch AI recommendations.');
+      }
+      setAiCuratorNote(data.curatorNote || null);
+      setAiMatches(Array.isArray(data.recommendations) ? data.recommendations : []);
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : 'Something went wrong.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const genres = useMemo(() => {
     const list = Array.from(new Set(stories.map(s => s.genre)));
@@ -158,6 +207,138 @@ export const LibraryView: React.FC = () => {
 
           </div>
 
+        </div>
+
+        {/* Curator AI Matchmaker */}
+        <div className="p-6 rounded-xl bg-gradient-to-r from-[#2D142C]/5 via-[#C85A32]/5 to-[#2D142C]/5 dark:from-[#1E111E] dark:via-[#2A1526] dark:to-[#1E111E] border border-[#C85A32]/25 space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-[#C85A32]/15 text-[#C85A32] flex items-center justify-center shrink-0">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="font-display text-lg font-bold leading-tight">
+                  Ask the Literary Curator
+                </h2>
+                <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                  Describe a mood, setting, or mythos and let Gemini match your next read.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-sans-ui">
+              {[
+                'West African cosmic folklore',
+                'Dark royal betrayal & blood pacts',
+                'Submerged ancient mysteries'
+              ].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  disabled={aiLoading}
+                  onClick={() => handleCurateStories(preset)}
+                  className="px-2.5 py-1 rounded-md border border-[#C85A32]/30 text-[#C85A32] hover:bg-[#C85A32] hover:text-white transition-colors cursor-pointer"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleCurateStories();
+            }}
+            className="flex flex-col sm:flex-row gap-2.5"
+          >
+            <input
+              type="text"
+              value={moodPrompt}
+              onChange={(e) => setMoodPrompt(e.target.value)}
+              placeholder="What are you in the mood to read tonight? (e.g. 'ancient empires and forbidden ink')"
+              className="flex-1 px-4 py-2.5 text-xs sm:text-sm rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-white dark:bg-[#160C16] focus:outline-none focus:border-[#C85A32] font-sans-ui"
+            />
+            <button
+              type="submit"
+              disabled={aiLoading || !moodPrompt.trim()}
+              className="px-5 py-2.5 bg-[#C85A32] hover:bg-[#b04d28] disabled:opacity-55 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-2 cursor-pointer transition-colors shrink-0"
+            >
+              {aiLoading ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Curating...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Match Stories</span>
+                </>
+              )}
+            </button>
+          </form>
+
+          {aiError && (
+            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/25 text-red-600 dark:text-red-400 text-xs font-sans-ui">
+              {aiError}
+            </div>
+          )}
+
+          {aiMatches.length > 0 && (
+            <div className="space-y-3 pt-2 border-t border-[#C85A32]/15">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs italic font-reader text-[#2D142C]/80 dark:text-white/80">
+                  {aiCuratorNote}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAiMatches([]);
+                    setAiCuratorNote(null);
+                  }}
+                  className="text-[11px] text-[#2D142C]/50 dark:text-white/50 hover:text-[#C85A32] flex items-center gap-1 cursor-pointer shrink-0"
+                >
+                  <X className="w-3 h-3" />
+                  <span>Dismiss</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {aiMatches.map((match) => {
+                  const matchedStory = stories.find(s => s.slug === match.slug);
+                  if (!matchedStory) return null;
+                  return (
+                    <div
+                      key={match.slug}
+                      onClick={() => navigate('story-detail', { slug: matchedStory.slug })}
+                      className="p-4 rounded-xl bg-white dark:bg-[#160C16] border border-[#C85A32]/30 hover:border-[#C85A32] shadow-xs flex flex-col justify-between space-y-3 cursor-pointer transition-all"
+                    >
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-mono uppercase font-bold text-[#C85A32]">
+                            {match.vibeTag}
+                          </span>
+                          <span className="text-[10px] text-[#2D142C]/50 dark:text-white/50">
+                            {matchedStory.genre}
+                          </span>
+                        </div>
+                        <h3 className="font-display text-base font-bold">{matchedStory.title}</h3>
+                        <p className="text-xs text-[#2D142C]/70 dark:text-white/70 font-reader leading-relaxed">
+                          {match.reason}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between pt-2 border-t border-[#2D142C]/10 dark:border-white/10 text-xs font-semibold text-[#C85A32]">
+                        <span>By {matchedStory.author}</span>
+                        <span className="inline-flex items-center gap-1">
+                          Explore <ArrowRight className="w-3 h-3" />
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Story Grid */}

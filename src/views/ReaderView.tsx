@@ -19,7 +19,9 @@ import {
   Sparkles,
   CheckCircle2,
   Bookmark,
-  Flame
+  Flame,
+  Loader2,
+  Send
 } from 'lucide-react';
 import { ReaderTheme, ReaderFont } from '../types';
 
@@ -44,6 +46,11 @@ export const ReaderView: React.FC = () => {
   const [fullscreen, setFullscreen] = useState(false);
   const [bookmarked, setBookmarked] = useState(false);
   const [goalLogged, setGoalLogged] = useState(false);
+  const [companionOpen, setCompanionOpen] = useState(false);
+  const [companionLoading, setCompanionLoading] = useState(false);
+  const [companionReply, setCompanionReply] = useState<string | null>(null);
+  const [companionError, setCompanionError] = useState<string | null>(null);
+  const [loreQuestion, setLoreQuestion] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const chapterData = getChapter(routeParams.slug || '', routeParams.chapterNumber || 1);
@@ -72,10 +79,51 @@ export const ReaderView: React.FC = () => {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [chapterData]);
 
-  // Reset goalLogged when chapter changes
+  // Reset goalLogged and companion output when chapter changes
   useEffect(() => {
     setGoalLogged(false);
+    setCompanionReply(null);
+    setCompanionError(null);
   }, [chapterData?.chapter.id]);
+
+  const askLorekeeper = async (mode: 'recap' | 'ask', customQuestion?: string) => {
+    if (!chapterData) return;
+    const { story, chapter } = chapterData;
+    const q = (customQuestion ?? loreQuestion).trim();
+    if (mode === 'ask' && !q) return;
+
+    setCompanionLoading(true);
+    setCompanionError(null);
+
+    try {
+      const res = await fetch('/api/ai/companion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode,
+          question: q,
+          storyTitle: story.title,
+          author: story.author,
+          genre: story.genre,
+          synopsis: story.synopsis,
+          prologueLore: story.prologueLore,
+          chapterNumber: chapter.chapterNumber,
+          chapterTitle: chapter.title,
+          chapterContent: isAccessible ? chapter.content : [chapter.excerpt],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not reach Lorekeeper.');
+      }
+      setCompanionReply(data.reply);
+      if (mode === 'ask') setLoreQuestion('');
+    } catch (err) {
+      setCompanionError(err instanceof Error ? err.message : 'Something went wrong.');
+    } finally {
+      setCompanionLoading(false);
+    }
+  };
 
   if (!chapterData) {
     return (
@@ -257,9 +305,29 @@ export const ReaderView: React.FC = () => {
               <span className="hidden lg:inline">{audioPlaying ? 'Audio Active' : 'Soundscape'}</span>
             </button>
 
+            {/* Lorekeeper AI Companion Toggle */}
+            <button
+              onClick={() => {
+                setCompanionOpen(!companionOpen);
+                if (controlsOpen) setControlsOpen(false);
+              }}
+              className={`flex items-center gap-1 px-2 py-1 rounded transition-colors cursor-pointer ${
+                companionOpen
+                  ? 'text-[#C85A32] bg-[#C85A32]/15 font-semibold'
+                  : 'opacity-80 hover:opacity-100 hover:text-[#C85A32]'
+              }`}
+              title="Lorekeeper AI Chapter Companion"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-[#C85A32]" />
+              <span className="hidden lg:inline">Lorekeeper</span>
+            </button>
+
             {/* Font & Layout Settings Toggle */}
             <button
-              onClick={() => setControlsOpen(!controlsOpen)}
+              onClick={() => {
+                setControlsOpen(!controlsOpen);
+                if (companionOpen) setCompanionOpen(false);
+              }}
               className="p-1.5 rounded opacity-80 hover:opacity-100 hover:text-[#C85A32] transition-colors cursor-pointer flex items-center gap-1"
               title="Typography & Sizing"
             >
@@ -408,6 +476,85 @@ export const ReaderView: React.FC = () => {
                 Close Settings &times;
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Lorekeeper AI Companion Drawer */}
+        {companionOpen && (
+          <div className="max-w-xl mx-auto mt-2 p-5 rounded-xl border transition-all text-xs space-y-4 shadow-xl bg-white dark:bg-[#1E111E] border-[#C85A32]/30 text-slate-800 dark:text-slate-100">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-[#C85A32]" />
+                <div>
+                  <span className="font-display text-sm font-bold block">Lorekeeper Companion</span>
+                  <span className="text-[11px] opacity-65">Spoiler-free recaps &amp; world-lore answers for Ch. {chapter.chapterNumber}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCompanionOpen(false)}
+                className="text-xs text-[#C85A32] font-semibold hover:underline cursor-pointer"
+              >
+                Close &times;
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={companionLoading}
+                onClick={() => askLorekeeper('recap')}
+                className="px-3 py-1.5 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] disabled:opacity-60 text-white font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                {companionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                <span>Recap Chapter So Far</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={companionLoading}
+                onClick={() => askLorekeeper('ask', 'Who are the key figures and symbols introduced in this chapter?')}
+                className="px-3 py-1.5 rounded-lg border border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32] font-medium cursor-pointer transition-colors"
+              >
+                Characters &amp; Symbols
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                askLorekeeper('ask');
+              }}
+              className="flex items-center gap-2"
+            >
+              <input
+                type="text"
+                value={loreQuestion}
+                onChange={(e) => setLoreQuestion(e.target.value)}
+                placeholder="Ask about a character, mythos term, or plot detail..."
+                className="flex-1 px-3 py-2 rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-[#F9F6F0]/60 dark:bg-[#160C16] focus:outline-none focus:border-[#C85A32]"
+              />
+              <button
+                type="submit"
+                disabled={companionLoading || !loreQuestion.trim()}
+                className="px-3 py-2 rounded-lg bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] disabled:opacity-50 font-semibold flex items-center gap-1 cursor-pointer"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Ask</span>
+              </button>
+            </form>
+
+            {companionError && (
+              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/25 text-red-600 dark:text-red-400 text-xs">
+                {companionError}
+              </div>
+            )}
+
+            {companionReply && (
+              <div className="p-3.5 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] border border-[#2D142C]/10 dark:border-white/10 font-reader text-xs sm:text-sm leading-relaxed whitespace-pre-line">
+                {companionReply}
+              </div>
+            )}
           </div>
         )}
 

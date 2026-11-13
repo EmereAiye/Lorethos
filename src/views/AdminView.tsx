@@ -15,7 +15,8 @@ import {
   Key,
   Layers,
   ArrowRight,
-  Sparkles
+  Sparkles,
+  Loader2
 } from 'lucide-react';
 import { Story, Chapter, AccessTier, StoryStatus } from '../types';
 
@@ -54,6 +55,10 @@ export const AdminView: React.FC = () => {
   const [newChapterExcerpt, setNewChapterExcerpt] = useState('');
   const [newChapterContent, setNewChapterContent] = useState('');
   const [newChapterIsFree, setNewChapterIsFree] = useState(false);
+  const [aiScenePrompt, setAiScenePrompt] = useState('');
+  const [aiDraftingChapter, setAiDraftingChapter] = useState(false);
+  const [aiCraftingSynopsis, setAiCraftingSynopsis] = useState(false);
+  const [aiAdminError, setAiAdminError] = useState<string | null>(null);
 
   const selectedStory = stories.find(s => s.id === selectedStoryId) || stories[0];
 
@@ -121,6 +126,71 @@ export const AdminView: React.FC = () => {
   const showToast = (msg: string) => {
     setStatusMessage(msg);
     setTimeout(() => setStatusMessage(null), 3000);
+  };
+
+  const handleAIDraftChapter = async () => {
+    if (!selectedStory) return;
+    setAiDraftingChapter(true);
+    setAiAdminError(null);
+    try {
+      const res = await fetch('/api/ai/scriptorium', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task: 'draft_chapter',
+          storyTitle: selectedStory.title,
+          genre: selectedStory.genre,
+          chapterTitle: newChapterTitle || `Chapter ${newChapterNumber}`,
+          outline: aiScenePrompt || `Continue the serialized narrative of ${selectedStory.title}.`
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to draft chapter.');
+      }
+      if (data.excerpt && !newChapterExcerpt.trim()) {
+        setNewChapterExcerpt(data.excerpt);
+      } else if (data.excerpt) {
+        setNewChapterExcerpt(data.excerpt);
+      }
+      if (Array.isArray(data.paragraphs) && data.paragraphs.length > 0) {
+        setNewChapterContent(data.paragraphs.join('\n\n'));
+      }
+      showToast('Scriptorium AI generated a chapter draft!');
+    } catch (err) {
+      setAiAdminError(err instanceof Error ? err.message : 'Unable to draft chapter.');
+    } finally {
+      setAiDraftingChapter(false);
+    }
+  };
+
+  const handleAICraftSynopsis = async () => {
+    setAiCraftingSynopsis(true);
+    setAiAdminError(null);
+    try {
+      const res = await fetch('/api/ai/scriptorium', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task: 'craft_synopsis',
+          storyTitle: newStoryTitle || 'Untitled Chronicle',
+          genre: newStoryGenre,
+          existingSynopsis: newStorySynopsis
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to craft synopsis.');
+      }
+      if (data.synopsis) {
+        setNewStorySynopsis(data.synopsis);
+        showToast('Synopsis crafted with Scriptorium AI!');
+      }
+    } catch (err) {
+      setAiAdminError(err instanceof Error ? err.message : 'Unable to craft synopsis.');
+    } finally {
+      setAiCraftingSynopsis(false);
+    }
   };
 
   return (
@@ -388,6 +458,49 @@ export const AdminView: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Scriptorium AI Chapter Copilot */}
+                  <div className="p-4 rounded-xl bg-white dark:bg-[#1E111E] border border-[#C85A32]/30 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-[#C85A32] flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Scriptorium AI Co-Writer</span>
+                      </span>
+                      <span className="text-[11px] opacity-60">Generates teaser excerpt &amp; 3-4 prose paragraphs</span>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        value={aiScenePrompt}
+                        onChange={(e) => setAiScenePrompt(e.target.value)}
+                        placeholder="Describe scene beats (e.g. 'Boma confronts the desert oracle under the eclipse')..."
+                        className="flex-1 px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-transparent"
+                      />
+                      <button
+                        type="button"
+                        disabled={aiDraftingChapter}
+                        onClick={handleAIDraftChapter}
+                        className="px-4 py-2 rounded bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 disabled:opacity-55 cursor-pointer shrink-0"
+                      >
+                        {aiDraftingChapter ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Drafting...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3.5 h-3.5 text-[#C85A32]" />
+                            <span>Draft Chapter with AI</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    {aiAdminError && (
+                      <div className="text-[11px] text-red-600 dark:text-red-400">
+                        {aiAdminError}
+                      </div>
+                    )}
+                  </div>
+
                   <div>
                     <label className="block font-semibold mb-1">Excerpt Teaser (shown in previews & paywalls)</label>
                     <input
@@ -556,7 +669,27 @@ export const AdminView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block font-semibold mb-1">Synopsis</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-semibold">Synopsis</label>
+                    <button
+                      type="button"
+                      disabled={aiCraftingSynopsis}
+                      onClick={handleAICraftSynopsis}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#C85A32] hover:underline disabled:opacity-55 cursor-pointer"
+                    >
+                      {aiCraftingSynopsis ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          <span>Crafting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3 h-3" />
+                          <span>Craft Synopsis with AI</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                   <textarea
                     rows={4}
                     required
@@ -565,6 +698,9 @@ export const AdminView: React.FC = () => {
                     placeholder="Enter an evocative synopsis for the readers..."
                     className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-transparent font-reader text-sm"
                   />
+                  {aiAdminError && (
+                    <p className="text-[11px] text-red-600 dark:text-red-400 mt-1">{aiAdminError}</p>
+                  )}
                 </div>
 
                 <button

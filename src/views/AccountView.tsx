@@ -21,6 +21,7 @@ import {
   Calendar,
   Award
 } from 'lucide-react';
+import { ReadingActivityChart } from '../components/ReadingActivityChart';
 
 export const AccountView: React.FC = () => {
   const { 
@@ -50,6 +51,20 @@ export const AccountView: React.FC = () => {
 
   const progressPct = Math.min(100, Math.round((goal.currentProgress / Math.max(1, goal.targetChapters)) * 100));
   const isGoalMet = goal.currentProgress >= goal.targetChapters;
+  const dailyTargetForChart = goal.frequency === 'weekly'
+    ? Math.max(1, Math.ceil(goal.targetChapters / 7))
+    : goal.targetChapters;
+
+  const chartHistory = (goal.history || []).map((day, idx, arr) =>
+    idx === arr.length - 1
+      ? { ...day, chaptersRead: goal.currentProgress, metTarget: goal.currentProgress >= dailyTargetForChart }
+      : day
+  );
+  const recent7Days = chartHistory.slice(-7);
+  const recent7DaysMet = recent7Days.filter(d => d.chaptersRead >= dailyTargetForChart).length;
+  const weeklyConsistencyPct = recent7Days.length > 0
+    ? Math.round((recent7DaysMet / recent7Days.length) * 100)
+    : 0;
 
   // Find stories that the user has unlocked or has in progress
   const unlockedStories = stories.filter(s => 
@@ -342,6 +357,16 @@ export const AccountView: React.FC = () => {
                 })}
               </div>
             )}
+
+            {/* D3 Two-Week Reading Activity Bar Chart */}
+            <div className="pt-4">
+              <ReadingActivityChart
+                history={chartHistory}
+                dailyTarget={dailyTargetForChart}
+                theme={readerSettings.theme}
+                onConfigureGoal={() => setActiveTab('goals')}
+              />
+            </div>
           </div>
         )}
 
@@ -648,14 +673,21 @@ export const AccountView: React.FC = () => {
                 <div>
                   <span className="text-[11px] text-[#2D142C]/60 dark:text-white/60 block">Weekly Consistency</span>
                   <div className="text-2xl font-bold font-display tabular-nums text-emerald-600">
-                    86%
+                    {weeklyConsistencyPct}%
                   </div>
                   <span className="text-[10px] text-[#2D142C]/60 dark:text-white/60">
-                    6 of last 7 days completed
+                    {recent7DaysMet} of last {recent7Days.length} days completed
                   </span>
                 </div>
               </div>
             </div>
+
+            {/* D3 Two-Week Reading Activity Bar Chart */}
+            <ReadingActivityChart
+              history={chartHistory}
+              dailyTarget={dailyTargetForChart}
+              theme={readerSettings.theme}
+            />
 
             {/* 7-Day Habit Activity Tracker */}
             <div className="p-6 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-4">
@@ -675,14 +707,14 @@ export const AccountView: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-7 gap-3 pt-2">
-                {goal.history.map((day, idx) => {
-                  const isCurrentDay = idx === goal.history.length - 1;
+                {recent7Days.map((day, idx) => {
+                  const isCurrentDay = idx === recent7Days.length - 1;
                   const isMet = day.metTarget || (isCurrentDay && isGoalMet);
                   const count = isCurrentDay ? goal.currentProgress : day.chaptersRead;
 
                   return (
                     <div
-                      key={day.dayName}
+                      key={day.dateStr}
                       className={`p-3.5 rounded-xl border text-center flex flex-col items-center justify-between space-y-2 transition-all ${
                         isCurrentDay
                           ? 'border-[#C85A32] bg-[#C85A32]/5 ring-1 ring-[#C85A32]'

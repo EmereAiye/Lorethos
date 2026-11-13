@@ -104,6 +104,13 @@ const DEFAULT_USER: UserProfile = {
     bestStreakDays: 14,
     lastUpdatedDate: 'Today',
     history: [
+      { dayName: 'Mon', dateStr: 'Oct 30', chaptersRead: 1, metTarget: false },
+      { dayName: 'Tue', dateStr: 'Oct 31', chaptersRead: 2, metTarget: true },
+      { dayName: 'Wed', dateStr: 'Nov 01', chaptersRead: 2, metTarget: true },
+      { dayName: 'Thu', dateStr: 'Nov 02', chaptersRead: 0, metTarget: false },
+      { dayName: 'Fri', dateStr: 'Nov 03', chaptersRead: 3, metTarget: true },
+      { dayName: 'Sat', dateStr: 'Nov 04', chaptersRead: 1, metTarget: false },
+      { dayName: 'Sun', dateStr: 'Nov 05', chaptersRead: 2, metTarget: true },
       { dayName: 'Mon', dateStr: 'Nov 06', chaptersRead: 2, metTarget: true },
       { dayName: 'Tue', dateStr: 'Nov 07', chaptersRead: 3, metTarget: true },
       { dayName: 'Wed', dateStr: 'Nov 08', chaptersRead: 2, metTarget: true },
@@ -143,6 +150,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const parsed = JSON.parse(saved);
         if (!parsed.readingGoal) {
           parsed.readingGoal = DEFAULT_USER.readingGoal;
+        } else if (!Array.isArray(parsed.readingGoal.history) || parsed.readingGoal.history.length < 14) {
+          const existing = Array.isArray(parsed.readingGoal.history) ? parsed.readingGoal.history : [];
+          const needed = 14 - existing.length;
+          const prefix = DEFAULT_USER.readingGoal.history.slice(0, Math.max(0, needed));
+          parsed.readingGoal.history = [...prefix, ...existing].slice(-14);
         }
         return parsed;
       } catch (e) {
@@ -331,11 +343,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateReadingGoal = (partial: Partial<ReadingGoal>) => {
     setUser(prev => {
       const currentGoal = prev.readingGoal || DEFAULT_USER.readingGoal;
+      const nextTarget = partial.targetChapters ?? currentGoal.targetChapters;
+      const nextFrequency = partial.frequency ?? currentGoal.frequency;
+      const dailyEquivalent = nextFrequency === 'weekly'
+        ? Math.max(1, Math.ceil(nextTarget / 7))
+        : nextTarget;
+
+      let updatedHistory = [...currentGoal.history];
+      if (partial.currentProgress !== undefined && updatedHistory.length > 0) {
+        const lastIdx = updatedHistory.length - 1;
+        updatedHistory[lastIdx] = {
+          ...updatedHistory[lastIdx],
+          chaptersRead: partial.currentProgress,
+          metTarget: partial.currentProgress >= dailyEquivalent
+        };
+      } else if (partial.targetChapters !== undefined || partial.frequency !== undefined) {
+        updatedHistory = updatedHistory.map(day => ({
+          ...day,
+          metTarget: day.chaptersRead >= dailyEquivalent
+        }));
+      }
+
       return {
         ...prev,
         readingGoal: {
           ...currentGoal,
-          ...partial
+          ...partial,
+          history: updatedHistory
         }
       };
     });
