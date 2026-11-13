@@ -120,7 +120,20 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [stories, setStories] = useState<Story[]>(() => {
     const saved = localStorage.getItem('lorethos_stories');
-    return saved ? JSON.parse(saved) : INITIAL_STORIES;
+    if (saved) {
+      try {
+        const parsed: Story[] = JSON.parse(saved);
+        return parsed.map(s => ({
+          ...s,
+          coverImage: s.coverImage?.startsWith('/src/assets/images/')
+            ? s.coverImage.replace('/src/assets/images/', '/assets/images/')
+            : s.coverImage
+        }));
+      } catch {
+        return INITIAL_STORIES;
+      }
+    }
+    return INITIAL_STORIES;
   });
 
   const [user, setUser] = useState<UserProfile>(() => {

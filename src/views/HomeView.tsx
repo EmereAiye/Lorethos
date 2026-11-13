@@ -409,7 +409,7 @@ export const HomeView: React.FC = () => {
                 <div className="w-full max-w-xs bg-white dark:bg-[#1E111E] rounded-xl p-4 border border-[#2D142C]/10 dark:border-white/10 shadow-md space-y-3">
                   <div className="relative aspect-video rounded-lg overflow-hidden bg-black/80 flex items-center justify-center">
                     <img
-                      src="/src/assets/images/book_cover_obsidian_throne_1794465561565.jpg"
+                      src="/assets/images/book_cover_obsidian_throne_1794465561565.jpg"
                       alt="Episode Thumbnail"
                       className="w-full h-full object-cover opacity-60"
                     />

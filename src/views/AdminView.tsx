@@ -46,7 +46,7 @@ export const AdminView: React.FC = () => {
   const [newStorySynopsis, setNewStorySynopsis] = useState('');
   const [newStoryPrice, setNewStoryPrice] = useState(2500);
   const [newStoryTier, setNewStoryTier] = useState<AccessTier>('subscription');
-  const [newStoryCover, setNewStoryCover] = useState('/src/assets/images/book_cover_obsidian_throne_1794465561565.jpg');
+  const [newStoryCover, setNewStoryCover] = useState('/assets/images/book_cover_obsidian_throne_1794465561565.jpg');
 
   // New Chapter Form State
   const [newChapterTitle, setNewChapterTitle] = useState('');
@@ -524,10 +524,10 @@ export const AdminView: React.FC = () => {
                     onChange={(e) => setNewStoryCover(e.target.value)}
                     className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-white dark:bg-[#1E111E]"
                   >
-                    <option value="/src/assets/images/book_cover_obsidian_throne_1794465561565.jpg">Obsidian Throne Art</option>
-                    <option value="/src/assets/images/book_cover_whispering_savanna_1794465562207.jpg">Whisper of the Baobab Art</option>
-                    <option value="/src/assets/images/book_cover_sunken_epoch_1794465563519.jpg">Sunken Epoch Art</option>
-                    <option value="/src/assets/images/book_cover_crimson_dynasty_1794465562273.jpg">Crimson Scribe Art</option>
+                    <option value="/assets/images/book_cover_obsidian_throne_1794465561565.jpg">Obsidian Throne Art</option>
+                    <option value="/assets/images/book_cover_whispering_savanna_1794465562207.jpg">Whisper of the Baobab Art</option>
+                    <option value="/assets/images/book_cover_sunken_epoch_1794465563519.jpg">Sunken Epoch Art</option>
+                    <option value="/assets/images/book_cover_crimson_dynasty_1794465562273.jpg">Crimson Scribe Art</option>
                   </select>
                 </div>
 
