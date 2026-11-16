@@ -1,12 +1,12 @@
-import React, { Suspense, lazy } from 'react';
+import React, { Suspense, lazy, Component, ErrorInfo, ReactNode } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { PaystackModal } from './components/PaystackModal';
 import { ReadingPreferencesModal } from './components/ReadingPreferencesModal';
+import { HomeView } from './views/HomeView';
 import { CheckCircle2, X, Loader2 } from 'lucide-react';
 
-const HomeView = lazy(() => import('./views/HomeView').then((m) => ({ default: m.HomeView })));
 const LibraryView = lazy(() => import('./views/LibraryView').then((m) => ({ default: m.LibraryView })));
 const StoryOverviewView = lazy(() => import('./views/StoryOverviewView').then((m) => ({ default: m.StoryOverviewView })));
 const ReaderView = lazy(() => import('./views/ReaderView').then((m) => ({ default: m.ReaderView })));
@@ -14,6 +14,42 @@ const PricingView = lazy(() => import('./views/PricingView').then((m) => ({ defa
 const AccountView = lazy(() => import('./views/AccountView').then((m) => ({ default: m.AccountView })));
 const ContactView = lazy(() => import('./views/ContactView').then((m) => ({ default: m.ContactView })));
 const AdminView = lazy(() => import('./views/AdminView').then((m) => ({ default: m.AdminView })));
+
+class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: '' };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error?.message || 'Unexpected rendering error.' };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Lorethos UI error:', error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-[#F9F6F0] text-[#2D142C] flex items-center justify-center p-6 font-sans-ui">
+          <div className="max-w-md w-full rounded-2xl border border-[#2D142C]/15 bg-white p-6 space-y-3 shadow-lg">
+            <h1 className="font-display text-2xl font-bold">Unable to display this view</h1>
+            <p className="text-xs opacity-75">{this.state.message}</p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 rounded-lg bg-[#C85A32] text-white text-xs font-semibold cursor-pointer"
+            >
+              Reload Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const MainContent: React.FC = () => {
   const {
@@ -148,8 +184,10 @@ const MainContent: React.FC = () => {
 
 export default function App() {
   return (
-    <AppProvider>
-      <MainContent />
-    </AppProvider>
+    <AppErrorBoundary>
+      <AppProvider>
+        <MainContent />
+      </AppProvider>
+    </AppErrorBoundary>
   );
 }

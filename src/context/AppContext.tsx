@@ -30,6 +30,14 @@ export interface RouteParams {
   tier?: string;
   sort?: string;
   reference?: string;
+  redirect?: string;
+}
+
+export interface AuthActionResult {
+  error?: string;
+  message?: string;
+  requiresEmailVerification?: boolean;
+  redirectedTo?: string;
 }
 
 export interface PaystackCheckoutRequest {
@@ -92,10 +100,14 @@ interface AppContextType {
   navigate: (route: string, params?: RouteParams, options?: { replace?: boolean }) => void;
   updateReaderSettings: (partial: Partial<ReaderSettings>) => void;
 
-  // Authentication
-  login: (email: string, password: string) => Promise<{ error?: string }>;
-  register: (name: string, email: string, password: string) => Promise<{ error?: string }>;
+  // Authentication & post-auth redirection
+  login: (email: string, password: string) => Promise<AuthActionResult>;
+  register: (name: string, email: string, password: string) => Promise<AuthActionResult>;
   logout: () => Promise<void>;
+  pendingAuthRedirect: string | null;
+  clearPendingAuthRedirect: () => void;
+  navigateToPath: (internalPath: string, options?: { replace?: boolean }) => boolean;
+  completePostAuthRedirect: (fallbackRoute?: string) => boolean;
 
   // Paystack hosted checkout modal
   paystackModal: {
@@ -390,6 +402,22 @@ function createGuestUser(): UserProfile {
   };
 }
 
+export function sanitizeInternalRedirect(target?: string | null): string | null {
+  if (!target || typeof target !== 'string') return null;
+  const trimmed = target.trim();
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('\\')) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed, 'http://localhost');
+    const cleanPath = parsed.pathname.replace(/\/+$/, '') || '/';
+    if (cleanPath === '/account') return null;
+    return `${cleanPath}${parsed.search}`;
+  } catch {
+    return null;
+  }
+}
+
 export function buildHref(route: string, params?: RouteParams): string {
   switch (route) {
     case 'home':
@@ -413,8 +441,14 @@ export function buildHref(route: string, params?: RouteParams): string {
         : '/stories';
     case 'pricing':
       return '/pricing';
-    case 'account':
+    case 'account': {
+      const safeRedirect = sanitizeInternalRedirect(params?.redirect);
+      if (safeRedirect) {
+        const qs = new URLSearchParams({ redirect: safeRedirect });
+        return `/account?${qs.toString()}`;
+      }
       return '/account';
+    }
     case 'contact':
       return '/contact';
     case 'admin':
@@ -476,7 +510,10 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
     };
   }
 
-  if (cleanPath === '/account') return { route: 'account', params: {} };
+  if (cleanPath === '/account') {
+    const safeRedirect = sanitizeInternalRedirect(qs.get('redirect'));
+    return { route: 'account', params: safeRedirect ? { redirect: safeRedirect } : {} };
+  }
   if (cleanPath === '/contact') return { route: 'contact', params: {} };
   if (cleanPath === '/admin') return { route: 'admin', params: {} };
 
@@ -538,6 +575,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [checkoutStatusMessage, setCheckoutStatusMessage] = useState<string | null>(null);
   const [preferredGenres, setPreferredGenresState] = useState<string[]>([]);
   const [readingPromptOpen, setReadingPromptOpen] = useState(false);
+  const [pendingAuthRedirect, setPendingAuthRedirect] = useState<string | null>(() =>
+    sanitizeInternalRedirect(initialParsed.params.redirect)
+  );
 
   const progressSaveTimerRef = useRef<number | null>(null);
 
@@ -587,8 +627,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const catalogRes = await apiFetch('/api/stories');
       if (catalogRes.ok) {
-        const catalogJson = await catalogRes.json();
-        if (Array.isArray(catalogJson.stories) && catalogJson.stories.length > 0) {
+        const catalogJson = await parseJsonSafe<{ stories?: Story[] }>(catalogRes);
+        if (catalogJson && Array.isArray(catalogJson.stories) && catalogJson.stories.length > 0) {
           setStories(catalogJson.stories);
         }
       }
@@ -604,17 +644,100 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         apiFetch('/api/account/highlights')
       ]);
       if (txRes.ok) {
-        const txData = await txRes.json();
-        setTransactions(Array.isArray(txData.transactions) ? txData.transactions : []);
+        const txData = await parseJsonSafe<{ transactions?: PaymentTransaction[] }>(txRes);
+        setTransactions(Array.isArray(txData?.transactions) ? txData.transactions : []);
       }
       if (hlRes.ok) {
-        const hlData = await hlRes.json();
-        setHighlights(Array.isArray(hlData.highlights) ? hlData.highlights : []);
+        const hlData = await parseJsonSafe<{ highlights?: TextHighlight[] }>(hlRes);
+        setHighlights(Array.isArray(hlData?.highlights) ? hlData.highlights : []);
       }
     } catch {
       // Safe fallback
     }
   }, []);
+
+  const buildSupabaseUserProfile = useCallback(
+    (
+      sbUser: { id: string; email?: string; user_metadata?: Record<string, unknown> },
+      fallbackName?: string
+    ): UserProfile => {
+      const guest = createGuestUser();
+      const email = (sbUser.email || '').trim().toLowerCase();
+      const metaPrefs = Array.isArray(sbUser.user_metadata?.preferredGenres)
+        ? sbUser.user_metadata.preferredGenres.filter(
+            (item): item is string => typeof item === 'string' && item.trim().length > 0
+          )
+        : loadUserPreferences(sbUser.id);
+      return {
+        ...guest,
+        id: sbUser.id,
+        name: String(sbUser.user_metadata?.name || fallbackName || email.split('@')[0] || 'Reader'),
+        email,
+        role: email === 'emmymasterwise@gmail.com' ? 'owner' : 'reader',
+        preferredGenres: metaPrefs
+      };
+    },
+    []
+  );
+
+  const commitAuthenticatedUser = useCallback((rawUser: UserProfile, token?: string): string[] => {
+    if (token) {
+      setStoredSessionToken(token);
+    }
+    const serverPrefs = Array.isArray(rawUser.preferredGenres) ? rawUser.preferredGenres : [];
+    const localPrefs = loadUserPreferences(rawUser.id);
+    const resolvedPrefs = serverPrefs.length > 0 ? serverPrefs : localPrefs;
+    if (resolvedPrefs.length > 0) {
+      saveUserPreferences(rawUser.id, resolvedPrefs);
+      if (serverPrefs.length === 0 && localPrefs.length > 0) {
+        void apiFetch('/api/account/preferences', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preferredGenres: localPrefs })
+        }).catch(() => {});
+      }
+    }
+    const resolvedUser: UserProfile = {
+      ...rawUser,
+      preferredGenres: resolvedPrefs,
+      readingGoal: reconcileReadingGoalRollover(
+        rawUser.readingGoal || createGuestUser().readingGoal
+      )
+    };
+    setUser(resolvedUser);
+    setIsAuthenticated(true);
+    setPreferredGenresState(resolvedPrefs);
+    return resolvedPrefs;
+  }, []);
+
+  const syncSupabaseAccessToken = useCallback(
+    async (
+      accessToken: string | undefined,
+      sbUser: { id: string; email?: string; user_metadata?: Record<string, unknown> },
+      fallbackName?: string
+    ): Promise<string[]> => {
+      if (accessToken) {
+        try {
+          const exchangeRes = await apiFetch('/api/auth/supabase-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accessToken })
+          });
+          const exchangeData = await parseJsonSafe<{ user?: UserProfile; token?: string }>(exchangeRes);
+          if (exchangeRes.ok && exchangeData?.user) {
+            const prefs = commitAuthenticatedUser(exchangeData.user, exchangeData.token);
+            void Promise.all([loadAccountExtras(), refreshStories()]);
+            return prefs;
+          }
+        } catch {
+          // Fall back to Supabase-only client profile when backend exchange is unavailable
+        }
+      }
+      const profile = buildSupabaseUserProfile(sbUser, fallbackName);
+      return commitAuthenticatedUser(profile);
+    },
+    [buildSupabaseUserProfile, commitAuthenticatedUser, loadAccountExtras, refreshStories]
+  );
 
   // Load initial catalog and session on startup
   useEffect(() => {
@@ -628,8 +751,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ]);
 
         if (catalogRes.ok && mounted) {
-          const catalogJson = await catalogRes.json();
-          if (Array.isArray(catalogJson.stories) && catalogJson.stories.length > 0) {
+          const catalogJson = await parseJsonSafe<{ stories?: Story[] }>(catalogRes);
+          if (catalogJson && Array.isArray(catalogJson.stories) && catalogJson.stories.length > 0) {
             setStories(catalogJson.stories);
           }
         }
@@ -637,15 +760,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (sessionRes.ok && mounted) {
           const sessionJson = await parseJsonSafe<{ authenticated?: boolean; user?: UserProfile }>(sessionRes);
           if (sessionJson?.authenticated && sessionJson.user) {
-            const serverUser: UserProfile = {
-              ...sessionJson.user,
-              readingGoal: reconcileReadingGoalRollover(
-                sessionJson.user.readingGoal || createGuestUser().readingGoal
-              )
-            };
-            setUser(serverUser);
-            setIsAuthenticated(true);
-            setPreferredGenresState(loadUserPreferences(serverUser.id));
+            commitAuthenticatedUser(sessionJson.user);
             await loadAccountExtras();
 
             // Verify Paystack callback if redirected back with ?reference=...
@@ -660,12 +775,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 });
                 const verifyJson = await parseJsonSafe<{ user?: UserProfile; transactions?: PaymentTransaction[]; error?: string }>(verifyRes);
                 if (verifyRes.ok && verifyJson?.user && mounted) {
-                  setUser({
-                    ...verifyJson.user,
-                    readingGoal: reconcileReadingGoalRollover(
-                      verifyJson.user.readingGoal || serverUser.readingGoal
-                    )
-                  });
+                  commitAuthenticatedUser(verifyJson.user);
                   if (Array.isArray(verifyJson.transactions)) {
                     setTransactions(verifyJson.transactions);
                   }
@@ -677,42 +787,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 // Ignore verification error cleanly
               }
             }
-          } else if (!sessionJson && isSupabaseConfigured && supabase && mounted) {
+          } else if (!sessionJson?.authenticated && isSupabaseConfigured && supabase && mounted) {
             const { data: sbSession } = await supabase.auth.getSession();
             const sbUser = sbSession.session?.user;
             if (sbUser && mounted) {
-              const guest = createGuestUser();
-              const email = (sbUser.email || '').trim().toLowerCase();
-              setUser({
-                ...guest,
-                id: sbUser.id,
-                name: String(sbUser.user_metadata?.name || email.split('@')[0] || 'Reader'),
-                email,
-                role: email === 'emmymasterwise@gmail.com' ? 'owner' : 'reader',
-              });
-              setIsAuthenticated(true);
-              setPreferredGenresState(loadUserPreferences(sbUser.id));
+              await syncSupabaseAccessToken(sbSession.session?.access_token, sbUser);
             } else {
               setStoredSessionToken(null);
             }
           } else {
             setStoredSessionToken(null);
           }
-        } else if (isSupabaseConfigured && supabase && mounted) {
-          const { data: sbSession } = await supabase.auth.getSession();
-          const sbUser = sbSession.session?.user;
-          if (sbUser && mounted) {
-            const guest = createGuestUser();
-            const email = (sbUser.email || '').trim().toLowerCase();
-            setUser({
-              ...guest,
-              id: sbUser.id,
-              name: String(sbUser.user_metadata?.name || email.split('@')[0] || 'Reader'),
-              email,
-              role: email === 'emmymasterwise@gmail.com' ? 'owner' : 'reader',
-            });
-            setIsAuthenticated(true);
-            setPreferredGenresState(loadUserPreferences(sbUser.id));
+        } else {
+          if (sessionRes.status === 401) {
+            setStoredSessionToken(null);
+          }
+          if (isSupabaseConfigured && supabase && mounted) {
+            const { data: sbSession } = await supabase.auth.getSession();
+            const sbUser = sbSession.session?.user;
+            if (sbUser && mounted) {
+              await syncSupabaseAccessToken(sbSession.session?.access_token, sbUser);
+            }
           }
         }
       } catch {
@@ -726,7 +821,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       mounted = false;
     };
-  }, [loadAccountExtras]);
+  }, [commitAuthenticatedUser, loadAccountExtras, syncSupabaseAccessToken]);
 
   // Automatic Daily Rollover Watcher
   useEffect(() => {
@@ -766,6 +861,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       setCurrentRoute(route);
       setRouteParams(params || {});
+      if (route === 'account' && params?.redirect) {
+        const safe = sanitizeInternalRedirect(params.redirect);
+        if (safe) setPendingAuthRedirect(safe);
+      }
       if (!options?.replace) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
@@ -773,77 +872,137 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     []
   );
 
+  const navigateToPath = useCallback(
+    (internalPath: string, options?: { replace?: boolean }): boolean => {
+      const safe = sanitizeInternalRedirect(internalPath);
+      if (!safe) return false;
+      const parsedUrl = new URL(safe, 'http://localhost');
+      const parsed = parseLocationToRoute(parsedUrl.pathname, parsedUrl.search);
+      navigate(parsed.route, parsed.params, options);
+      return true;
+    },
+    [navigate]
+  );
+
+  const clearPendingAuthRedirect = useCallback(() => {
+    setPendingAuthRedirect(null);
+  }, []);
+
+  const completePostAuthRedirect = useCallback(
+    (fallbackRoute?: string): boolean => {
+      const target = sanitizeInternalRedirect(pendingAuthRedirect || routeParams.redirect);
+      setPendingAuthRedirect(null);
+      if (target && navigateToPath(target, { replace: true })) {
+        return true;
+      }
+      if (fallbackRoute) {
+        navigate(fallbackRoute);
+      }
+      return false;
+    },
+    [pendingAuthRedirect, routeParams.redirect, navigateToPath, navigate]
+  );
+
   const updateReaderSettings = (partial: Partial<ReaderSettings>) => {
     setReaderSettings(prev => ({ ...prev, ...partial }));
-  };
-
-  const buildSupabaseUserProfile = (sbUser: { id: string; email?: string; user_metadata?: Record<string, unknown> }, fallbackName?: string): UserProfile => {
-    const guest = createGuestUser();
-    const email = (sbUser.email || '').trim().toLowerCase();
-    return {
-      ...guest,
-      id: sbUser.id,
-      name: String(sbUser.user_metadata?.name || fallbackName || email.split('@')[0] || 'Reader'),
-      email,
-      role: email === 'emmymasterwise@gmail.com' ? 'owner' : 'reader',
-    };
   };
 
   const setPreferredGenres = useCallback(
     (genres: string[]) => {
       const cleaned = Array.from(new Set(genres.map(g => g.trim()).filter(Boolean)));
       setPreferredGenresState(cleaned);
+      setUser(prev => ({
+        ...prev,
+        preferredGenres: cleaned
+      }));
       if (user.id && user.id !== 'guest') {
         saveUserPreferences(user.id, cleaned);
       }
+      if (isAuthenticated) {
+        void apiFetch('/api/account/preferences', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preferredGenres: cleaned })
+        }).then(async (res) => {
+          if (res.ok) {
+            const data = await parseJsonSafe<{ preferredGenres?: string[]; user?: UserProfile }>(res);
+            if (data?.user?.preferredGenres) {
+              setPreferredGenresState(data.user.preferredGenres);
+              setUser(prev => ({ ...prev, preferredGenres: data.user!.preferredGenres }));
+              saveUserPreferences(user.id, data.user.preferredGenres);
+            }
+          }
+        }).catch(() => {
+          // Local cache retained when offline
+        });
+      }
     },
-    [user.id]
+    [user.id, isAuthenticated]
   );
 
   const openReadingPrompt = useCallback(() => setReadingPromptOpen(true), []);
   const closeReadingPrompt = useCallback(() => setReadingPromptOpen(false), []);
 
-  const login = async (email: string, password: string): Promise<{ error?: string }> => {
+  const finalizePostAuthFlow = useCallback(
+    (resolvedPrefs: string[], isNewRegistration: boolean): AuthActionResult => {
+      const safeRedirect = sanitizeInternalRedirect(routeParams.redirect || pendingAuthRedirect);
+      // Returning reader with saved preferences heading back to a specific page (checkout/reader/admin)
+      if (!isNewRegistration && safeRedirect && resolvedPrefs.length > 0) {
+        setPendingAuthRedirect(null);
+        navigateToPath(safeRedirect, { replace: true });
+        return { redirectedTo: safeRedirect };
+      }
+
+      if (safeRedirect) {
+        setPendingAuthRedirect(safeRedirect);
+      }
+      setReadingPromptOpen(true);
+      return {};
+    },
+    [routeParams.redirect, pendingAuthRedirect, navigateToPath]
+  );
+
+  const login = async (email: string, password: string): Promise<AuthActionResult> => {
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      return { error: 'Please enter a valid email address.' };
+    }
+    if (!password) {
+      return { error: 'Please enter your password.' };
+    }
+
     try {
       const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password })
+        body: JSON.stringify({ email: trimmedEmail, password })
       });
       const data = await parseJsonSafe<{ user?: UserProfile; token?: string; error?: string }>(res);
       if (res.ok && data?.user) {
-        if (data.token) {
-          setStoredSessionToken(data.token);
-        }
-        setUser({
-          ...data.user,
-          readingGoal: reconcileReadingGoalRollover(
-            data.user.readingGoal || createGuestUser().readingGoal
-          )
-        });
-        setIsAuthenticated(true);
-        setPreferredGenresState(loadUserPreferences(data.user.id));
-        setReadingPromptOpen(true);
-        await Promise.all([loadAccountExtras(), refreshStories()]);
-        return {};
+        const resolvedPrefs = commitAuthenticatedUser(data.user, data.token);
+        void Promise.all([loadAccountExtras(), refreshStories()]);
+        return finalizePostAuthFlow(resolvedPrefs, false);
       }
 
-      const apiUnavailable = !data || res.status === 404 || res.status === 405 || res.status >= 502;
-      if (apiUnavailable && isSupabaseConfigured && supabase) {
+      const shouldTrySupabase =
+        isSupabaseConfigured &&
+        supabase &&
+        (!data || res.status === 401 || res.status === 404 || res.status === 405 || res.status >= 500);
+
+      if (shouldTrySupabase && supabase) {
         const { data: sbData, error: sbErr } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
+          email: trimmedEmail,
           password
         });
-        if (sbErr) {
-          return { error: sbErr.message };
+        if (!sbErr && sbData.user) {
+          const resolvedPrefs = await syncSupabaseAccessToken(
+            sbData.session?.access_token,
+            sbData.user
+          );
+          return finalizePostAuthFlow(resolvedPrefs, false);
         }
-        if (sbData.user) {
-          const profile = buildSupabaseUserProfile(sbData.user);
-          setUser(profile);
-          setIsAuthenticated(true);
-          setPreferredGenresState(loadUserPreferences(profile.id));
-          setReadingPromptOpen(true);
-          return {};
+        if (sbErr && (!data || res.status >= 404)) {
+          return { error: sbErr.message };
         }
       }
 
@@ -851,74 +1010,81 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         error:
           data?.error ||
           (!data
-            ? 'Authentication service returned an unexpected response. Please verify API deployment.'
+            ? 'Authentication service returned an unexpected response. Please try again.'
             : `Sign-in failed (${res.status}).`)
       };
     } catch {
       if (isSupabaseConfigured && supabase) {
-        const { data: sbData, error: sbErr } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password
-        });
-        if (sbErr) return { error: sbErr.message };
-        if (sbData.user) {
-          const profile = buildSupabaseUserProfile(sbData.user);
-          setUser(profile);
-          setIsAuthenticated(true);
-          setPreferredGenresState(loadUserPreferences(profile.id));
-          setReadingPromptOpen(true);
-          return {};
+        try {
+          const { data: sbData, error: sbErr } = await supabase.auth.signInWithPassword({
+            email: trimmedEmail,
+            password
+          });
+          if (sbErr) return { error: sbErr.message };
+          if (sbData.user) {
+            const resolvedPrefs = await syncSupabaseAccessToken(
+              sbData.session?.access_token,
+              sbData.user
+            );
+            return finalizePostAuthFlow(resolvedPrefs, false);
+          }
+        } catch {
+          // Fall through to clean network error message
         }
       }
-      return { error: 'Network error while signing in.' };
+      return { error: 'Unable to reach the authentication server. Please check your connection and try again.' };
     }
   };
 
-  const register = async (name: string, email: string, password: string): Promise<{ error?: string }> => {
+  const register = async (name: string, email: string, password: string): Promise<AuthActionResult> => {
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim().toLowerCase();
+    if (trimmedName.length < 2 || trimmedName.length > 80) {
+      return { error: 'Full name must be between 2 and 80 characters.' };
+    }
+    if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      return { error: 'Please enter a valid email address.' };
+    }
+    if (!password || password.length < 8) {
+      return { error: 'Password must be at least 8 characters long.' };
+    }
+
     try {
       const res = await apiFetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), password })
+        body: JSON.stringify({ name: trimmedName, email: trimmedEmail, password })
       });
       const data = await parseJsonSafe<{ user?: UserProfile; token?: string; error?: string }>(res);
       if (res.ok && data?.user) {
-        if (data.token) {
-          setStoredSessionToken(data.token);
-        }
-        setUser({
-          ...data.user,
-          readingGoal: reconcileReadingGoalRollover(
-            data.user.readingGoal || createGuestUser().readingGoal
-          )
-        });
-        setIsAuthenticated(true);
-        setPreferredGenresState(loadUserPreferences(data.user.id));
-        setReadingPromptOpen(true);
-        await Promise.all([loadAccountExtras(), refreshStories()]);
-        return {};
+        const initialPrefs = commitAuthenticatedUser(data.user, data.token);
+        void Promise.all([loadAccountExtras(), refreshStories()]);
+        return finalizePostAuthFlow(initialPrefs, true);
       }
 
-      const apiUnavailable = !data || res.status === 404 || res.status === 405 || res.status >= 502;
+      const apiUnavailable = !data || res.status === 404 || res.status === 405 || res.status >= 500;
       if (apiUnavailable && isSupabaseConfigured && supabase) {
         const { data: sbData, error: sbErr } = await supabase.auth.signUp({
-          email: email.trim(),
+          email: trimmedEmail,
           password,
-          options: { data: { name: name.trim() } }
+          options: { data: { name: trimmedName } }
         });
         if (sbErr) {
           return { error: sbErr.message };
         }
         if (sbData.user && !sbData.session) {
-          return { error: 'Account created! Check your email to confirm your address before signing in.' };
+          return {
+            message: 'Account created! Check your email to confirm your address before signing in.',
+            requiresEmailVerification: true
+          };
         }
         if (sbData.user) {
-          const profile = buildSupabaseUserProfile(sbData.user, name.trim());
-          setUser(profile);
-          setIsAuthenticated(true);
-          setPreferredGenresState(loadUserPreferences(profile.id));
-          setReadingPromptOpen(true);
-          return {};
+          const resolvedPrefs = await syncSupabaseAccessToken(
+            sbData.session?.access_token,
+            sbData.user,
+            trimmedName
+          );
+          return finalizePostAuthFlow(resolvedPrefs, true);
         }
       }
 
@@ -926,35 +1092,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         error:
           data?.error ||
           (!data
-            ? 'Registration service returned an unexpected response. Please verify API deployment.'
+            ? 'Registration service returned an unexpected response. Please try again.'
             : `Registration failed (${res.status}).`)
       };
     } catch {
       if (isSupabaseConfigured && supabase) {
-        const { data: sbData, error: sbErr } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-          options: { data: { name: name.trim() } }
-        });
-        if (sbErr) return { error: sbErr.message };
-        if (sbData.user && !sbData.session) {
-          return { error: 'Account created! Check your email to confirm your address before signing in.' };
-        }
-        if (sbData.user) {
-          const profile = buildSupabaseUserProfile(sbData.user, name.trim());
-          setUser(profile);
-          setIsAuthenticated(true);
-          setPreferredGenresState(loadUserPreferences(profile.id));
-          setReadingPromptOpen(true);
-          return {};
+        try {
+          const { data: sbData, error: sbErr } = await supabase.auth.signUp({
+            email: trimmedEmail,
+            password,
+            options: { data: { name: trimmedName } }
+          });
+          if (sbErr) return { error: sbErr.message };
+          if (sbData.user && !sbData.session) {
+            return {
+              message: 'Account created! Check your email to confirm your address before signing in.',
+              requiresEmailVerification: true
+            };
+          }
+          if (sbData.user) {
+            const resolvedPrefs = await syncSupabaseAccessToken(
+              sbData.session?.access_token,
+              sbData.user,
+              trimmedName
+            );
+            return finalizePostAuthFlow(resolvedPrefs, true);
+          }
+        } catch {
+          // Fall through to clean network error message
         }
       }
-      return { error: 'Network error while creating account.' };
+      return { error: 'Unable to reach the registration server. Please check your connection and try again.' };
     }
   };
 
   const logout = async () => {
     setStoredSessionToken(null);
+    setPendingAuthRedirect(null);
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch {
@@ -991,13 +1165,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const res = await apiFetch('/api/account/subscription/cancel', {
         method: 'POST',
       });
-      const data = await res.json();
-      if (!res.ok) {
-        return { ok: false, error: data.error || 'Could not cancel subscription.' };
+      const data = await parseJsonSafe<{ subscription?: UserProfile['subscription']; error?: string }>(res);
+      if (!res.ok || !data?.subscription) {
+        return { ok: false, error: data?.error || 'Could not cancel subscription.' };
       }
       setUser(prev => ({
         ...prev,
-        subscription: data.subscription
+        subscription: data.subscription!
       }));
       return { ok: true };
     } catch {
@@ -1199,8 +1373,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         body: JSON.stringify(record)
       }).then(async (res) => {
         if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data.highlights)) setHighlights(data.highlights);
+          const data = await parseJsonSafe<{ highlights?: TextHighlight[] }>(res);
+          if (data && Array.isArray(data.highlights)) setHighlights(data.highlights);
         }
       });
     }
@@ -1219,8 +1393,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const res = await apiFetch(`/api/comments?chapterId=${encodeURIComponent(chapterId)}`);
       if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.comments)) {
+        const data = await parseJsonSafe<{ comments?: ChapterComment[] }>(res);
+        if (data && Array.isArray(data.comments)) {
           setChapterComments(data.comments);
         }
       }
@@ -1239,11 +1413,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input)
       });
-      const data = await res.json();
-      if (!res.ok) {
-        return { error: data.error || 'Could not post note.' };
+      const data = await parseJsonSafe<{ comment?: ChapterComment; error?: string }>(res);
+      if (!res.ok || !data?.comment) {
+        return { error: data?.error || 'Could not post note.' };
       }
-      setChapterComments(prev => [data.comment, ...prev]);
+      setChapterComments(prev => [data.comment!, ...prev]);
       return {};
     } catch {
       return { error: 'Network error while posting note.' };
@@ -1265,9 +1439,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input)
     });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Failed to submit message.');
+    const data = await parseJsonSafe<{ inquiry?: CommunityInquiry; error?: string }>(res);
+    if (!res.ok || !data?.inquiry) {
+      throw new Error(data?.error || 'Failed to submit message.');
     }
     const record: CommunityInquiry = data.inquiry;
     setInquiries(prev => [record, ...prev]);
@@ -1278,9 +1452,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const res = await apiFetch('/api/admin/overview');
       if (res.ok) {
-        const data: AdminOverviewData = await res.json();
-        setAdminOverview(data);
-        setInquiries(data.inquiries || []);
+        const data = await parseJsonSafe<AdminOverviewData>(res);
+        if (data) {
+          setAdminOverview(data);
+          setInquiries(data.inquiries || []);
+        }
       }
     } catch {
       // Ignore if unauthorized
@@ -1304,9 +1480,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input)
       });
-      const data = await res.json();
-      if (!res.ok) return { ok: false, error: data.error || 'Failed to publish story.' };
-      setStories(prev => [data.story, ...prev]);
+      const data = await parseJsonSafe<{ story?: Story; error?: string }>(res);
+      if (!res.ok || !data?.story) return { ok: false, error: data?.error || 'Failed to publish story.' };
+      setStories(prev => [data.story!, ...prev]);
       return { ok: true };
     } catch {
       return { ok: false, error: 'Network error.' };
@@ -1329,10 +1505,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(chapterData)
       });
-      const data = await res.json();
-      if (!res.ok) return { ok: false, error: data.error || 'Failed to add chapter.' };
+      const data = await parseJsonSafe<{ story?: Story; error?: string }>(res);
+      if (!res.ok || !data) return { ok: false, error: data?.error || 'Failed to add chapter.' };
       if (data.story) {
-        setStories(prev => prev.map(s => (s.id === storyId ? data.story : s)));
+        setStories(prev => prev.map(s => (s.id === storyId ? data.story! : s)));
       }
       return { ok: true };
     } catch {
@@ -1352,10 +1528,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accessTier, priceNgn, freeChaptersCount })
       });
-      const data = await res.json();
-      if (!res.ok) return { ok: false, error: data.error || 'Failed to update pricing.' };
+      const data = await parseJsonSafe<{ story?: Story; error?: string }>(res);
+      if (!res.ok || !data) return { ok: false, error: data?.error || 'Failed to update pricing.' };
       if (data.story) {
-        setStories(prev => prev.map(s => (s.id === storyId ? data.story : s)));
+        setStories(prev => prev.map(s => (s.id === storyId ? data.story! : s)));
       }
       return { ok: true };
     } catch {
@@ -1373,10 +1549,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ publicationStatus })
       });
-      const data = await res.json();
-      if (!res.ok) return { ok: false, error: data.error || 'Failed to update workflow status.' };
+      const data = await parseJsonSafe<{ story?: Story; error?: string }>(res);
+      if (!res.ok || !data) return { ok: false, error: data?.error || 'Failed to update workflow status.' };
       if (data.story) {
-        setStories(prev => prev.map(s => (s.id === storyId ? data.story : s)));
+        setStories(prev => prev.map(s => (s.id === storyId ? data.story! : s)));
       }
       return { ok: true };
     } catch {
@@ -1405,22 +1581,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const res = await apiFetch(
         `/api/stories/${encodeURIComponent(storySlug)}/chapters/${chapterNumber}`
       );
-      const data = await res.json();
-      if (res.status === 403 || data.locked) {
+      const data = await parseJsonSafe<{
+        locked?: boolean;
+        story?: Story;
+        chapter?: Chapter;
+        error?: string;
+      }>(res);
+      if (res.status === 403 || data?.locked) {
         return {
           locked: true,
-          story: data.story as Story | undefined,
-          chapter: data.chapter as Chapter | undefined,
-          error: data.error as string | undefined
+          story: data?.story,
+          chapter: data?.chapter,
+          error: data?.error
         };
       }
-      if (!res.ok) {
-        return { locked: false, error: data.error || 'Failed to load chapter.' };
+      if (!res.ok || !data) {
+        return { locked: false, error: data?.error || 'Failed to load chapter.' };
       }
       return {
         locked: false,
-        story: data.story as Story,
-        chapter: data.chapter as Chapter
+        story: data.story,
+        chapter: data.chapter
       };
     } catch {
       return { locked: false, error: 'Network error while loading chapter.' };
@@ -1471,6 +1652,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         login,
         register,
         logout,
+        pendingAuthRedirect,
+        clearPendingAuthRedirect,
+        navigateToPath,
+        completePostAuthRedirect,
         paystackModal,
         checkoutStatusMessage,
         clearCheckoutStatusMessage: () => setCheckoutStatusMessage(null),

@@ -113,6 +113,7 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
+  const unmountedRef = useRef(false);
   const onTranscriptRef = useRef(onTranscript);
   onTranscriptRef.current = onTranscript;
 
@@ -132,14 +133,28 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
   };
 
   useEffect(() => {
+    unmountedRef.current = false;
     // Pre-warm health check so click handler responds synchronously
     void checkServerTranscriptionAvailable();
 
     return () => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        mediaRecorderRef.current.stop();
+      unmountedRef.current = true;
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.onstop = null;
+        mediaRecorderRef.current.ondataavailable = null;
+        if (mediaRecorderRef.current.state === 'recording') {
+          try {
+            mediaRecorderRef.current.stop();
+          } catch {
+            // ignore
+          }
+        }
+        mediaRecorderRef.current = null;
       }
       if (recognitionRef.current) {
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
         try {
           recognitionRef.current.abort();
         } catch {
@@ -206,8 +221,9 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
 
       recognition.onerror = (event) => {
         stopTimer();
-        setRecording(false);
         recognitionRef.current = null;
+        if (unmountedRef.current) return;
+        setRecording(false);
         if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
           setError('Microphone permission denied. Allow microphone access in your browser site settings.');
         } else if (event.error === 'audio-capture') {
@@ -221,10 +237,11 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
 
       recognition.onend = () => {
         stopTimer();
-        setRecording(false);
         recognitionRef.current = null;
         const captured = speechTranscriptRef.current.trim();
         speechTranscriptRef.current = '';
+        if (unmountedRef.current) return;
+        setRecording(false);
         if (captured) {
           onTranscriptRef.current(captured);
         }
@@ -343,18 +360,25 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
 
       recorder.onstop = async () => {
         cleanupTracks();
+        if (unmountedRef.current) {
+          chunksRef.current = [];
+          return;
+        }
         const finalMime = (recorder.mimeType || supportedMime || 'audio/webm').split(';')[0];
         const audioBlob = new Blob(chunksRef.current, { type: finalMime });
         chunksRef.current = [];
 
         if (audioBlob.size < 256) {
-          setError('Recording was too short. Try speaking a full phrase.');
+          if (!unmountedRef.current) {
+            setError('Recording was too short. Try speaking a full phrase.');
+          }
           return;
         }
 
         setTranscribing(true);
         try {
           const audioBase64 = await blobToBase64(audioBlob);
+          if (unmountedRef.current) return;
           const res = await apiFetch('/api/ai/transcribe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -365,6 +389,7 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
             })
           });
           const data = await parseJsonSafe<{ transcript?: string; error?: string }>(res);
+          if (unmountedRef.current) return;
           if (!res.ok || !data) {
             if (res.status === 503 || res.status === 404 || res.status === 405 || !data) {
               cachedGeminiTranscribeAvailable = false;
@@ -381,9 +406,13 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
             onTranscriptRef.current(transcript);
           }
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Transcription failed.');
+          if (!unmountedRef.current) {
+            setError(err instanceof Error ? err.message : 'Transcription failed.');
+          }
         } finally {
-          setTranscribing(false);
+          if (!unmountedRef.current) {
+            setTranscribing(false);
+          }
         }
       };
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { apiFetch } from '../lib/apiClient';
+import { apiFetch, parseJsonSafe } from '../lib/apiClient';
 import {
   ArrowLeft,
   ChevronLeft,
@@ -58,6 +58,8 @@ const HIGHLIGHT_STYLES: Record<HighlightColor, { border: string; bg: string; lab
     dot: 'bg-emerald-600'
   }
 };
+
+const EMPTY_PARAGRAPHS: string[] = [];
 
 export const ReaderView: React.FC = () => {
   const {
@@ -131,6 +133,7 @@ export const ReaderView: React.FC = () => {
   });
   const paragraphRefs = useRef<(HTMLDivElement | null)[]>([]);
   const audioMiddlewareRef = useRef<NarrativeAudioMiddleware | null>(null);
+  const lastScrollPctRef = useRef(-1);
   const latestVolumeRef = useRef(readerSettings.ambientVolume);
   latestVolumeRef.current = readerSettings.ambientVolume;
 
@@ -196,14 +199,20 @@ export const ReaderView: React.FC = () => {
     };
   }, []);
 
-  // Scroll depth tracking
+  // Scroll depth tracking (rAF-throttled & quantized to integer % to prevent scroll stutters)
   useEffect(() => {
-    const handleScroll = () => {
+    let rafId: number | null = null;
+
+    const measureScroll = () => {
+      rafId = null;
       const totalHeight = document.documentElement.scrollHeight - window.innerHeight;
       if (totalHeight > 0 && chapterData) {
         const current = (window.scrollY / totalHeight) * 100;
-        const bounded = Math.min(100, Math.max(0, current));
-        setScrollProgress(bounded);
+        const rounded = Math.round(Math.min(100, Math.max(0, current)));
+        if (rounded !== lastScrollPctRef.current) {
+          lastScrollPctRef.current = rounded;
+          setScrollProgress(rounded);
+        }
 
         const accessible = !chapterLocked && hasAccessToChapter(chapterData.story, chapterData.chapter);
         if (accessible) {
@@ -211,10 +220,10 @@ export const ReaderView: React.FC = () => {
             chapterData.story.id,
             chapterData.chapter.id,
             chapterData.chapter.chapterNumber,
-            Math.round(bounded)
+            rounded
           );
           if (
-            bounded >= 92 &&
+            rounded >= 92 &&
             !user.readingGoal.completedChapterIds?.includes(chapterData.chapter.id)
           ) {
             const newlyLogged = logChapterCompleted(chapterData.chapter.id);
@@ -227,8 +236,17 @@ export const ReaderView: React.FC = () => {
       }
     };
 
+    const handleScroll = () => {
+      if (rafId === null) {
+        rafId = window.requestAnimationFrame(measureScroll);
+      }
+    };
+
     window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
+    return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      window.removeEventListener('scroll', handleScroll);
+    };
   }, [
     chapterData,
     chapterLocked,
@@ -249,9 +267,11 @@ export const ReaderView: React.FC = () => {
       return null;
     });
     setTtsPlaying(false);
+    lastScrollPctRef.current = 0;
     setScrollProgress(0);
     setActiveParagraphIdx(0);
     paragraphRefs.current = [];
+    audioMiddlewareRef.current?.reset();
     window.scrollTo({ top: 0 });
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
@@ -288,11 +308,11 @@ export const ReaderView: React.FC = () => {
           chapterNumber: chapter.chapterNumber
         })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Could not reach chapter companion.');
+      const data = await parseJsonSafe<{ reply?: string; error?: string }>(res);
+      if (!res.ok || !data) {
+        throw new Error(data?.error || 'Could not reach chapter companion.');
       }
-      setCompanionReply(data.reply);
+      setCompanionReply(data.reply || '');
       if (mode === 'ask') setLoreQuestion('');
     } catch (err) {
       setCompanionError(err instanceof Error ? err.message : 'Something went wrong.');
@@ -344,9 +364,9 @@ export const ReaderView: React.FC = () => {
           voiceName: ttsVoice
         })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Unable to generate chapter narration.');
+      const data = await parseJsonSafe<{ audioBase64?: string; mimeType?: string; error?: string }>(res);
+      if (!res.ok || !data) {
+        throw new Error(data?.error || 'Unable to generate chapter narration.');
       }
       if (!data.audioBase64) {
         throw new Error('No audio stream returned for this chapter.');
@@ -395,35 +415,24 @@ export const ReaderView: React.FC = () => {
     navigate(route, params);
   };
 
-  if (!chapterData) {
-    return (
-      <div className="min-h-screen bg-[#F9F6F0] dark:bg-[#160C16] text-[#2D142C] dark:text-[#F9F6F0] py-24 text-center space-y-4">
-        <h2 className="font-display text-2xl font-bold">Chapter Not Found</h2>
-        <a
-          href={buildHref('stories')}
-          onClick={(e) => handleLink(e, 'stories')}
-          className="inline-block text-xs font-semibold text-[#C85A32] underline"
-        >
-          Return to Story Library
-        </a>
-      </div>
-    );
-  }
-
-  const { story, chapter: fallbackChapter } = chapterData;
+  const story = chapterData?.story;
+  const fallbackChapter = chapterData?.chapter;
   const chapter = serverChapter || fallbackChapter;
-  const isAccessible = !chapterLocked && hasAccessToChapter(story, chapter);
-  const paragraphs = chapter.content || [];
-  const isBookmarked = user.bookmarkedChapterIds.includes(chapter.id);
-  const chapterHighlights = highlights.filter(h => h.chapterId === chapter.id);
-  const activeComments = chapterComments.filter(c => c.chapterId === chapter.id);
+  const isAccessible = Boolean(story && chapter && !chapterLocked && hasAccessToChapter(story, chapter));
+  const paragraphs = chapter?.content || EMPTY_PARAGRAPHS;
+  const isBookmarked = Boolean(chapter && user.bookmarkedChapterIds.includes(chapter.id));
+  const chapterHighlights = chapter ? highlights.filter(h => h.chapterId === chapter.id) : [];
+  const activeComments = chapter ? chapterComments.filter(c => c.chapterId === chapter.id) : [];
   const adaptiveAudioEnabled = readerSettings.adaptiveAudio ?? true;
 
-  // Observe visible reader paragraphs to detect active reading focal point
+  // Observe visible reader paragraphs cleanly without per-scroll layout thrashing
   useEffect(() => {
     if (!isAccessible || chapterLoading || paragraphs.length === 0) return;
 
+    let rafId: number | null = null;
+
     const updateFocusedParagraph = () => {
+      rafId = null;
       const focalY = window.innerHeight * 0.38;
       let bestIdx = 0;
       let bestDist = Infinity;
@@ -442,33 +451,35 @@ export const ReaderView: React.FC = () => {
       setActiveParagraphIdx((prev) => (prev === bestIdx ? prev : bestIdx));
     };
 
+    const scheduleFocalCheck = () => {
+      if (rafId === null) {
+        rafId = window.requestAnimationFrame(updateFocusedParagraph);
+      }
+    };
+
     updateFocusedParagraph();
 
     let observer: IntersectionObserver | null = null;
     if (typeof IntersectionObserver !== 'undefined') {
-      observer = new IntersectionObserver(
-        () => {
-          updateFocusedParagraph();
-        },
-        {
-          rootMargin: '-20% 0px -40% 0px',
-          threshold: [0, 0.25, 0.6, 1]
-        }
-      );
+      observer = new IntersectionObserver(scheduleFocalCheck, {
+        rootMargin: '-20% 0px -40% 0px',
+        threshold: [0, 0.5]
+      });
       for (let i = 0; i < paragraphs.length; i++) {
         const el = paragraphRefs.current[i];
         if (el) observer.observe(el);
       }
     }
 
-    window.addEventListener('scroll', updateFocusedParagraph, { passive: true });
+    window.addEventListener('scroll', scheduleFocalCheck, { passive: true });
     return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
       observer?.disconnect();
-      window.removeEventListener('scroll', updateFocusedParagraph);
+      window.removeEventListener('scroll', scheduleFocalCheck);
     };
   }, [isAccessible, chapterLoading, paragraphs.length, chapterId]);
 
-  // Run narrative audio middleware whenever active paragraph or ambient settings update
+  // Run debounced narrative audio middleware whenever active paragraph or ambient settings update
   useEffect(() => {
     if (!audioMiddlewareRef.current) {
       audioMiddlewareRef.current = new NarrativeAudioMiddleware();
@@ -482,7 +493,9 @@ export const ReaderView: React.FC = () => {
 
     audioMiddlewareRef.current.evaluate(paragraphs, activeParagraphIdx, {
       enabled,
-      immediate: activeParagraphIdx === 0,
+      immediate: activeParagraphIdx === 0 || !enabled,
+      debounceMs: 550,
+      minIntensityDelta: 0.22,
       onApply: (analysis) => {
         setCurrentMoodAnalysis(analysis);
         if (enabled) {
@@ -500,6 +513,21 @@ export const ReaderView: React.FC = () => {
     readerSettings.ambientTrack,
     adaptiveAudioEnabled
   ]);
+
+  if (!chapterData || !story || !chapter) {
+    return (
+      <div className="min-h-screen bg-[#F9F6F0] dark:bg-[#160C16] text-[#2D142C] dark:text-[#F9F6F0] py-24 text-center space-y-4">
+        <h2 className="font-display text-2xl font-bold">Chapter Not Found</h2>
+        <a
+          href={buildHref('stories')}
+          onClick={(e) => handleLink(e, 'stories')}
+          className="inline-block text-xs font-semibold text-[#C85A32] underline"
+        >
+          Return to Story Library
+        </a>
+      </div>
+    );
+  }
 
   const themeStyles = {
     day: {
@@ -1413,8 +1441,14 @@ export const ReaderView: React.FC = () => {
                   <div className="p-4 rounded-xl border border-current/15 bg-current/[0.03] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                     <span>Sign in to post a comment or theory on this chapter.</span>
                     <a
-                      href={buildHref('account')}
-                      onClick={(e) => handleLink(e, 'account')}
+                      href={buildHref('account', {
+                        redirect: buildHref('reader', { slug: story.slug, chapterNumber: chapter.chapterNumber })
+                      })}
+                      onClick={(e) =>
+                        handleLink(e, 'account', {
+                          redirect: buildHref('reader', { slug: story.slug, chapterNumber: chapter.chapterNumber })
+                        })
+                      }
                       className="px-4 py-2 rounded-lg bg-[#C85A32] text-white font-semibold self-start sm:self-auto"
                     >
                       Sign In &rarr;

@@ -132,6 +132,7 @@ export interface UserProfile {
   bookmarkedChapterIds: string[];
   readingProgress: Record<string, { chapterId: string; chapterNumber: number; progressPercent: number; lastReadAt: string }>;
   readingGoal: ReadingGoal;
+  preferredGenres?: string[];
 }
 
 export interface PaymentTransaction {

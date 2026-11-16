@@ -27,7 +27,25 @@ export interface StoredUserRecord {
   bookmarkedChapterIds: string[];
   readingProgress: UserProfile['readingProgress'];
   readingGoal: ReadingGoal;
+  preferredGenres: string[];
   createdAt: string;
+}
+
+export function normalizePreferredGenres(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const item of input) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim().slice(0, 48);
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(trimmed);
+    if (cleaned.length >= 16) break;
+  }
+  return cleaned;
 }
 
 export interface ServerOrder {
@@ -155,7 +173,10 @@ class LorethosRepository {
         const parsed = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as PersistedSnapshot;
         if (Array.isArray(parsed.stories) && parsed.stories.length > 0) {
           return {
-            users: parsed.users || [],
+            users: (parsed.users || []).map((u) => ({
+              ...u,
+              preferredGenres: normalizePreferredGenres(u.preferredGenres)
+            })),
             stories: parsed.stories.map((s) => ({
               ...s,
               publicationStatus: s.publicationStatus || 'published',
@@ -219,10 +240,12 @@ class LorethosRepository {
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('reader', 'owner')),
         reading_goal JSONB,
+        preferred_genres JSONB NOT NULL DEFAULT '[]'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       ALTER TABLE users ADD COLUMN IF NOT EXISTS reading_goal JSONB;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_genres JSONB NOT NULL DEFAULT '[]'::jsonb;
       CREATE TABLE IF NOT EXISTS stories (
         id TEXT PRIMARY KEY,
         slug TEXT NOT NULL UNIQUE,
@@ -352,61 +375,58 @@ class LorethosRepository {
       );
     `);
 
-    const countRes = await pool.query('SELECT COUNT(*)::int AS cnt FROM stories');
-    if ((countRes.rows[0]?.cnt ?? 0) === 0) {
-      for (const story of AUTHORITATIVE_STORIES) {
+    for (const story of AUTHORITATIVE_STORIES) {
+      await pool.query(
+        `INSERT INTO stories (
+          id, slug, title, subtitle, author, author_bio, genre, tags,
+          cover_image, synopsis, prologue_lore, status, publication_status,
+          access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        ON CONFLICT (id) DO NOTHING`,
+        [
+          story.id,
+          story.slug,
+          story.title,
+          story.subtitle,
+          story.author,
+          story.authorBio,
+          story.genre,
+          JSON.stringify(story.tags),
+          story.coverImage,
+          story.synopsis,
+          story.prologueLore,
+          story.status,
+          story.publicationStatus || 'published',
+          story.accessTier,
+          story.priceNgn,
+          story.freeChaptersCount,
+          story.featured,
+          story.spotlightOrder ?? null,
+          story.updatedAt
+        ]
+      );
+      for (const ch of story.chapters) {
         await pool.query(
-          `INSERT INTO stories (
-            id, slug, title, subtitle, author, author_bio, genre, tags,
-            cover_image, synopsis, prologue_lore, status, publication_status,
-            access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          `INSERT INTO chapters (
+            id, story_id, chapter_number, title, slug, release_date_label,
+            word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
           ON CONFLICT (id) DO NOTHING`,
           [
+            ch.id,
             story.id,
-            story.slug,
-            story.title,
-            story.subtitle,
-            story.author,
-            story.authorBio,
-            story.genre,
-            JSON.stringify(story.tags),
-            story.coverImage,
-            story.synopsis,
-            story.prologueLore,
-            story.status,
-            story.publicationStatus || 'published',
-            story.accessTier,
-            story.priceNgn,
-            story.freeChaptersCount,
-            story.featured,
-            story.spotlightOrder ?? null,
-            story.updatedAt
+            ch.chapterNumber,
+            ch.title,
+            ch.slug,
+            ch.releaseDate,
+            ch.wordCount,
+            ch.readTimeMinutes,
+            ch.isFree,
+            ch.excerpt,
+            JSON.stringify(ch.content),
+            ch.ambientSoundscape ?? null
           ]
         );
-        for (const ch of story.chapters) {
-          await pool.query(
-            `INSERT INTO chapters (
-              id, story_id, chapter_number, title, slug, release_date_label,
-              word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
-            ON CONFLICT (id) DO NOTHING`,
-            [
-              ch.id,
-              story.id,
-              ch.chapterNumber,
-              ch.title,
-              ch.slug,
-              ch.releaseDate,
-              ch.wordCount,
-              ch.readTimeMinutes,
-              ch.isFree,
-              ch.excerpt,
-              JSON.stringify(ch.content),
-              ch.ambientSoundscape ?? null
-            ]
-          );
-        }
       }
     }
   }
@@ -420,7 +440,6 @@ class LorethosRepository {
       try {
         await this.ensurePostgresSchema(pool);
         await pool.query('SELECT 1 FROM stories LIMIT 1');
-        this.initialized = true;
 
       const [
         storiesRes,
@@ -552,6 +571,7 @@ class LorethosRepository {
         bookmarkedChapterIds: bookmarksByUser.get(u.id) || [],
         readingProgress: progressByUser.get(u.id) || {},
         readingGoal: u.reading_goal || buildDefaultReadingGoal(),
+        preferredGenres: normalizePreferredGenres(u.preferred_genres),
         createdAt: new Date(u.created_at).toISOString()
       }));
 
@@ -607,21 +627,22 @@ class LorethosRepository {
 
       this.state.processedEventIds = evRes.rows.map((e) => e.event_id);
 
-      this.state.inquiries = inqRes.rows.map((i) => ({
-        id: i.id,
-        referenceId: i.reference_id,
-        name: i.name,
-        email: i.email,
-        inquiryType: i.inquiry_type,
-        subject: i.subject,
-        message: i.message,
-        submittedAt: new Date(i.submitted_at).toLocaleString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit'
-        })
-      }));
+        this.state.inquiries = inqRes.rows.map((i) => ({
+          id: i.id,
+          referenceId: i.reference_id,
+          name: i.name,
+          email: i.email,
+          inquiryType: i.inquiry_type,
+          subject: i.subject,
+          message: i.message,
+          submittedAt: new Date(i.submitted_at).toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit'
+          })
+        }));
+        this.initialized = true;
       } catch (err) {
         console.warn(
           'PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:',
@@ -659,7 +680,8 @@ class LorethosRepository {
       unlockedStoryIds: user.unlockedStoryIds,
       bookmarkedChapterIds: user.bookmarkedChapterIds,
       readingProgress: user.readingProgress,
-      readingGoal: user.readingGoal
+      readingGoal: user.readingGoal,
+      preferredGenres: user.preferredGenres || []
     };
   }
 
@@ -719,6 +741,7 @@ class LorethosRepository {
         bookmarkedChapterIds: bmRes.rows.map((r) => r.chapter_id),
         readingProgress,
         readingGoal: u.reading_goal || buildDefaultReadingGoal(),
+        preferredGenres: normalizePreferredGenres(u.preferred_genres),
         createdAt: new Date(u.created_at).toISOString(),
       };
       const existingIdx = this.state.users.findIndex((x) => x.id === hydrated.id || x.email.toLowerCase() === hydrated.email);
@@ -729,7 +752,8 @@ class LorethosRepository {
       }
       this.persistSnapshot();
       return hydrated;
-    } catch {
+    } catch (err) {
+      console.warn('Postgres single-user hydration failed:', err instanceof Error ? err.message : err);
       return undefined;
     }
   }
@@ -747,6 +771,61 @@ class LorethosRepository {
     return this.hydrateSingleUserFromPostgres('LOWER(email) = $1', normalized);
   }
 
+  public ensureSessionUserFromToken(claims: {
+    uid: string;
+    name: string;
+    email: string;
+  }): StoredUserRecord {
+    const existingById = this.getUserById(claims.uid);
+    if (existingById) return existingById;
+
+    const normalizedEmail = claims.email.trim().toLowerCase();
+    const existingByEmail = this.getUserByEmail(normalizedEmail);
+    if (existingByEmail) return existingByEmail;
+
+    const isOwner = normalizedEmail === getOwnerEmail();
+    const hydrated: StoredUserRecord = {
+      id: claims.uid,
+      name: claims.name.trim() || normalizedEmail.split('@')[0] || 'Reader',
+      email: normalizedEmail,
+      passwordHash: '',
+      role: isOwner ? 'owner' : 'reader',
+      subscription: { plan: 'free', status: 'none', amountNgn: 0 },
+      unlockedStoryIds: [],
+      bookmarkedChapterIds: [],
+      readingProgress: {},
+      readingGoal: buildDefaultReadingGoal(),
+      preferredGenres: [],
+      createdAt: new Date().toISOString()
+    };
+
+    this.state.users.push(hydrated);
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO users (id, name, email, password_hash, role, reading_goal, preferred_genres, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
+        [
+          hydrated.id,
+          hydrated.name,
+          hydrated.email,
+          hydrated.passwordHash,
+          hydrated.role,
+          JSON.stringify(hydrated.readingGoal),
+          JSON.stringify(hydrated.preferredGenres)
+        ]
+      );
+      await pool.query(
+        `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
+         VALUES ($1, $2, 'free', 'none', 0) ON CONFLICT (user_id) DO NOTHING`,
+        [`sub_${hydrated.id}`, hydrated.id]
+      );
+    });
+
+    return hydrated;
+  }
+
   public async createUser(name: string, email: string, password: string): Promise<StoredUserRecord> {
     const normalizedEmail = email.trim().toLowerCase();
     const isOwner = normalizedEmail === getOwnerEmail();
@@ -761,22 +840,38 @@ class LorethosRepository {
       bookmarkedChapterIds: [],
       readingProgress: {},
       readingGoal: buildDefaultReadingGoal(),
+      preferredGenres: [],
       createdAt: new Date().toISOString()
     };
 
     if (this.pool) {
       try {
-        await this.pool.query(
-          `INSERT INTO users (id, name, email, password_hash, role, reading_goal, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
-          [record.id, record.name, record.email, record.passwordHash, record.role, JSON.stringify(record.readingGoal)]
+        const insertRes = await this.pool.query(
+          `INSERT INTO users (id, name, email, password_hash, role, reading_goal, preferred_genres, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, NOW()) ON CONFLICT (email) DO NOTHING RETURNING id`,
+          [
+            record.id,
+            record.name,
+            record.email,
+            record.passwordHash,
+            record.role,
+            JSON.stringify(record.readingGoal),
+            JSON.stringify(record.preferredGenres)
+          ]
         );
+        if (insertRes.rowCount === 0) {
+          await this.hydrateSingleUserFromPostgres('LOWER(email) = $1', normalizedEmail);
+          throw new Error('ACCOUNT_EXISTS');
+        }
         await this.pool.query(
           `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
            VALUES ($1, $2, 'free', 'none', 0) ON CONFLICT (user_id) DO NOTHING`,
           [`sub_${record.id}`, record.id]
         );
       } catch (err) {
+        if (err instanceof Error && err.message === 'ACCOUNT_EXISTS') {
+          throw err;
+        }
         console.error('Failed to mirror user into PostgreSQL:', err);
       }
     }
@@ -1074,6 +1169,23 @@ class LorethosRepository {
     });
 
     return user.readingGoal;
+  }
+
+  public updatePreferredGenres(userId: string, genres: string[]): string[] | null {
+    const user = this.getUserById(userId);
+    if (!user) return null;
+    const normalized = normalizePreferredGenres(genres);
+    user.preferredGenres = normalized;
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query('UPDATE users SET preferred_genres = $1::jsonb, updated_at = NOW() WHERE id = $2', [
+        JSON.stringify(normalized),
+        userId
+      ]);
+    });
+
+    return user.preferredGenres;
   }
 
   public cancelSubscription(userId: string): UserProfile['subscription'] | null {

@@ -16,9 +16,28 @@ export const HomeView: React.FC = () => {
 
   const flagshipStory = stories.find(s => s.id === 'story-obsidian-throne') || stories[0];
   const featuredStories = stories.filter(s => s.featured);
-  const personalizedStories = isAuthenticated && preferredGenres.length > 0
-    ? stories.filter(s => preferredGenres.includes(s.genre))
-    : [];
+  const personalizedRecommendations = React.useMemo(() => {
+    if (!isAuthenticated || preferredGenres.length === 0) return [];
+    const normalizedPrefs = preferredGenres.map((g) => g.toLowerCase());
+    return stories
+      .map((story) => {
+        const isExactGenre = preferredGenres.includes(story.genre);
+        const matchedTag = story.tags.find((t) => {
+          const lowerTag = t.toLowerCase();
+          return normalizedPrefs.some(
+            (pref) => lowerTag.includes(pref) || (pref.includes('fiction') && lowerTag.includes('fiction'))
+          );
+        });
+        const score = (isExactGenre ? 2 : 0) + (matchedTag ? 1 : 0);
+        return {
+          story,
+          score,
+          matchLabel: isExactGenre ? story.genre : matchedTag ? `Tag: ${matchedTag}` : story.genre
+        };
+      })
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || (a.story.spotlightOrder ?? 99) - (b.story.spotlightOrder ?? 99));
+  }, [stories, isAuthenticated, preferredGenres]);
 
   const latestChapters = stories.flatMap(s =>
     s.chapters.slice(-2).map(ch => ({
@@ -159,16 +178,16 @@ export const HomeView: React.FC = () => {
       )}
 
       {/* Personalized Reading Interests Shelf */}
-      {isAuthenticated && personalizedStories.length > 0 && (
+      {isAuthenticated && personalizedRecommendations.length > 0 && (
         <section className="py-12 border-b border-[#2D142C]/10 dark:border-white/10 bg-[#C85A32]/[0.04]">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
               <div>
                 <div className="text-xs tracking-wider uppercase text-[#C85A32] font-semibold font-sans-ui mb-1">
-                  Picked for {user.name.trim().split(/\s+/)[0] || 'You'} &middot; {preferredGenres.join(', ')}
+                  Recommended for {user.name.trim().split(/\s+/)[0] || 'You'} &middot; {preferredGenres.join(', ')}
                 </div>
                 <h2 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight">
-                  Matching Your Reading Mood
+                  Your Personalized Reading Feed
                 </h2>
               </div>
               <div className="flex items-center gap-3 text-xs font-sans-ui">
@@ -177,7 +196,7 @@ export const HomeView: React.FC = () => {
                   onClick={openReadingPrompt}
                   className="px-3 py-1.5 rounded-lg border border-[#C85A32]/35 text-[#C85A32] font-semibold hover:bg-[#C85A32] hover:text-white transition-colors cursor-pointer"
                 >
-                  Change Preferences
+                  Edit Genre Preferences
                 </button>
                 <a
                   href={buildHref('stories', preferredGenres.length === 1 ? { genre: preferredGenres[0] } : { interests: '1' })}
@@ -190,14 +209,14 @@ export const HomeView: React.FC = () => {
                   }
                   className="font-semibold text-[#C85A32] hover:underline flex items-center gap-1"
                 >
-                  <span>Open in Library</span>
+                  <span>See all matches ({personalizedRecommendations.length})</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </a>
               </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              {personalizedStories.slice(0, 4).map((story) => (
+              {personalizedRecommendations.slice(0, 4).map(({ story, matchLabel }) => (
                 <a
                   key={story.id}
                   href={buildHref('story-detail', { slug: story.slug })}
@@ -211,8 +230,8 @@ export const HomeView: React.FC = () => {
                     className="w-14 h-20 object-cover rounded border border-current/10 shrink-0"
                   />
                   <div className="min-w-0 space-y-1">
-                    <span className="text-[10px] uppercase tracking-wider font-semibold text-[#C85A32] font-sans-ui block">
-                      {story.genre}
+                    <span className="text-[10px] uppercase tracking-wider font-semibold text-[#C85A32] font-sans-ui block truncate">
+                      {matchLabel}
                     </span>
                     <h3 className="font-display text-base font-bold leading-tight group-hover:text-[#C85A32] transition-colors line-clamp-1">
                       {story.title}
@@ -224,6 +243,32 @@ export const HomeView: React.FC = () => {
                 </a>
               ))}
             </div>
+          </div>
+        </section>
+      )}
+
+      {isAuthenticated && preferredGenres.length === 0 && (
+        <section className="py-8 border-b border-[#2D142C]/10 dark:border-white/10 bg-[#C85A32]/[0.04]">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="text-[11px] uppercase tracking-wider font-semibold text-[#C85A32] font-sans-ui">
+                Personalize Your Feed
+              </div>
+              <p className="font-display text-xl font-semibold">
+                What do you want to read next, {user.name.trim().split(/\s+/)[0] || 'Reader'}?
+              </p>
+              <p className="text-xs opacity-75 font-reader">
+                Choose poetry, literary fiction, myth, or fantasy to save recommendations to your profile.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={openReadingPrompt}
+              className="px-4 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold font-sans-ui flex items-center gap-2 self-start sm:self-auto cursor-pointer shrink-0 transition-colors"
+            >
+              <span>Choose Preferred Genres</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
           </div>
         </section>
       )}

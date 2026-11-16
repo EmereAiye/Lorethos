@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useApp } from '../context/AppContext';
+import React, { useState, useEffect } from 'react';
+import { useApp, sanitizeInternalRedirect } from '../context/AppContext';
 import {
   ShieldCheck,
   BookOpen,
@@ -13,7 +13,9 @@ import {
   Trash2,
   LogIn,
   LogOut,
-  XCircle
+  XCircle,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { ReadingActivityChart } from '../components/ReadingActivityChart';
 import { ReadingGoal } from '../components/ReadingGoal';
@@ -38,7 +40,11 @@ export const AccountView: React.FC = () => {
     highlights,
     removeHighlight,
     preferredGenres,
-    openReadingPrompt
+    openReadingPrompt,
+    routeParams,
+    pendingAuthRedirect,
+    readingPromptOpen,
+    completePostAuthRedirect
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'library' | 'goals' | 'highlights' | 'bookmarks' | 'subscription' | 'settings'>('library');
@@ -46,10 +52,19 @@ export const AccountView: React.FC = () => {
   const [authName, setAuthName] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [cancelingSub, setCancelingSub] = useState(false);
+
+  const pendingRedirectTarget = sanitizeInternalRedirect(routeParams.redirect || pendingAuthRedirect);
+
+  useEffect(() => {
+    if (isAuthenticated && !authLoading && !readingPromptOpen && pendingRedirectTarget) {
+      completePostAuthRedirect();
+    }
+  }, [isAuthenticated, authLoading, readingPromptOpen, pendingRedirectTarget, completePostAuthRedirect]);
 
   const isPatron = isAuthenticated && user.subscription.status === 'active';
   const goal = user.readingGoal;
@@ -125,10 +140,16 @@ export const AccountView: React.FC = () => {
 
       if (res.error) {
         setAuthError(res.error);
+      } else if (res.requiresEmailVerification) {
+        setAuthMessage(res.message || 'Account created! Check your email to confirm your address before signing in.');
+        setAuthPassword('');
+        setAuthMode('signin');
       } else {
-        setAuthMessage(authMode === 'signin' ? 'Signed in successfully.' : 'Account created and signed in.');
+        setAuthMessage(res.message || (authMode === 'signin' ? 'Signed in successfully.' : 'Account created and signed in.'));
         setAuthPassword('');
       }
+    } catch (err) {
+      setAuthError(err instanceof Error && err.message ? err.message : 'Unable to complete authentication. Please try again.');
     } finally {
       setAuthSubmitting(false);
     }
@@ -151,6 +172,11 @@ export const AccountView: React.FC = () => {
               <p className="font-reader text-sm text-[#2D142C]/75 dark:text-white/75 leading-relaxed">
                 Sign in to unlock paid chapters after checkout, keep bookmarks and reading progress across devices, and post chapter notes.
               </p>
+              {pendingRedirectTarget && (
+                <div className="p-3 rounded-lg bg-[#C85A32]/10 border border-[#C85A32]/25 text-xs font-sans-ui text-[#2D142C] dark:text-[#F9F6F0]">
+                  Sign in or create an account to continue back to <span className="font-semibold">{pendingRedirectTarget}</span>.
+                </div>
+              )}
               {authLoading && (
                 <p className="text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
                   Checking session...
@@ -226,28 +252,44 @@ export const AccountView: React.FC = () => {
                 <label htmlFor="auth-password" className="block font-semibold mb-1">
                   {authMode === 'signup' ? 'Password (min. 8 characters)' : 'Password'}
                 </label>
-                <input
-                  id="auth-password"
-                  type="password"
-                  required
-                  minLength={authMode === 'signup' ? 8 : undefined}
-                  autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'}
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  placeholder="Enter password"
-                  className="w-full px-3 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
-                />
+                <div className="relative">
+                  <input
+                    id="auth-password"
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    minLength={authMode === 'signup' ? 8 : undefined}
+                    autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'}
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    placeholder="Enter password"
+                    className="w-full pl-3 pr-10 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-[#2D142C]/55 dark:text-white/55 hover:text-[#C85A32] cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               {authError && (
-                <p role="alert" className="text-red-600 dark:text-red-400">
+                <div
+                  role="alert"
+                  className="p-2.5 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/60 text-red-700 dark:text-red-300"
+                >
                   {authError}
-                </p>
+                </div>
               )}
               {authMessage && (
-                <p role="status" className="text-emerald-600 dark:text-emerald-400">
+                <div
+                  role="status"
+                  className="p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-emerald-700 dark:text-emerald-300"
+                >
                   {authMessage}
-                </p>
+                </div>
               )}
 
               <button

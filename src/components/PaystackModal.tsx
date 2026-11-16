@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { X, Lock, Loader2, ArrowRight, AlertCircle, UserCheck } from 'lucide-react';
-import { apiFetch } from '../lib/apiClient';
+import { apiFetch, parseJsonSafe } from '../lib/apiClient';
 
 export const PaystackModal: React.FC = () => {
   const { paystackModal, closePaystackCheckout, user, isAuthenticated, navigate, buildHref } = useApp();
@@ -56,10 +56,10 @@ export const PaystackModal: React.FC = () => {
         })
       });
 
-      const data = await res.json();
-      if (!res.ok) {
+      const data = await parseJsonSafe<{ authorizationUrl?: string; error?: string }>(res);
+      if (!res.ok || !data) {
         setErrorMessage(
-          data.error ||
+          data?.error ||
             'Unable to initialize Paystack checkout right now. Please try again later.'
         );
         return;
@@ -134,11 +134,12 @@ export const PaystackModal: React.FC = () => {
               </div>
 
               <a
-                href={buildHref('account')}
+                href={buildHref('account', !isAuthenticated && typeof window !== 'undefined' ? { redirect: `${window.location.pathname}${window.location.search}` } : undefined)}
                 onClick={(e) => {
                   e.preventDefault();
                   closePaystackCheckout();
-                  navigate('account');
+                  const redirectTarget = typeof window !== 'undefined' ? `${window.location.pathname}${window.location.search}` : undefined;
+                  navigate('account', redirectTarget ? { redirect: redirectTarget } : undefined);
                 }}
                 className="w-full py-3 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
               >

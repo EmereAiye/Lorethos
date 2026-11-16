@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
+import { apiFetch, parseJsonSafe } from '../lib/apiClient';
 import { Search, Filter, BookOpen, ArrowUpDown, Sparkles, Loader2, ArrowRight, X, SlidersHorizontal } from 'lucide-react';
 
 interface AIRecommendation {
@@ -74,14 +75,18 @@ export const LibraryView: React.FC = () => {
     setAiError(null);
 
     try {
-      const res = await fetch('/api/ai/recommend', {
+      const res = await apiFetch('/api/ai/recommend', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ moodPrompt: query })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Unable to fetch story recommendations.');
+      const data = await parseJsonSafe<{
+        curatorNote?: string;
+        recommendations?: AIRecommendation[];
+        error?: string;
+      }>(res);
+      if (!res.ok || !data) {
+        throw new Error(data?.error || 'Unable to fetch story recommendations.');
       }
       setAiCuratorNote(data.curatorNote || null);
       setAiMatches(Array.isArray(data.recommendations) ? data.recommendations : []);

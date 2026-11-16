@@ -86,6 +86,10 @@ class AmbientSoundEngine {
 
   private currentMood: NarrativeMood = 'calm';
   private currentIntensity = 0.2;
+  private lastAppliedMood: NarrativeMood | null = null;
+  private lastAppliedIntensity = -1;
+  private cachedNoiseBuffers: Partial<Record<'brown' | 'pink', AudioBuffer>> = {};
+  private crackleBufferPool: AudioBuffer[] = [];
 
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -111,7 +115,11 @@ class AmbientSoundEngine {
     return this.ctx;
   }
 
-  private createNoiseBuffer(ctx: AudioContext, seconds: number, warmth: 'brown' | 'pink'): AudioBuffer {
+  private getNoiseBuffer(ctx: AudioContext, seconds: number, warmth: 'brown' | 'pink'): AudioBuffer {
+    const existing = this.cachedNoiseBuffers[warmth];
+    if (existing && existing.sampleRate === ctx.sampleRate) {
+      return existing;
+    }
     const sampleRate = ctx.sampleRate;
     const length = sampleRate * seconds;
     const buffer = ctx.createBuffer(1, length, sampleRate);
@@ -139,7 +147,26 @@ class AmbientSoundEngine {
         b6 = white * 0.115926;
       }
     }
+    this.cachedNoiseBuffers[warmth] = buffer;
     return buffer;
+  }
+
+  private ensureCracklePool(ctx: AudioContext): AudioBuffer[] {
+    if (this.crackleBufferPool.length > 0 && this.crackleBufferPool[0].sampleRate === ctx.sampleRate) {
+      return this.crackleBufferPool;
+    }
+    const pool: AudioBuffer[] = [];
+    const sampleLen = Math.floor(ctx.sampleRate * 0.03);
+    for (let k = 0; k < 6; k++) {
+      const popBuf = ctx.createBuffer(1, sampleLen, ctx.sampleRate);
+      const ch = popBuf.getChannelData(0);
+      for (let i = 0; i < sampleLen; i++) {
+        ch[i] = (Math.random() * 2 - 1) * Math.exp(-i / (sampleLen * 0.25));
+      }
+      pool.push(popBuf);
+    }
+    this.crackleBufferPool = pool;
+    return pool;
   }
 
   private initMoodPadLayer(ctx: AudioContext, master: GainNode): void {
@@ -209,7 +236,7 @@ class AmbientSoundEngine {
 
     if (track === 'fireplace') {
       const rumbleSource = ctx.createBufferSource();
-      rumbleSource.buffer = this.createNoiseBuffer(ctx, 4, 'brown');
+      rumbleSource.buffer = this.getNoiseBuffer(ctx, 4, 'brown');
       rumbleSource.loop = true;
 
       const lowpass = ctx.createBiquadFilter();
@@ -223,19 +250,17 @@ class AmbientSoundEngine {
       rumbleSource.start();
       this.activeNodes.push(rumbleSource, lowpass);
 
-      // Gentle random hearth crackle pops
+      const cracklePool = this.ensureCracklePool(ctx);
+
+      // Gentle random hearth crackle pops reusing precomputed buffers
       this.crackleTimer = window.setInterval(() => {
         if (!this.ctx || !this.masterGain || this.currentTrack !== 'fireplace') return;
+        if (typeof document !== 'undefined' && document.hidden) return;
         if (Math.random() > this.crackleChance) return;
 
         const now = this.ctx.currentTime;
         const popSource = this.ctx.createBufferSource();
-        const popBuf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * 0.03), this.ctx.sampleRate);
-        const ch = popBuf.getChannelData(0);
-        for (let i = 0; i < ch.length; i++) {
-          ch[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ch.length * 0.25));
-        }
-        popSource.buffer = popBuf;
+        popSource.buffer = cracklePool[Math.floor(Math.random() * cracklePool.length)];
 
         const highpass = this.ctx.createBiquadFilter();
         highpass.type = 'bandpass';
@@ -250,10 +275,10 @@ class AmbientSoundEngine {
         highpass.connect(popGain);
         popGain.connect(this.masterGain);
         popSource.start(now);
-      }, 280);
+      }, 320);
     } else if (track === 'rain') {
       const rainSource = ctx.createBufferSource();
-      rainSource.buffer = this.createNoiseBuffer(ctx, 5, 'pink');
+      rainSource.buffer = this.getNoiseBuffer(ctx, 5, 'pink');
       rainSource.loop = true;
 
       const bandpass = ctx.createBiquadFilter();
@@ -323,34 +348,47 @@ class AmbientSoundEngine {
       return;
     }
 
+    const moodChanged = mood !== this.lastAppliedMood;
+    const intensityDelta = Math.abs(clampedIntensity - this.lastAppliedIntensity);
+    if (!moodChanged && intensityDelta < 0.12) {
+      return;
+    }
+    this.lastAppliedMood = mood;
+    this.lastAppliedIntensity = clampedIntensity;
+
     const now = this.ctx.currentTime;
     const profile = MOOD_PROFILES[mood];
 
-    // 1. Dynamically modulate the narrative synth pad layer
+    // 1. Dynamically modulate the narrative synth pad layer with smooth time constants
     if (this.padGain && this.padFilter && this.padLfo && this.padLfoGain) {
       const targetPadGain =
         mood === 'calm' ? 0 : profile.padGain * (0.55 + clampedIntensity * 0.65);
-      this.padGain.gain.setTargetAtTime(targetPadGain, now, 0.9);
+      this.padGain.gain.setTargetAtTime(targetPadGain, now, 1.15);
 
       const targetCutoff = profile.cutoffHz + clampedIntensity * 260;
-      this.padFilter.frequency.setTargetAtTime(targetCutoff, now, 0.85);
-      this.padFilter.Q.setTargetAtTime(profile.q, now, 0.8);
+      this.padFilter.frequency.setTargetAtTime(targetCutoff, now, 1.05);
+      this.padFilter.Q.setTargetAtTime(profile.q, now, 0.9);
 
       this.padLfo.frequency.setTargetAtTime(
         profile.lfoHz * (0.85 + clampedIntensity * 0.4),
         now,
-        0.8
+        0.9
       );
       this.padLfoGain.gain.setTargetAtTime(
         profile.lfoDepth * (0.7 + clampedIntensity * 0.5),
         now,
-        0.8
+        0.9
       );
 
-      this.padOscillators.forEach((osc, idx) => {
-        osc.type = idx === 0 ? 'sine' : profile.wave;
-        osc.frequency.setTargetAtTime(profile.freqs[idx], now, 0.7);
-      });
+      if (moodChanged) {
+        this.padOscillators.forEach((osc, idx) => {
+          const nextType = idx === 0 ? 'sine' : profile.wave;
+          if (osc.type !== nextType) {
+            osc.type = nextType;
+          }
+          osc.frequency.setTargetAtTime(profile.freqs[idx], now, 0.85);
+        });
+      }
     }
 
     // 2. Dynamically modulate the active base ambient track
@@ -427,6 +465,8 @@ class AmbientSoundEngine {
     this.padLfo = null;
     this.padLfoGain = null;
     this.padOscillators = [];
+    this.lastAppliedMood = null;
+    this.lastAppliedIntensity = -1;
   }
 }
 

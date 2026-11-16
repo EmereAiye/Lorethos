@@ -22,7 +22,26 @@ function getApp(): Promise<Express> {
   return appPromise;
 }
 
+export function normalizeVercelRequestUrl(rawUrl: string): string {
+  const input = rawUrl || '/api';
+  try {
+    const parsed = new URL(input, 'http://localhost');
+    if (!parsed.searchParams.has('__vercel_path')) {
+      return input;
+    }
+    const rawSubpath = parsed.searchParams.get('__vercel_path') || '';
+    const cleanSubpath = rawSubpath.replace(/^\/+/, '');
+    parsed.searchParams.delete('__vercel_path');
+    const qs = parsed.searchParams.toString();
+    const basePath = cleanSubpath ? `/api/${cleanSubpath}` : '/api';
+    return qs ? `${basePath}?${qs}` : basePath;
+  } catch {
+    return input;
+  }
+}
+
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
+  req.url = normalizeVercelRequestUrl(req.url || '/api');
   const app = await getApp();
   return app(req as Parameters<Express>[0], res as Parameters<Express>[1]);
 }

@@ -11,6 +11,7 @@ create table if not exists public.profiles (
   bookmarked_chapter_ids text[] not null default '{}',
   reading_progress jsonb not null default '{}'::jsonb,
   reading_goal jsonb not null default '{}'::jsonb,
+  preferred_genres text[] not null default '{}',
   updated_at timestamptz not null default now()
 );
 

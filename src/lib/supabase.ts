@@ -15,8 +15,9 @@ function isValidHttpUrl(value: string): boolean {
   }
 }
 
-const supabaseUrl = cleanEnvValue(import.meta.env.VITE_SUPABASE_URL);
-const supabaseAnonKey = cleanEnvValue(import.meta.env.VITE_SUPABASE_ANON_KEY);
+const metaEnv = (import.meta as { env?: Record<string, unknown> }).env;
+const supabaseUrl = cleanEnvValue(metaEnv?.VITE_SUPABASE_URL);
+const supabaseAnonKey = cleanEnvValue(metaEnv?.VITE_SUPABASE_ANON_KEY);
 
 function initSupabaseClient(): SupabaseClient | null {
   if (!isValidHttpUrl(supabaseUrl) || !supabaseAnonKey || supabaseAnonKey.includes('YOUR_SUPABASE')) {

@@ -361,8 +361,21 @@ export const Navbar: React.FC = () => {
 
           {/* Account / Sign In Link */}
           <a
-            href={buildHref('account')}
-            onClick={(e) => handleNavClick(e, 'account')}
+            href={buildHref(
+              'account',
+              !isAuthenticated && currentRoute !== 'home' && currentRoute !== 'account' && typeof window !== 'undefined'
+                ? { redirect: `${window.location.pathname}${window.location.search}` }
+                : undefined
+            )}
+            onClick={(e) =>
+              handleNavClick(
+                e,
+                'account',
+                !isAuthenticated && currentRoute !== 'home' && currentRoute !== 'account' && typeof window !== 'undefined'
+                  ? { redirect: `${window.location.pathname}${window.location.search}` }
+                  : undefined
+              )
+            }
             aria-current={currentRoute === 'account' ? 'page' : undefined}
             className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap border ${
               currentRoute === 'account'
@@ -484,8 +497,21 @@ export const Navbar: React.FC = () => {
               Contact &amp; Editorial
             </a>
             <a
-              href={buildHref('account')}
-              onClick={(e) => handleNavClick(e, 'account')}
+              href={buildHref(
+                'account',
+                !isAuthenticated && currentRoute !== 'home' && currentRoute !== 'account' && typeof window !== 'undefined'
+                  ? { redirect: `${window.location.pathname}${window.location.search}` }
+                  : undefined
+              )}
+              onClick={(e) =>
+                handleNavClick(
+                  e,
+                  'account',
+                  !isAuthenticated && currentRoute !== 'home' && currentRoute !== 'account' && typeof window !== 'undefined'
+                    ? { redirect: `${window.location.pathname}${window.location.search}` }
+                    : undefined
+                )
+              }
               className={`px-3 py-2.5 rounded-lg font-medium ${
                 currentRoute === 'account' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
               }`}

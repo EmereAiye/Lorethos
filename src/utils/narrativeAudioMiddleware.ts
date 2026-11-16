@@ -40,6 +40,14 @@ const MOOD_KEYWORDS: Record<Exclude<NarrativeMood, 'calm'>, string[]> = {
   ],
 };
 
+// Precomputed O(1) lookup table mapping keyword -> mood to keep scrolling overhead near zero
+const KEYWORD_TO_MOOD = new Map<string, Exclude<NarrativeMood, 'calm'>>();
+(Object.keys(MOOD_KEYWORDS) as Array<Exclude<NarrativeMood, 'calm'>>).forEach((mood) => {
+  for (const kw of MOOD_KEYWORDS[mood]) {
+    KEYWORD_TO_MOOD.set(kw, mood);
+  }
+});
+
 const MOOD_META: Record<NarrativeMood, { label: string; soundCue: string }> = {
   calm: {
     label: 'Calm',
@@ -63,14 +71,6 @@ const MOOD_META: Record<NarrativeMood, { label: string; soundCue: string }> = {
   },
 };
 
-function tokenizeWords(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s'-]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
-}
-
 function scoreTextSegment(text: string): {
   scores: Record<Exclude<NarrativeMood, 'calm'>, number>;
   matches: Record<Exclude<NarrativeMood, 'calm'>, string[]>;
@@ -90,26 +90,40 @@ function scoreTextSegment(text: string): {
 
   if (!text.trim()) return { scores, matches };
 
-  const words = tokenizeWords(text);
-  const wordSet = new Set(words);
+  const words = text.toLowerCase().match(/[a-z0-9'-]+/g) || [];
+  const seenWords = new Set<string>();
 
-  (Object.keys(MOOD_KEYWORDS) as Array<Exclude<NarrativeMood, 'calm'>>).forEach((mood) => {
-    for (const kw of MOOD_KEYWORDS[mood]) {
-      if (wordSet.has(kw)) {
-        scores[mood] += 1;
-        if (!matches[mood].includes(kw)) {
-          matches[mood].push(kw);
-        }
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    if (seenWords.has(word)) continue;
+    seenWords.add(word);
+    const mood = KEYWORD_TO_MOOD.get(word);
+    if (mood) {
+      scores[mood] += 1;
+      if (matches[mood].length < 4) {
+        matches[mood].push(word);
       }
     }
-  });
+  }
 
   // Structural pacing cues (exclamation marks, em-dashes, short punchy sentences)
-  const exclamations = (text.match(/!/g) || []).length;
-  const emDashes = (text.match(/—|--/g) || []).length;
-  const sentences = text.split(/[.!?]+/).map((s) => s.trim()).filter(Boolean);
-  const avgWordsPerSentence =
-    sentences.length > 0 ? words.length / sentences.length : words.length;
+  let exclamations = 0;
+  let emDashes = 0;
+  let sentenceEnds = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '!') {
+      exclamations++;
+      sentenceEnds++;
+    } else if (ch === '.' || ch === '?') {
+      sentenceEnds++;
+    } else if (ch === '—' || (ch === '-' && text[i + 1] === '-')) {
+      emDashes++;
+    }
+  }
+
+  const sentencesCount = Math.max(1, sentenceEnds);
+  const avgWordsPerSentence = words.length / sentencesCount;
 
   if (exclamations > 0) {
     scores.action += exclamations * 0.75;
@@ -118,7 +132,7 @@ function scoreTextSegment(text: string): {
   if (emDashes > 0) {
     scores.tense += emDashes * 0.4;
   }
-  if (sentences.length >= 3 && avgWordsPerSentence <= 9) {
+  if (sentencesCount >= 3 && avgWordsPerSentence <= 9) {
     scores.tense += 0.7;
     scores.action += 0.5;
   }
@@ -134,11 +148,16 @@ export function analyzeNarrativeSegment(
   const primary = scoreTextSegment(primaryText);
   const secondary = scoreTextSegment(secondaryText);
 
+  const blendMood = (mood: Exclude<NarrativeMood, 'calm'>) =>
+    primary.scores[mood] > 0
+      ? primary.scores[mood] + secondary.scores[mood] * 0.25
+      : Math.min(0.45, secondary.scores[mood] * 0.15);
+
   const combinedScores: Record<Exclude<NarrativeMood, 'calm'>, number> = {
-    tense: primary.scores.tense + secondary.scores.tense * 0.35,
-    action: primary.scores.action + secondary.scores.action * 0.35,
-    solemn: primary.scores.solemn + secondary.scores.solemn * 0.35,
-    wonder: primary.scores.wonder + secondary.scores.wonder * 0.35,
+    tense: blendMood('tense'),
+    action: blendMood('action'),
+    solemn: blendMood('solemn'),
+    wonder: blendMood('wonder'),
   };
 
   let bestMood: NarrativeMood = 'calm';
@@ -179,8 +198,23 @@ export function analyzeNarrativeSegment(
   };
 }
 
+export interface EvaluateMoodOptions {
+  enabled: boolean;
+  immediate?: boolean;
+  debounceMs?: number;
+  minIntensityDelta?: number;
+  cooldownMs?: number;
+  onApply: (analysis: MoodCueAnalysis) => void;
+}
+
+const DEFAULT_DEBOUNCE_MS = 550;
+const DEFAULT_INTENSITY_DELTA = 0.22;
+const DEFAULT_COOLDOWN_MS = 1200;
+
 export class NarrativeAudioMiddleware {
-  private debounceTimer: number | null = null;
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private analysisCache = new Map<string, MoodCueAnalysis>();
+  private lastTransitionAt = 0;
   private lastAnalysis: MoodCueAnalysis = {
     mood: 'calm',
     intensity: 0.2,
@@ -194,60 +228,93 @@ export class NarrativeAudioMiddleware {
     return this.lastAnalysis;
   }
 
+  private getOrAnalyze(paragraphs: string[], clampedIndex: number): MoodCueAnalysis {
+    const primary = paragraphs[clampedIndex] || '';
+    const next = paragraphs[clampedIndex + 1] || '';
+    const cacheKey = `${clampedIndex}:${primary.length}:${primary.slice(0, 24)}:${next.length}`;
+    const cached = this.analysisCache.get(cacheKey);
+    if (cached) return cached;
+
+    const result = analyzeNarrativeSegment(primary, next, clampedIndex);
+    if (this.analysisCache.size >= 200) {
+      this.analysisCache.clear();
+    }
+    this.analysisCache.set(cacheKey, result);
+    return result;
+  }
+
   public evaluate(
     paragraphs: string[],
     activeIndex: number,
-    options: {
-      enabled: boolean;
-      immediate?: boolean;
-      debounceMs?: number;
-      onApply: (analysis: MoodCueAnalysis) => void;
-    }
+    options: EvaluateMoodOptions
   ): void {
-    const clampedIndex = Math.max(0, Math.min(paragraphs.length - 1, activeIndex));
-    const primary = paragraphs[clampedIndex] || '';
-    const next = paragraphs[clampedIndex + 1] || '';
+    const clampedIndex = Math.max(0, Math.min(Math.max(0, paragraphs.length - 1), activeIndex));
+    const minDelta = options.minIntensityDelta ?? DEFAULT_INTENSITY_DELTA;
+    const cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
 
-    const candidate: MoodCueAnalysis = options.enabled
-      ? analyzeNarrativeSegment(primary, next, clampedIndex)
-      : {
-          mood: 'calm',
-          intensity: 0.2,
-          label: MOOD_META.calm.label,
-          soundCue: MOOD_META.calm.soundCue,
-          matchedCues: [],
-          paragraphIndex: clampedIndex,
-        };
+    const runAnalysisAndMaybeCommit = () => {
+      this.debounceTimer = null;
 
-    const commit = () => {
-      const changed =
-        candidate.mood !== this.lastAnalysis.mood ||
-        Math.abs(candidate.intensity - this.lastAnalysis.intensity) >= 0.12 ||
-        candidate.paragraphIndex !== this.lastAnalysis.paragraphIndex;
+      const candidate: MoodCueAnalysis = options.enabled
+        ? this.getOrAnalyze(paragraphs, clampedIndex)
+        : {
+            mood: 'calm',
+            intensity: 0.2,
+            label: MOOD_META.calm.label,
+            soundCue: MOOD_META.calm.soundCue,
+            matchedCues: [],
+            paragraphIndex: clampedIndex,
+          };
 
-      if (changed || options.immediate) {
+      const intensityDelta = Math.abs(candidate.intensity - this.lastAnalysis.intensity);
+      const moodChanged = candidate.mood !== this.lastAnalysis.mood;
+      const now = Date.now();
+      const cooldownElapsed = now - this.lastTransitionAt >= cooldownMs;
+
+      // Only transition audio on significant narrative intensity changes or genuine mood shifts (with cooldown guard)
+      const isSignificantChange =
+        options.immediate ||
+        intensityDelta >= minDelta ||
+        (moodChanged && (cooldownElapsed || intensityDelta >= 0.14));
+
+      if (isSignificantChange) {
         this.lastAnalysis = candidate;
+        this.lastTransitionAt = now;
         options.onApply(candidate);
       }
     };
 
     if (this.debounceTimer !== null) {
-      window.clearTimeout(this.debounceTimer);
+      clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
 
     if (options.immediate) {
-      commit();
+      runAnalysisAndMaybeCommit();
       return;
     }
 
-    const delay = options.debounceMs ?? 280;
-    this.debounceTimer = window.setTimeout(commit, delay);
+    const delay = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+    this.debounceTimer = setTimeout(runAnalysisAndMaybeCommit, delay);
+  }
+
+  public reset(): void {
+    this.dispose();
+    this.analysisCache.clear();
+    this.lastTransitionAt = 0;
+    this.lastAnalysis = {
+      mood: 'calm',
+      intensity: 0.2,
+      label: MOOD_META.calm.label,
+      soundCue: MOOD_META.calm.soundCue,
+      matchedCues: [],
+      paragraphIndex: 0,
+    };
   }
 
   public dispose(): void {
     if (this.debounceTimer !== null) {
-      window.clearTimeout(this.debounceTimer);
+      clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
   }

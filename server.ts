@@ -71,8 +71,24 @@ function parseCookies(cookieHeader: string | undefined): Record<string, string> 
   return result;
 }
 
-function signSessionToken(userId: string): string {
-  const payload = JSON.stringify({ uid: userId, exp: Date.now() + SESSION_TTL_MS });
+export interface SessionTokenClaims {
+  uid: string;
+  name?: string;
+  email?: string;
+  role?: 'reader' | 'owner';
+  exp: number;
+}
+
+export function signSessionToken(
+  user: Pick<StoredUserRecord, 'id' | 'name' | 'email' | 'role'>
+): string {
+  const payload = JSON.stringify({
+    uid: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    exp: Date.now() + SESSION_TTL_MS
+  });
   const encoded = Buffer.from(payload, 'utf8').toString('base64url');
   const sig = crypto
     .createHmac('sha256', getSessionSecret())
@@ -81,7 +97,7 @@ function signSessionToken(userId: string): string {
   return `${encoded}.${sig}`;
 }
 
-function verifySessionToken(token: string | undefined): string | null {
+export function verifySessionToken(token: string | undefined): SessionTokenClaims | null {
   if (!token) return null;
   const parts = token.split('.');
   if (parts.length !== 2) return null;
@@ -98,14 +114,17 @@ function verifySessionToken(token: string | undefined): string | null {
   }
 
   try {
-    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as {
-      uid?: string;
-      exp?: number;
-    };
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as Partial<SessionTokenClaims>;
     if (!parsed.uid || !parsed.exp || parsed.exp < Date.now()) {
       return null;
     }
-    return parsed.uid;
+    return {
+      uid: parsed.uid,
+      name: typeof parsed.name === 'string' ? parsed.name : undefined,
+      email: typeof parsed.email === 'string' ? parsed.email : undefined,
+      role: parsed.role === 'owner' ? 'owner' : 'reader',
+      exp: parsed.exp
+    };
   } catch {
     return null;
   }
@@ -119,8 +138,12 @@ function isHttpsRequest(req: Request): boolean {
   return origin.startsWith('https://');
 }
 
-function setSessionCookie(req: Request, res: Response, userId: string): string {
-  const token = signSessionToken(userId);
+function setSessionCookie(
+  req: Request,
+  res: Response,
+  user: Pick<StoredUserRecord, 'id' | 'name' | 'email' | 'role'>
+): string {
+  const token = signSessionToken(user);
   const isHttps = isHttpsRequest(req);
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
@@ -151,21 +174,30 @@ function clearSessionCookie(req: Request, res: Response): void {
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
-function extractSessionUserId(req: Request): string | null {
+function extractSessionTokenClaims(req: Request): SessionTokenClaims | null {
   const authHeader = req.headers.authorization;
   if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
     const bearerToken = authHeader.slice(7).trim();
-    const uid = verifySessionToken(bearerToken);
-    if (uid) return uid;
+    const claims = verifySessionToken(bearerToken);
+    if (claims) return claims;
   }
   const cookies = parseCookies(req.headers.cookie);
   return verifySessionToken(cookies[SESSION_COOKIE_NAME]);
 }
 
 async function getAuthenticatedUserAsync(req: Request): Promise<StoredUserRecord | undefined> {
-  const userId = extractSessionUserId(req);
-  if (!userId) return undefined;
-  return repo.findUserById(userId);
+  const claims = extractSessionTokenClaims(req);
+  if (!claims?.uid) return undefined;
+  const existing = await repo.findUserById(claims.uid);
+  if (existing) return existing;
+  if (claims.email && claims.name && (!repo.isPostgresEnabled() || (await repo.checkDatabaseHealth()) === 'local-store')) {
+    return repo.ensureSessionUserFromToken({
+      uid: claims.uid,
+      name: claims.name,
+      email: claims.email
+    });
+  }
+  return undefined;
 }
 
 interface AuthedRequest extends Request {
@@ -385,7 +417,7 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
 
   app.post('/api/auth/register', authLimiter, async (req, res) => {
     try {
-      const { name, email, password } = req.body as {
+      const { name, email, password } = (req.body || {}) as {
         name?: string;
         email?: string;
         password?: string;
@@ -414,9 +446,13 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
       }
 
       const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword);
-      const token = setSessionCookie(req, res, user.id);
+      const token = setSessionCookie(req, res, user);
       res.status(201).json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
+      if (err instanceof Error && err.message === 'ACCOUNT_EXISTS') {
+        res.status(409).json({ error: 'An account with this email already exists. Please sign in.' });
+        return;
+      }
       console.error('Register error:', err);
       res.status(500).json({ error: 'Failed to create account. Please try again.' });
     }
@@ -424,12 +460,12 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
 
   app.post('/api/auth/login', authLimiter, async (req, res) => {
     try {
-      const { email, password } = req.body as { email?: string; password?: string };
+      const { email, password } = (req.body || {}) as { email?: string; password?: string };
       const trimmedEmail = String(email || '').trim().toLowerCase();
       const rawPassword = String(password || '');
 
       if (!EMAIL_REGEX.test(trimmedEmail) || !rawPassword) {
-        res.status(400).json({ error: 'Email and password are required.' });
+        res.status(400).json({ error: 'Valid email and password are required.' });
         return;
       }
 
@@ -439,11 +475,70 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
         return;
       }
 
-      const token = setSessionCookie(req, res, user.id);
+      const token = setSessionCookie(req, res, user);
       res.json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
       console.error('Login error:', err);
       res.status(500).json({ error: 'Failed to sign in. Please try again.' });
+    }
+  });
+
+  app.post('/api/auth/supabase-session', authLimiter, async (req, res) => {
+    try {
+      const { accessToken } = (req.body || {}) as { accessToken?: string };
+      const cleanToken = String(accessToken || '').trim();
+      if (!cleanToken) {
+        res.status(400).json({ error: 'Supabase access token is required.' });
+        return;
+      }
+
+      const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
+      const supabaseKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '').trim();
+      if (!supabaseUrl || !supabaseKey) {
+        res.status(503).json({ error: 'Supabase verification is not configured on the server.' });
+        return;
+      }
+
+      const verifyRes = await withTimeout(
+        fetch(`${supabaseUrl}/auth/v1/user`, {
+          headers: {
+            Authorization: `Bearer ${cleanToken}`,
+            apikey: supabaseKey,
+          },
+        }),
+        10000
+      );
+
+      if (!verifyRes.ok) {
+        res.status(401).json({ error: 'Supabase session could not be verified. Please sign in again.' });
+        return;
+      }
+
+      const sbUser = (await verifyRes.json()) as {
+        id?: string;
+        email?: string;
+        user_metadata?: { name?: string };
+      };
+      const email = String(sbUser?.email || '').trim().toLowerCase();
+      if (!sbUser?.id || !EMAIL_REGEX.test(email)) {
+        res.status(401).json({ error: 'Supabase account is missing a verified email address.' });
+        return;
+      }
+
+      const existing = await repo.findUserByEmail(email);
+      const resolvedUser =
+        existing ||
+        repo.ensureSessionUserFromToken({
+          uid: sbUser.id,
+          name: String(sbUser.user_metadata?.name || email.split('@')[0] || 'Reader'),
+          email,
+        });
+
+      const token = setSessionCookie(req, res, resolvedUser);
+      res.json({ user: repo.toPublicProfile(resolvedUser), token });
+    } catch (err) {
+      console.error('Supabase session exchange error:', err);
+      res.status(500).json({ error: 'Failed to synchronize session.' });
     }
   });
 
@@ -591,6 +686,20 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
     }
     const updated = repo.updateReadingGoal(req.currentUser!.id, readingGoal);
     res.json({ readingGoal: updated });
+  });
+
+  app.put('/api/account/preferences', requireAuth, (req: AuthedRequest, res) => {
+    const { preferredGenres } = req.body as { preferredGenres?: unknown };
+    if (!Array.isArray(preferredGenres)) {
+      res.status(400).json({ error: 'preferredGenres must be an array of genre strings.' });
+      return;
+    }
+    const updated = repo.updatePreferredGenres(req.currentUser!.id, preferredGenres as string[]);
+    const refreshed = repo.getUserById(req.currentUser!.id);
+    res.json({
+      preferredGenres: updated || [],
+      user: refreshed ? repo.toPublicProfile(refreshed) : undefined,
+    });
   });
 
   app.post('/api/account/subscription/cancel', requireAuth, (req: AuthedRequest, res) => {
@@ -1594,10 +1703,12 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
                   cleanId.endsWith('/vite/dist/client/client.mjs') ||
                   cleanId.endsWith('/@vite/client')
                 ) {
-                  return code.replace(
-                    'transport.connect(createHMRHandler(handleMessage));',
-                    '/* HMR WebSocket disabled */'
-                  );
+                  return code
+                    .replace('console.debug("[vite] connecting...");', '/* HMR log disabled */')
+                    .replace(
+                      'transport.connect(createHMRHandler(handleMessage));',
+                      '/* HMR WebSocket disabled */'
+                    );
                 }
                 return null;
               },
@@ -1610,7 +1721,7 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
         allowedHosts: true,
         ...(hmrDisabled
           ? { hmr: false, ws: false, watch: null }
-          : { ws: options?.httpServer ? { server: options.httpServer } : false }),
+          : { hmr: options?.httpServer ? { server: options.httpServer } : false }),
       },
       appType: 'spa',
     });

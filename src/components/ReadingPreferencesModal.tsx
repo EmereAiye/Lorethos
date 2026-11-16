@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { BookOpen, Feather, Sparkles, Compass, ScrollText, Clock, Check, X, ArrowRight } from 'lucide-react';
 
@@ -41,6 +41,16 @@ const PRESET_GENRE_OPTIONS: GenreOption[] = [
   }
 ];
 
+function matchesSelectedGenres(storyGenre: string, storyTags: string[], selected: string[]): boolean {
+  if (selected.length === 0) return true;
+  if (selected.includes(storyGenre)) return true;
+  const normalizedTags = storyTags.map((t) => t.toLowerCase());
+  return selected.some((sel) => {
+    const lower = sel.toLowerCase();
+    return normalizedTags.some((tag) => tag.includes(lower) || (lower.includes('fiction') && tag.includes('fiction')));
+  });
+}
+
 export const ReadingPreferencesModal: React.FC = () => {
   const {
     readingPromptOpen,
@@ -50,14 +60,22 @@ export const ReadingPreferencesModal: React.FC = () => {
     stories,
     user,
     isAuthenticated,
-    navigate
+    currentRoute,
+    navigate,
+    pendingAuthRedirect,
+    clearPendingAuthRedirect,
+    completePostAuthRedirect
   } = useApp();
 
   const [selected, setSelected] = useState<string[]>(preferredGenres);
+  const firstActionRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (readingPromptOpen) {
       setSelected(preferredGenres);
+      window.setTimeout(() => {
+        firstActionRef.current?.focus();
+      }, 20);
     }
   }, [readingPromptOpen, preferredGenres]);
 
@@ -94,7 +112,7 @@ export const ReadingPreferencesModal: React.FC = () => {
 
   const matchingTotal = useMemo(() => {
     if (selected.length === 0) return stories.length;
-    return stories.filter((s) => selected.includes(s.genre)).length;
+    return stories.filter((s) => matchesSelectedGenres(s.genre, s.tags, selected)).length;
   }, [stories, selected]);
 
   if (!readingPromptOpen || !isAuthenticated) {
@@ -107,8 +125,15 @@ export const ReadingPreferencesModal: React.FC = () => {
     );
   };
 
-  const handleConfirm = () => {
+  const handleSaveForHomeFeed = () => {
     setPreferredGenres(selected);
+    closeReadingPrompt();
+    completePostAuthRedirect(currentRoute !== 'home' ? 'home' : undefined);
+  };
+
+  const handleBrowseLibrary = () => {
+    setPreferredGenres(selected);
+    clearPendingAuthRedirect();
     closeReadingPrompt();
     if (selected.length === 1) {
       navigate('stories', { genre: selected[0] });
@@ -121,6 +146,9 @@ export const ReadingPreferencesModal: React.FC = () => {
 
   const handleSkip = () => {
     closeReadingPrompt();
+    if (pendingAuthRedirect) {
+      completePostAuthRedirect();
+    }
   };
 
   const firstName = user.name.trim().split(/\s+/)[0] || 'Reader';
@@ -135,7 +163,7 @@ export const ReadingPreferencesModal: React.FC = () => {
         if (e.target === e.currentTarget) closeReadingPrompt();
       }}
     >
-      <div className="w-full max-w-2xl rounded-2xl bg-[#F9F6F0] dark:bg-[#1E111E] sepia:bg-[#F4ECE1] text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] border border-[#2D142C]/15 dark:border-white/15 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div className="w-full max-w-2xl rounded-2xl bg-[#F9F6F0] dark:bg-[#1E111E] sepia:bg-[#F4ECE1] text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] border border-[#2D142C]/15 dark:border-white/15 shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="px-6 py-5 border-b border-[#2D142C]/10 dark:border-white/10 flex items-start justify-between gap-4 bg-gradient-to-r from-[#2D142C]/5 via-[#C85A32]/10 to-transparent">
           <div className="space-y-1">
@@ -146,7 +174,7 @@ export const ReadingPreferencesModal: React.FC = () => {
               What do you want to read?
             </h2>
             <p className="text-xs sm:text-sm opacity-75 font-reader">
-              Pick one or more genres—from poetry and literary fiction to epic sagas—and we&rsquo;ll tailor your library shelf.
+              Select your preferred genres&mdash;from poetry and literary fiction to epic sagas. We save these to your profile to personalize your home feed.
             </p>
           </div>
           <button
@@ -162,16 +190,17 @@ export const ReadingPreferencesModal: React.FC = () => {
         {/* Genre Selection Grid */}
         <div className="p-6 max-h-[60vh] overflow-y-auto space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {genreOptions.map((option) => {
+            {genreOptions.map((option, idx) => {
               const isSelected = selected.includes(option.name);
               const count = countByGenre.get(option.name) || 0;
               return (
                 <button
                   key={option.name}
+                  ref={idx === 0 ? firstActionRef : undefined}
                   type="button"
                   onClick={() => toggleGenre(option.name)}
                   aria-pressed={isSelected}
-                  className={`p-4 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-3 ${
+                  className={`p-4 rounded-xl border text-left transition-colors cursor-pointer flex items-start gap-3 ${
                     isSelected
                       ? 'border-[#C85A32] bg-[#C85A32]/12 shadow-xs'
                       : 'border-[#2D142C]/15 dark:border-white/15 bg-white/70 dark:bg-white/[0.03] hover:border-[#C85A32]/50'
@@ -191,7 +220,7 @@ export const ReadingPreferencesModal: React.FC = () => {
                       <span className="font-display text-base font-bold leading-tight">
                         {option.name}
                       </span>
-                      <span className="text-[10px] font-mono opacity-65 shrink-0">
+                      <span className="text-[10px] font-mono opacity-65 shrink-0 tabular-nums">
                         {count} {count === 1 ? 'work' : 'works'}
                       </span>
                     </div>
@@ -210,8 +239,8 @@ export const ReadingPreferencesModal: React.FC = () => {
           <div className="flex items-center gap-3">
             <span className="opacity-75">
               {selected.length === 0
-                ? `Showing all ${stories.length} stories`
-                : `${selected.length} ${selected.length === 1 ? 'genre' : 'genres'} selected · ${matchingTotal} matching ${matchingTotal === 1 ? 'work' : 'works'}`}
+                ? `No filter active · ${stories.length} stories available`
+                : `${selected.length} ${selected.length === 1 ? 'genre' : 'genres'} saved · ${matchingTotal} recommended ${matchingTotal === 1 ? 'work' : 'works'}`}
             </span>
             {selected.length > 0 && (
               <button
@@ -224,23 +253,32 @@ export const ReadingPreferencesModal: React.FC = () => {
             )}
           </div>
 
-          <div className="flex items-center gap-2.5 self-end sm:self-auto">
+          <div className="flex flex-wrap items-center gap-2.5 self-end sm:self-auto">
             <button
               type="button"
               onClick={handleSkip}
-              className="px-4 py-2 rounded-lg border border-[#2D142C]/15 dark:border-white/15 hover:bg-current/5 font-medium cursor-pointer transition-colors"
+              className="px-3.5 py-2 rounded-lg border border-[#2D142C]/15 dark:border-white/15 hover:bg-current/5 font-medium cursor-pointer transition-colors"
             >
-              Browse Everything
+              Skip for Now
             </button>
             <button
               type="button"
-              onClick={handleConfirm}
+              onClick={handleBrowseLibrary}
+              className="px-3.5 py-2 rounded-lg border border-[#C85A32]/35 text-[#C85A32] hover:bg-[#C85A32]/10 font-semibold cursor-pointer transition-colors"
+            >
+              Open in Library
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveForHomeFeed}
               className="px-5 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold flex items-center gap-2 cursor-pointer shadow-sm transition-colors"
             >
               <span>
-                {selected.length === 0
-                  ? 'Explore Library'
-                  : `Show Matching Reads (${matchingTotal})`}
+                {pendingAuthRedirect
+                  ? 'Save & Continue'
+                  : selected.length === 0
+                  ? 'Save & Go Home'
+                  : `Personalize Home (${matchingTotal})`}
               </span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>

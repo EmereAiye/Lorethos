@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Film, Loader2, Download } from 'lucide-react';
 import { VoiceDictationButton } from './VoiceDictationButton';
-import { apiFetch } from '../lib/apiClient';
+import { apiFetch, parseJsonSafe } from '../lib/apiClient';
 
 interface VideoTrailerStudioProps {
   storySlug?: string;
@@ -48,9 +48,15 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
           storySlug
         })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Could not generate video clip.');
+      const data = await parseJsonSafe<{
+        videoBase64?: string;
+        videoUri?: string;
+        mimeType?: string;
+        aspectRatio?: string;
+        error?: string;
+      }>(res);
+      if (!res.ok || !data) {
+        throw new Error(data?.error || 'Could not generate video clip.');
       }
 
       if (data.videoBase64) {

@@ -605,6 +605,22 @@ function sanitizeStoryForPublic(story) {
 }
 
 // server/db.ts
+function normalizePreferredGenres(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const cleaned = [];
+  for (const item of input) {
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim().slice(0, 48);
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(trimmed);
+    if (cleaned.length >= 16) break;
+  }
+  return cleaned;
+}
 var PLAN_PRICES_NGN = {
   monthly: { amountNgn: 3500, label: "Patron Monthly Subscription" },
   annual: { amountNgn: 32e3, label: "Patron Annual Subscription (12 Months)" }
@@ -688,7 +704,10 @@ var LorethosRepository = class {
         const parsed = JSON.parse(fs.readFileSync(stateFile, "utf8"));
         if (Array.isArray(parsed.stories) && parsed.stories.length > 0) {
           return {
-            users: parsed.users || [],
+            users: (parsed.users || []).map((u) => ({
+              ...u,
+              preferredGenres: normalizePreferredGenres(u.preferredGenres)
+            })),
             stories: parsed.stories.map((s) => ({
               ...s,
               publicationStatus: s.publicationStatus || "published",
@@ -746,10 +765,12 @@ var LorethosRepository = class {
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('reader', 'owner')),
         reading_goal JSONB,
+        preferred_genres JSONB NOT NULL DEFAULT '[]'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       ALTER TABLE users ADD COLUMN IF NOT EXISTS reading_goal JSONB;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_genres JSONB NOT NULL DEFAULT '[]'::jsonb;
       CREATE TABLE IF NOT EXISTS stories (
         id TEXT PRIMARY KEY,
         slug TEXT NOT NULL UNIQUE,
@@ -878,61 +899,58 @@ var LorethosRepository = class {
         submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
-    const countRes = await pool.query("SELECT COUNT(*)::int AS cnt FROM stories");
-    if ((countRes.rows[0]?.cnt ?? 0) === 0) {
-      for (const story of AUTHORITATIVE_STORIES) {
+    for (const story of AUTHORITATIVE_STORIES) {
+      await pool.query(
+        `INSERT INTO stories (
+          id, slug, title, subtitle, author, author_bio, genre, tags,
+          cover_image, synopsis, prologue_lore, status, publication_status,
+          access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        ON CONFLICT (id) DO NOTHING`,
+        [
+          story.id,
+          story.slug,
+          story.title,
+          story.subtitle,
+          story.author,
+          story.authorBio,
+          story.genre,
+          JSON.stringify(story.tags),
+          story.coverImage,
+          story.synopsis,
+          story.prologueLore,
+          story.status,
+          story.publicationStatus || "published",
+          story.accessTier,
+          story.priceNgn,
+          story.freeChaptersCount,
+          story.featured,
+          story.spotlightOrder ?? null,
+          story.updatedAt
+        ]
+      );
+      for (const ch of story.chapters) {
         await pool.query(
-          `INSERT INTO stories (
-            id, slug, title, subtitle, author, author_bio, genre, tags,
-            cover_image, synopsis, prologue_lore, status, publication_status,
-            access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          `INSERT INTO chapters (
+            id, story_id, chapter_number, title, slug, release_date_label,
+            word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
           ON CONFLICT (id) DO NOTHING`,
           [
+            ch.id,
             story.id,
-            story.slug,
-            story.title,
-            story.subtitle,
-            story.author,
-            story.authorBio,
-            story.genre,
-            JSON.stringify(story.tags),
-            story.coverImage,
-            story.synopsis,
-            story.prologueLore,
-            story.status,
-            story.publicationStatus || "published",
-            story.accessTier,
-            story.priceNgn,
-            story.freeChaptersCount,
-            story.featured,
-            story.spotlightOrder ?? null,
-            story.updatedAt
+            ch.chapterNumber,
+            ch.title,
+            ch.slug,
+            ch.releaseDate,
+            ch.wordCount,
+            ch.readTimeMinutes,
+            ch.isFree,
+            ch.excerpt,
+            JSON.stringify(ch.content),
+            ch.ambientSoundscape ?? null
           ]
         );
-        for (const ch of story.chapters) {
-          await pool.query(
-            `INSERT INTO chapters (
-              id, story_id, chapter_number, title, slug, release_date_label,
-              word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
-            ON CONFLICT (id) DO NOTHING`,
-            [
-              ch.id,
-              story.id,
-              ch.chapterNumber,
-              ch.title,
-              ch.slug,
-              ch.releaseDate,
-              ch.wordCount,
-              ch.readTimeMinutes,
-              ch.isFree,
-              ch.excerpt,
-              JSON.stringify(ch.content),
-              ch.ambientSoundscape ?? null
-            ]
-          );
-        }
       }
     }
   }
@@ -944,7 +962,6 @@ var LorethosRepository = class {
       try {
         await this.ensurePostgresSchema(pool);
         await pool.query("SELECT 1 FROM stories LIMIT 1");
-        this.initialized = true;
         const [
           storiesRes,
           chaptersRes,
@@ -1066,6 +1083,7 @@ var LorethosRepository = class {
           bookmarkedChapterIds: bookmarksByUser.get(u.id) || [],
           readingProgress: progressByUser.get(u.id) || {},
           readingGoal: u.reading_goal || buildDefaultReadingGoal(),
+          preferredGenres: normalizePreferredGenres(u.preferred_genres),
           createdAt: new Date(u.created_at).toISOString()
         }));
         this.state.highlights = {};
@@ -1131,6 +1149,7 @@ var LorethosRepository = class {
             minute: "2-digit"
           })
         }));
+        this.initialized = true;
       } catch (err) {
         console.warn(
           "PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:",
@@ -1164,7 +1183,8 @@ var LorethosRepository = class {
       unlockedStoryIds: user.unlockedStoryIds,
       bookmarkedChapterIds: user.bookmarkedChapterIds,
       readingProgress: user.readingProgress,
-      readingGoal: user.readingGoal
+      readingGoal: user.readingGoal,
+      preferredGenres: user.preferredGenres || []
     };
   }
   getUserById(userId) {
@@ -1217,6 +1237,7 @@ var LorethosRepository = class {
         bookmarkedChapterIds: bmRes.rows.map((r) => r.chapter_id),
         readingProgress,
         readingGoal: u.reading_goal || buildDefaultReadingGoal(),
+        preferredGenres: normalizePreferredGenres(u.preferred_genres),
         createdAt: new Date(u.created_at).toISOString()
       };
       const existingIdx = this.state.users.findIndex((x) => x.id === hydrated.id || x.email.toLowerCase() === hydrated.email);
@@ -1227,7 +1248,8 @@ var LorethosRepository = class {
       }
       this.persistSnapshot();
       return hydrated;
-    } catch {
+    } catch (err) {
+      console.warn("Postgres single-user hydration failed:", err instanceof Error ? err.message : err);
       return void 0;
     }
   }
@@ -1241,6 +1263,51 @@ var LorethosRepository = class {
     const cached = this.getUserByEmail(normalized);
     if (cached) return cached;
     return this.hydrateSingleUserFromPostgres("LOWER(email) = $1", normalized);
+  }
+  ensureSessionUserFromToken(claims) {
+    const existingById = this.getUserById(claims.uid);
+    if (existingById) return existingById;
+    const normalizedEmail = claims.email.trim().toLowerCase();
+    const existingByEmail = this.getUserByEmail(normalizedEmail);
+    if (existingByEmail) return existingByEmail;
+    const isOwner = normalizedEmail === getOwnerEmail();
+    const hydrated = {
+      id: claims.uid,
+      name: claims.name.trim() || normalizedEmail.split("@")[0] || "Reader",
+      email: normalizedEmail,
+      passwordHash: "",
+      role: isOwner ? "owner" : "reader",
+      subscription: { plan: "free", status: "none", amountNgn: 0 },
+      unlockedStoryIds: [],
+      bookmarkedChapterIds: [],
+      readingProgress: {},
+      readingGoal: buildDefaultReadingGoal(),
+      preferredGenres: [],
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    this.state.users.push(hydrated);
+    this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO users (id, name, email, password_hash, role, reading_goal, preferred_genres, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
+        [
+          hydrated.id,
+          hydrated.name,
+          hydrated.email,
+          hydrated.passwordHash,
+          hydrated.role,
+          JSON.stringify(hydrated.readingGoal),
+          JSON.stringify(hydrated.preferredGenres)
+        ]
+      );
+      await pool.query(
+        `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
+         VALUES ($1, $2, 'free', 'none', 0) ON CONFLICT (user_id) DO NOTHING`,
+        [`sub_${hydrated.id}`, hydrated.id]
+      );
+    });
+    return hydrated;
   }
   async createUser(name, email, password) {
     const normalizedEmail = email.trim().toLowerCase();
@@ -1256,21 +1323,37 @@ var LorethosRepository = class {
       bookmarkedChapterIds: [],
       readingProgress: {},
       readingGoal: buildDefaultReadingGoal(),
+      preferredGenres: [],
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     if (this.pool) {
       try {
-        await this.pool.query(
-          `INSERT INTO users (id, name, email, password_hash, role, reading_goal, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
-          [record.id, record.name, record.email, record.passwordHash, record.role, JSON.stringify(record.readingGoal)]
+        const insertRes = await this.pool.query(
+          `INSERT INTO users (id, name, email, password_hash, role, reading_goal, preferred_genres, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, NOW()) ON CONFLICT (email) DO NOTHING RETURNING id`,
+          [
+            record.id,
+            record.name,
+            record.email,
+            record.passwordHash,
+            record.role,
+            JSON.stringify(record.readingGoal),
+            JSON.stringify(record.preferredGenres)
+          ]
         );
+        if (insertRes.rowCount === 0) {
+          await this.hydrateSingleUserFromPostgres("LOWER(email) = $1", normalizedEmail);
+          throw new Error("ACCOUNT_EXISTS");
+        }
         await this.pool.query(
           `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
            VALUES ($1, $2, 'free', 'none', 0) ON CONFLICT (user_id) DO NOTHING`,
           [`sub_${record.id}`, record.id]
         );
       } catch (err) {
+        if (err instanceof Error && err.message === "ACCOUNT_EXISTS") {
+          throw err;
+        }
         console.error("Failed to mirror user into PostgreSQL:", err);
       }
     }
@@ -1520,6 +1603,20 @@ var LorethosRepository = class {
       ]);
     });
     return user.readingGoal;
+  }
+  updatePreferredGenres(userId, genres) {
+    const user = this.getUserById(userId);
+    if (!user) return null;
+    const normalized = normalizePreferredGenres(genres);
+    user.preferredGenres = normalized;
+    this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query("UPDATE users SET preferred_genres = $1::jsonb, updated_at = NOW() WHERE id = $2", [
+        JSON.stringify(normalized),
+        userId
+      ]);
+    });
+    return user.preferredGenres;
   }
   cancelSubscription(userId) {
     const user = this.getUserById(userId);
@@ -1871,8 +1968,14 @@ function parseCookies(cookieHeader) {
   }
   return result;
 }
-function signSessionToken(userId) {
-  const payload = JSON.stringify({ uid: userId, exp: Date.now() + SESSION_TTL_MS });
+function signSessionToken(user) {
+  const payload = JSON.stringify({
+    uid: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    exp: Date.now() + SESSION_TTL_MS
+  });
   const encoded = Buffer.from(payload, "utf8").toString("base64url");
   const sig = crypto2.createHmac("sha256", getSessionSecret()).update(encoded).digest("base64url");
   return `${encoded}.${sig}`;
@@ -1893,7 +1996,13 @@ function verifySessionToken(token) {
     if (!parsed.uid || !parsed.exp || parsed.exp < Date.now()) {
       return null;
     }
-    return parsed.uid;
+    return {
+      uid: parsed.uid,
+      name: typeof parsed.name === "string" ? parsed.name : void 0,
+      email: typeof parsed.email === "string" ? parsed.email : void 0,
+      role: parsed.role === "owner" ? "owner" : "reader",
+      exp: parsed.exp
+    };
   } catch {
     return null;
   }
@@ -1905,8 +2014,8 @@ function isHttpsRequest(req) {
   const origin = String(req.headers.origin || req.headers.referer || "");
   return origin.startsWith("https://");
 }
-function setSessionCookie(req, res, userId) {
-  const token = signSessionToken(userId);
+function setSessionCookie(req, res, user) {
+  const token = signSessionToken(user);
   const isHttps = isHttpsRequest(req);
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
@@ -1935,20 +2044,29 @@ function clearSessionCookie(req, res) {
   }
   res.setHeader("Set-Cookie", parts.join("; "));
 }
-function extractSessionUserId(req) {
+function extractSessionTokenClaims(req) {
   const authHeader = req.headers.authorization;
   if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
     const bearerToken = authHeader.slice(7).trim();
-    const uid = verifySessionToken(bearerToken);
-    if (uid) return uid;
+    const claims = verifySessionToken(bearerToken);
+    if (claims) return claims;
   }
   const cookies = parseCookies(req.headers.cookie);
   return verifySessionToken(cookies[SESSION_COOKIE_NAME]);
 }
 async function getAuthenticatedUserAsync(req) {
-  const userId = extractSessionUserId(req);
-  if (!userId) return void 0;
-  return repo.findUserById(userId);
+  const claims = extractSessionTokenClaims(req);
+  if (!claims?.uid) return void 0;
+  const existing = await repo.findUserById(claims.uid);
+  if (existing) return existing;
+  if (claims.email && claims.name && (!repo.isPostgresEnabled() || await repo.checkDatabaseHealth() === "local-store")) {
+    return repo.ensureSessionUserFromToken({
+      uid: claims.uid,
+      name: claims.name,
+      email: claims.email
+    });
+  }
+  return void 0;
 }
 async function requireAuth(req, res, next) {
   const user = await getAuthenticatedUserAsync(req);
@@ -2118,7 +2236,7 @@ async function createApp(options) {
   });
   app.post("/api/auth/register", authLimiter, async (req, res) => {
     try {
-      const { name, email, password } = req.body;
+      const { name, email, password } = req.body || {};
       const trimmedName = String(name || "").trim();
       const trimmedEmail = String(email || "").trim().toLowerCase();
       const rawPassword = String(password || "");
@@ -2139,20 +2257,24 @@ async function createApp(options) {
         return;
       }
       const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword);
-      const token = setSessionCookie(req, res, user.id);
+      const token = setSessionCookie(req, res, user);
       res.status(201).json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
+      if (err instanceof Error && err.message === "ACCOUNT_EXISTS") {
+        res.status(409).json({ error: "An account with this email already exists. Please sign in." });
+        return;
+      }
       console.error("Register error:", err);
       res.status(500).json({ error: "Failed to create account. Please try again." });
     }
   });
   app.post("/api/auth/login", authLimiter, async (req, res) => {
     try {
-      const { email, password } = req.body;
+      const { email, password } = req.body || {};
       const trimmedEmail = String(email || "").trim().toLowerCase();
       const rawPassword = String(password || "");
       if (!EMAIL_REGEX.test(trimmedEmail) || !rawPassword) {
-        res.status(400).json({ error: "Email and password are required." });
+        res.status(400).json({ error: "Valid email and password are required." });
         return;
       }
       const user = await repo.findUserByEmail(trimmedEmail);
@@ -2160,11 +2282,57 @@ async function createApp(options) {
         res.status(401).json({ error: "Invalid email or password." });
         return;
       }
-      const token = setSessionCookie(req, res, user.id);
+      const token = setSessionCookie(req, res, user);
       res.json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
       console.error("Login error:", err);
       res.status(500).json({ error: "Failed to sign in. Please try again." });
+    }
+  });
+  app.post("/api/auth/supabase-session", authLimiter, async (req, res) => {
+    try {
+      const { accessToken } = req.body || {};
+      const cleanToken = String(accessToken || "").trim();
+      if (!cleanToken) {
+        res.status(400).json({ error: "Supabase access token is required." });
+        return;
+      }
+      const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
+      const supabaseKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "").trim();
+      if (!supabaseUrl || !supabaseKey) {
+        res.status(503).json({ error: "Supabase verification is not configured on the server." });
+        return;
+      }
+      const verifyRes = await withTimeout(
+        fetch(`${supabaseUrl}/auth/v1/user`, {
+          headers: {
+            Authorization: `Bearer ${cleanToken}`,
+            apikey: supabaseKey
+          }
+        }),
+        1e4
+      );
+      if (!verifyRes.ok) {
+        res.status(401).json({ error: "Supabase session could not be verified. Please sign in again." });
+        return;
+      }
+      const sbUser = await verifyRes.json();
+      const email = String(sbUser?.email || "").trim().toLowerCase();
+      if (!sbUser?.id || !EMAIL_REGEX.test(email)) {
+        res.status(401).json({ error: "Supabase account is missing a verified email address." });
+        return;
+      }
+      const existing = await repo.findUserByEmail(email);
+      const resolvedUser = existing || repo.ensureSessionUserFromToken({
+        uid: sbUser.id,
+        name: String(sbUser.user_metadata?.name || email.split("@")[0] || "Reader"),
+        email
+      });
+      const token = setSessionCookie(req, res, resolvedUser);
+      res.json({ user: repo.toPublicProfile(resolvedUser), token });
+    } catch (err) {
+      console.error("Supabase session exchange error:", err);
+      res.status(500).json({ error: "Failed to synchronize session." });
     }
   });
   app.post("/api/auth/logout", (req, res) => {
@@ -2274,6 +2442,19 @@ async function createApp(options) {
     }
     const updated = repo.updateReadingGoal(req.currentUser.id, readingGoal);
     res.json({ readingGoal: updated });
+  });
+  app.put("/api/account/preferences", requireAuth, (req, res) => {
+    const { preferredGenres } = req.body;
+    if (!Array.isArray(preferredGenres)) {
+      res.status(400).json({ error: "preferredGenres must be an array of genre strings." });
+      return;
+    }
+    const updated = repo.updatePreferredGenres(req.currentUser.id, preferredGenres);
+    const refreshed = repo.getUserById(req.currentUser.id);
+    res.json({
+      preferredGenres: updated || [],
+      user: refreshed ? repo.toPublicProfile(refreshed) : void 0
+    });
   });
   app.post("/api/account/subscription/cancel", requireAuth, (req, res) => {
     const updated = repo.cancelSubscription(req.currentUser.id);
@@ -3050,7 +3231,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
           transform(code, id) {
             const cleanId = id.split("?", 1)[0];
             if (cleanId.endsWith("/vite/dist/client/client.mjs") || cleanId.endsWith("/@vite/client")) {
-              return code.replace(
+              return code.replace('console.debug("[vite] connecting...");', "/* HMR log disabled */").replace(
                 "transport.connect(createHMRHandler(handleMessage));",
                 "/* HMR WebSocket disabled */"
               );
@@ -3063,7 +3244,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
         middlewareMode: true,
         port: PORT,
         allowedHosts: true,
-        ...hmrDisabled ? { hmr: false, ws: false, watch: null } : { ws: options?.httpServer ? { server: options.httpServer } : false }
+        ...hmrDisabled ? { hmr: false, ws: false, watch: null } : { hmr: options?.httpServer ? { server: options.httpServer } : false }
       },
       appType: "spa"
     });
@@ -3098,5 +3279,7 @@ if (isDirectExecution) {
   });
 }
 export {
-  createApp
+  createApp,
+  signSessionToken,
+  verifySessionToken
 };

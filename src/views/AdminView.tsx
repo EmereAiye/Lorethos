@@ -19,7 +19,7 @@ import {
 import { AccessTier, PublicationStatus } from '../types';
 import { VoiceDictationButton } from '../components/VoiceDictationButton';
 import { VideoTrailerStudio } from '../components/VideoTrailerStudio';
-import { apiFetch } from '../lib/apiClient';
+import { apiFetch, parseJsonSafe } from '../lib/apiClient';
 
 export const AdminView: React.FC = () => {
   const {
@@ -102,10 +102,10 @@ export const AdminView: React.FC = () => {
             Publishing Desk is restricted to authenticated owner accounts authorized by the server. Client-side role switching is disabled.
           </p>
           <a
-            href={buildHref('account')}
+            href={buildHref('account', { redirect: '/admin' })}
             onClick={(e) => {
               e.preventDefault();
-              navigate('account');
+              navigate('account', { redirect: '/admin' });
             }}
             className="inline-block px-5 py-2.5 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg"
           >
@@ -220,9 +220,13 @@ export const AdminView: React.FC = () => {
           outline: aiScenePrompt || `Continue ${selectedStory.title}.`
         })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to draft chapter.');
+      const data = await parseJsonSafe<{
+        excerpt?: string;
+        paragraphs?: string[];
+        error?: string;
+      }>(res);
+      if (!res.ok || !data) {
+        throw new Error(data?.error || 'Failed to draft chapter.');
       }
       if (data.excerpt) setNewChapterExcerpt(data.excerpt);
       if (Array.isArray(data.paragraphs) && data.paragraphs.length > 0) {
@@ -250,9 +254,9 @@ export const AdminView: React.FC = () => {
           existingSynopsis: newStorySynopsis
         })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to craft synopsis.');
+      const data = await parseJsonSafe<{ synopsis?: string; error?: string }>(res);
+      if (!res.ok || !data) {
+        throw new Error(data?.error || 'Failed to craft synopsis.');
       }
       if (data.synopsis) {
         setNewStorySynopsis(data.synopsis);
