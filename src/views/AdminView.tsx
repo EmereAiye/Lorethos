@@ -805,6 +805,10 @@ export const AdminView: React.FC = () => {
                       className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-white dark:bg-[#1E111E]"
                     >
                       <option value="Epic Fantasy">Epic Fantasy</option>
+                      <option value="Poetry">Poetry</option>
+                      <option value="Literary Fiction">Literary Fiction</option>
+                      <option value="Short Stories">Short Stories</option>
+                      <option value="Essays & Memoir">Essays &amp; Memoir</option>
                       <option value="Mythological Realism">Mythological Realism</option>
                       <option value="Afrofuturism">Afrofuturism</option>
                       <option value="Historical Mystery">Historical Mystery</option>

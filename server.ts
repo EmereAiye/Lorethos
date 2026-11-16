@@ -24,6 +24,16 @@ const EPHEMERAL_DEV_SECRET = crypto.randomBytes(32).toString('hex');
 function getSessionSecret(): string {
   const configured = process.env.SESSION_SECRET?.trim();
   if (configured) return configured;
+  if (process.env.VERCEL) {
+    const seed =
+      process.env.DATABASE_URL ||
+      process.env.PAYSTACK_SECRET_KEY ||
+      process.env.GEMINI_API_KEY ||
+      process.env.VERCEL_PROJECT_ID ||
+      process.env.VERCEL_URL ||
+      'lorethos-vercel-fallback';
+    return crypto.createHmac('sha256', 'lorethos-session-key').update(seed).digest('hex');
+  }
   if (process.env.NODE_ENV === 'production') {
     console.warn('WARNING: SESSION_SECRET is not set in production; using ephemeral secret.');
   }
@@ -462,6 +472,7 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
         story.title.toLowerCase().includes(q) ||
         story.subtitle.toLowerCase().includes(q) ||
         story.author.toLowerCase().includes(q) ||
+        story.genre.toLowerCase().includes(q) ||
         story.synopsis.toLowerCase().includes(q) ||
         story.tags.some((t) => t.toLowerCase().includes(q));
 
@@ -1623,7 +1634,7 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
   return app;
 }
 
-const isDirectExecution = !process.env.LORETHOS_NO_LISTEN;
+const isDirectExecution = !process.env.LORETHOS_NO_LISTEN && !process.env.VERCEL;
 if (isDirectExecution) {
   const httpServer = http.createServer();
   createApp({ withVite: process.env.NODE_ENV !== 'production', httpServer })

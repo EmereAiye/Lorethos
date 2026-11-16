@@ -18,12 +18,14 @@ import {
 } from '../types';
 import { INITIAL_STORIES } from '../data/initialStories';
 import { apiFetch, parseJsonSafe, setStoredSessionToken } from '../lib/apiClient';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 export interface RouteParams {
   slug?: string;
   chapterNumber?: number;
   q?: string;
   genre?: string;
+  interests?: string;
   status?: string;
   tier?: string;
   sort?: string;
@@ -170,6 +172,13 @@ interface AppContextType {
   deleteChapterComment: (commentId: string) => Promise<void>;
   inquiries: CommunityInquiry[];
   submitInquiry: (input: InquiryInput) => Promise<CommunityInquiry>;
+
+  // Personalized Reading Preferences ("What do you want to read?")
+  preferredGenres: string[];
+  setPreferredGenres: (genres: string[]) => void;
+  readingPromptOpen: boolean;
+  openReadingPrompt: () => void;
+  closeReadingPrompt: () => void;
 }
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -324,8 +333,34 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   readingWidth: 'standard',
   ambientSound: false,
   ambientTrack: 'fireplace',
-  ambientVolume: 0.6
+  ambientVolume: 0.6,
+  adaptiveAudio: true
 };
+
+const PREFS_STORAGE_PREFIX = 'lorethos_reader_prefs_';
+
+function loadUserPreferences(userId: string): string[] {
+  if (!userId || userId === 'guest') return [];
+  try {
+    const raw = localStorage.getItem(`${PREFS_STORAGE_PREFIX}${userId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveUserPreferences(userId: string, genres: string[]): void {
+  if (!userId || userId === 'guest') return;
+  try {
+    localStorage.setItem(`${PREFS_STORAGE_PREFIX}${userId}`, JSON.stringify(genres));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
 
 function createGuestUser(): UserProfile {
   const todayIso = getLocalIsoDate();
@@ -363,6 +398,7 @@ export function buildHref(route: string, params?: RouteParams): string {
       const qs = new URLSearchParams();
       if (params?.q) qs.set('q', params.q);
       if (params?.genre && params.genre !== 'All') qs.set('genre', params.genre);
+      if (params?.interests) qs.set('interests', params.interests);
       if (params?.status && params.status !== 'All') qs.set('status', params.status);
       if (params?.tier && params.tier !== 'All') qs.set('tier', params.tier);
       if (params?.sort && params.sort !== 'popular') qs.set('sort', params.sort);
@@ -402,6 +438,7 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
       params: {
         q: qs.get('q') || undefined,
         genre: qs.get('genre') || undefined,
+        interests: qs.get('interests') || undefined,
         status: qs.get('status') || undefined,
         tier: qs.get('tier') || undefined,
         sort: qs.get('sort') || undefined
@@ -499,6 +536,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     data: null
   });
   const [checkoutStatusMessage, setCheckoutStatusMessage] = useState<string | null>(null);
+  const [preferredGenres, setPreferredGenresState] = useState<string[]>([]);
+  const [readingPromptOpen, setReadingPromptOpen] = useState(false);
 
   const progressSaveTimerRef = useRef<number | null>(null);
 
@@ -596,8 +635,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         if (sessionRes.ok && mounted) {
-          const sessionJson = await sessionRes.json();
-          if (sessionJson.authenticated && sessionJson.user) {
+          const sessionJson = await parseJsonSafe<{ authenticated?: boolean; user?: UserProfile }>(sessionRes);
+          if (sessionJson?.authenticated && sessionJson.user) {
             const serverUser: UserProfile = {
               ...sessionJson.user,
               readingGoal: reconcileReadingGoalRollover(
@@ -606,6 +645,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             };
             setUser(serverUser);
             setIsAuthenticated(true);
+            setPreferredGenresState(loadUserPreferences(serverUser.id));
             await loadAccountExtras();
 
             // Verify Paystack callback if redirected back with ?reference=...
@@ -618,8 +658,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ reference })
                 });
-                const verifyJson = await verifyRes.json();
-                if (verifyRes.ok && verifyJson.user && mounted) {
+                const verifyJson = await parseJsonSafe<{ user?: UserProfile; transactions?: PaymentTransaction[]; error?: string }>(verifyRes);
+                if (verifyRes.ok && verifyJson?.user && mounted) {
                   setUser({
                     ...verifyJson.user,
                     readingGoal: reconcileReadingGoalRollover(
@@ -631,14 +671,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   }
                   setCheckoutStatusMessage('Payment verified and access unlocked on your account.');
                 } else if (mounted) {
-                  setCheckoutStatusMessage(verifyJson.error || 'Could not confirm Paystack payment yet.');
+                  setCheckoutStatusMessage(verifyJson?.error || 'Could not confirm Paystack payment yet.');
                 }
               } catch {
                 // Ignore verification error cleanly
               }
             }
+          } else if (!sessionJson && isSupabaseConfigured && supabase && mounted) {
+            const { data: sbSession } = await supabase.auth.getSession();
+            const sbUser = sbSession.session?.user;
+            if (sbUser && mounted) {
+              const guest = createGuestUser();
+              const email = (sbUser.email || '').trim().toLowerCase();
+              setUser({
+                ...guest,
+                id: sbUser.id,
+                name: String(sbUser.user_metadata?.name || email.split('@')[0] || 'Reader'),
+                email,
+                role: email === 'emmymasterwise@gmail.com' ? 'owner' : 'reader',
+              });
+              setIsAuthenticated(true);
+              setPreferredGenresState(loadUserPreferences(sbUser.id));
+            } else {
+              setStoredSessionToken(null);
+            }
           } else {
             setStoredSessionToken(null);
+          }
+        } else if (isSupabaseConfigured && supabase && mounted) {
+          const { data: sbSession } = await supabase.auth.getSession();
+          const sbUser = sbSession.session?.user;
+          if (sbUser && mounted) {
+            const guest = createGuestUser();
+            const email = (sbUser.email || '').trim().toLowerCase();
+            setUser({
+              ...guest,
+              id: sbUser.id,
+              name: String(sbUser.user_metadata?.name || email.split('@')[0] || 'Reader'),
+              email,
+              role: email === 'emmymasterwise@gmail.com' ? 'owner' : 'reader',
+            });
+            setIsAuthenticated(true);
+            setPreferredGenresState(loadUserPreferences(sbUser.id));
           }
         }
       } catch {
@@ -703,6 +777,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setReaderSettings(prev => ({ ...prev, ...partial }));
   };
 
+  const buildSupabaseUserProfile = (sbUser: { id: string; email?: string; user_metadata?: Record<string, unknown> }, fallbackName?: string): UserProfile => {
+    const guest = createGuestUser();
+    const email = (sbUser.email || '').trim().toLowerCase();
+    return {
+      ...guest,
+      id: sbUser.id,
+      name: String(sbUser.user_metadata?.name || fallbackName || email.split('@')[0] || 'Reader'),
+      email,
+      role: email === 'emmymasterwise@gmail.com' ? 'owner' : 'reader',
+    };
+  };
+
+  const setPreferredGenres = useCallback(
+    (genres: string[]) => {
+      const cleaned = Array.from(new Set(genres.map(g => g.trim()).filter(Boolean)));
+      setPreferredGenresState(cleaned);
+      if (user.id && user.id !== 'guest') {
+        saveUserPreferences(user.id, cleaned);
+      }
+    },
+    [user.id]
+  );
+
+  const openReadingPrompt = useCallback(() => setReadingPromptOpen(true), []);
+  const closeReadingPrompt = useCallback(() => setReadingPromptOpen(false), []);
+
   const login = async (email: string, password: string): Promise<{ error?: string }> => {
     try {
       const res = await apiFetch('/api/auth/login', {
@@ -711,22 +811,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         body: JSON.stringify({ email: email.trim(), password })
       });
       const data = await parseJsonSafe<{ user?: UserProfile; token?: string; error?: string }>(res);
-      if (!res.ok || !data?.user) {
-        return { error: data?.error || `Sign-in failed (${res.status}).` };
+      if (res.ok && data?.user) {
+        if (data.token) {
+          setStoredSessionToken(data.token);
+        }
+        setUser({
+          ...data.user,
+          readingGoal: reconcileReadingGoalRollover(
+            data.user.readingGoal || createGuestUser().readingGoal
+          )
+        });
+        setIsAuthenticated(true);
+        setPreferredGenresState(loadUserPreferences(data.user.id));
+        setReadingPromptOpen(true);
+        await Promise.all([loadAccountExtras(), refreshStories()]);
+        return {};
       }
-      if (data.token) {
-        setStoredSessionToken(data.token);
+
+      const apiUnavailable = !data || res.status === 404 || res.status === 405 || res.status >= 502;
+      if (apiUnavailable && isSupabaseConfigured && supabase) {
+        const { data: sbData, error: sbErr } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password
+        });
+        if (sbErr) {
+          return { error: sbErr.message };
+        }
+        if (sbData.user) {
+          const profile = buildSupabaseUserProfile(sbData.user);
+          setUser(profile);
+          setIsAuthenticated(true);
+          setPreferredGenresState(loadUserPreferences(profile.id));
+          setReadingPromptOpen(true);
+          return {};
+        }
       }
-      setUser({
-        ...data.user,
-        readingGoal: reconcileReadingGoalRollover(
-          data.user.readingGoal || createGuestUser().readingGoal
-        )
-      });
-      setIsAuthenticated(true);
-      await Promise.all([loadAccountExtras(), refreshStories()]);
-      return {};
+
+      return {
+        error:
+          data?.error ||
+          (!data
+            ? 'Authentication service returned an unexpected response. Please verify API deployment.'
+            : `Sign-in failed (${res.status}).`)
+      };
     } catch {
+      if (isSupabaseConfigured && supabase) {
+        const { data: sbData, error: sbErr } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password
+        });
+        if (sbErr) return { error: sbErr.message };
+        if (sbData.user) {
+          const profile = buildSupabaseUserProfile(sbData.user);
+          setUser(profile);
+          setIsAuthenticated(true);
+          setPreferredGenresState(loadUserPreferences(profile.id));
+          setReadingPromptOpen(true);
+          return {};
+        }
+      }
       return { error: 'Network error while signing in.' };
     }
   };
@@ -739,22 +882,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         body: JSON.stringify({ name: name.trim(), email: email.trim(), password })
       });
       const data = await parseJsonSafe<{ user?: UserProfile; token?: string; error?: string }>(res);
-      if (!res.ok || !data?.user) {
-        return { error: data?.error || `Registration failed (${res.status}).` };
+      if (res.ok && data?.user) {
+        if (data.token) {
+          setStoredSessionToken(data.token);
+        }
+        setUser({
+          ...data.user,
+          readingGoal: reconcileReadingGoalRollover(
+            data.user.readingGoal || createGuestUser().readingGoal
+          )
+        });
+        setIsAuthenticated(true);
+        setPreferredGenresState(loadUserPreferences(data.user.id));
+        setReadingPromptOpen(true);
+        await Promise.all([loadAccountExtras(), refreshStories()]);
+        return {};
       }
-      if (data.token) {
-        setStoredSessionToken(data.token);
+
+      const apiUnavailable = !data || res.status === 404 || res.status === 405 || res.status >= 502;
+      if (apiUnavailable && isSupabaseConfigured && supabase) {
+        const { data: sbData, error: sbErr } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: { data: { name: name.trim() } }
+        });
+        if (sbErr) {
+          return { error: sbErr.message };
+        }
+        if (sbData.user && !sbData.session) {
+          return { error: 'Account created! Check your email to confirm your address before signing in.' };
+        }
+        if (sbData.user) {
+          const profile = buildSupabaseUserProfile(sbData.user, name.trim());
+          setUser(profile);
+          setIsAuthenticated(true);
+          setPreferredGenresState(loadUserPreferences(profile.id));
+          setReadingPromptOpen(true);
+          return {};
+        }
       }
-      setUser({
-        ...data.user,
-        readingGoal: reconcileReadingGoalRollover(
-          data.user.readingGoal || createGuestUser().readingGoal
-        )
-      });
-      setIsAuthenticated(true);
-      await Promise.all([loadAccountExtras(), refreshStories()]);
-      return {};
+
+      return {
+        error:
+          data?.error ||
+          (!data
+            ? 'Registration service returned an unexpected response. Please verify API deployment.'
+            : `Registration failed (${res.status}).`)
+      };
     } catch {
+      if (isSupabaseConfigured && supabase) {
+        const { data: sbData, error: sbErr } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: { data: { name: name.trim() } }
+        });
+        if (sbErr) return { error: sbErr.message };
+        if (sbData.user && !sbData.session) {
+          return { error: 'Account created! Check your email to confirm your address before signing in.' };
+        }
+        if (sbData.user) {
+          const profile = buildSupabaseUserProfile(sbData.user, name.trim());
+          setUser(profile);
+          setIsAuthenticated(true);
+          setPreferredGenresState(loadUserPreferences(profile.id));
+          setReadingPromptOpen(true);
+          return {};
+        }
+      }
       return { error: 'Network error while creating account.' };
     }
   };
@@ -766,7 +960,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {
       // Ignore network errors
     }
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // Ignore Supabase signout errors
+      }
+    }
     setIsAuthenticated(false);
+    setPreferredGenresState([]);
+    setReadingPromptOpen(false);
     setTransactions([]);
     setHighlights([]);
     setAdminOverview(null);
@@ -1298,7 +1501,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addChapterComment,
         deleteChapterComment,
         inquiries,
-        submitInquiry
+        submitInquiry,
+        preferredGenres,
+        setPreferredGenres,
+        readingPromptOpen,
+        openReadingPrompt,
+        closeReadingPrompt
       }}
     >
       {children}

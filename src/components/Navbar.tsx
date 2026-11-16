@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { BookOpen, User, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck } from 'lucide-react';
+import { BookOpen, User, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck, Search, ArrowRight } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const {
@@ -11,12 +11,18 @@ export const Navbar: React.FC = () => {
     isAuthenticated,
     readerSettings,
     setTheme,
-    activeProgress
+    activeProgress,
+    stories
   } = useApp();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+
   const mobileToggleRef = useRef<HTMLButtonElement | null>(null);
   const firstMobileLinkRef = useRef<HTMLAnchorElement | null>(null);
+  const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const desktopSearchRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -34,12 +40,38 @@ export const Navbar: React.FC = () => {
     };
   }, [mobileMenuOpen]);
 
+  useEffect(() => {
+    const onPointerDown = (e: MouseEvent) => {
+      if (desktopSearchRef.current && !desktopSearchRef.current.contains(e.target as Node)) {
+        setSearchFocused(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, []);
+
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return stories.filter((story) => {
+      return (
+        story.title.toLowerCase().includes(q) ||
+        story.subtitle.toLowerCase().includes(q) ||
+        story.author.toLowerCase().includes(q) ||
+        story.genre.toLowerCase().includes(q) ||
+        story.tags.some((t) => t.toLowerCase().includes(q))
+      );
+    });
+  }, [stories, searchQuery]);
+
   if (currentRoute === 'reader') {
     return null;
   }
 
   const isPatron = isAuthenticated && user.subscription.status === 'active';
   const isOwner = isAuthenticated && user.role === 'owner';
+  const trimmedSearch = searchQuery.trim();
+  const showDropdown = searchFocused && trimmedSearch.length > 0;
 
   const handleNavClick = (
     e: React.MouseEvent<HTMLAnchorElement>,
@@ -49,12 +81,27 @@ export const Navbar: React.FC = () => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
     setMobileMenuOpen(false);
+    setSearchFocused(false);
     navigate(route, params);
+  };
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSearchFocused(false);
+    setMobileMenuOpen(false);
+    navigate('stories', trimmedSearch ? { q: trimmedSearch } : undefined);
+  };
+
+  const handleOpenMobileSearch = () => {
+    setMobileMenuOpen(true);
+    window.setTimeout(() => {
+      mobileSearchInputRef.current?.focus();
+    }, 30);
   };
 
   return (
     <header className="sticky top-0 z-40 w-full bg-[#F9F6F0]/95 dark:bg-[#160C16]/95 sepia:bg-[#F4ECE1]/95 backdrop-blur-md border-b border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/15 transition-colors">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-4">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-3 xl:gap-4">
 
         {/* Zone 1: Brand Lockup */}
         <a
@@ -78,7 +125,7 @@ export const Navbar: React.FC = () => {
         </a>
 
         {/* Zone 2: Primary Nav Links */}
-        <nav aria-label="Primary navigation" className="hidden lg:flex items-center gap-7 text-sm font-medium">
+        <nav aria-label="Primary navigation" className="hidden lg:flex items-center gap-5 xl:gap-6 text-sm font-medium shrink-0">
           <a
             href={buildHref('stories')}
             onClick={(e) => handleNavClick(e, 'stories')}
@@ -135,8 +182,96 @@ export const Navbar: React.FC = () => {
           )}
         </nav>
 
+        {/* Global Search Bar (Tablet & Desktop) */}
+        <div ref={desktopSearchRef} className="relative hidden md:block flex-1 max-w-xs lg:max-w-[240px] xl:max-w-[270px]">
+          <form onSubmit={handleSearchSubmit} role="search" aria-label="Global story search">
+            <label htmlFor="global-navbar-search" className="sr-only">
+              Search stories by title, author, or genre
+            </label>
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#2D142C]/45 dark:text-white/45 sepia:text-[#2C1E18]/45 pointer-events-none" />
+            <input
+              id="global-navbar-search"
+              type="search"
+              value={searchQuery}
+              onFocus={() => setSearchFocused(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setSearchFocused(false);
+                  (e.currentTarget as HTMLInputElement).blur();
+                }
+              }}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSearchFocused(true);
+              }}
+              placeholder="Search title, author, genre..."
+              className="w-full pl-8 pr-7 py-1.5 text-xs rounded-lg border border-[#2D142C]/15 dark:border-white/15 sepia:border-[#2C1E18]/20 bg-white/75 dark:bg-white/5 sepia:bg-white/60 focus:outline-none focus:border-[#C85A32] text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] placeholder:text-[#2D142C]/45 dark:placeholder:text-white/45 font-sans-ui transition-colors"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear global search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-[#2D142C]/50 dark:text-white/50 hover:text-[#C85A32] cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </form>
+
+          {showDropdown && (
+            <div className="absolute left-0 right-0 mt-2 w-80 max-w-[90vw] rounded-xl border border-[#2D142C]/15 dark:border-white/15 bg-[#F9F6F0] dark:bg-[#1E111E] sepia:bg-[#F4ECE1] text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] shadow-2xl overflow-hidden z-50">
+              {searchResults.length === 0 ? (
+                <div className="p-4 text-xs font-sans-ui opacity-70 text-center">
+                  No stories matching &ldquo;{trimmedSearch}&rdquo;.
+                </div>
+              ) : (
+                <div className="divide-y divide-[#2D142C]/10 dark:divide-white/10 max-h-80 overflow-y-auto">
+                  {searchResults.slice(0, 5).map((story) => (
+                    <a
+                      key={story.id}
+                      href={buildHref('story-detail', { slug: story.slug })}
+                      onClick={(e) => handleNavClick(e, 'story-detail', { slug: story.slug })}
+                      className="flex items-center gap-3 p-3 hover:bg-[#C85A32]/10 transition-colors"
+                    >
+                      <img
+                        src={story.coverImage}
+                        alt=""
+                        className="w-9 h-12 object-cover rounded border border-current/10 shrink-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] uppercase tracking-wider font-semibold text-[#C85A32] font-sans-ui">
+                          {story.genre}
+                        </div>
+                        <div className="font-display text-sm font-bold truncate">
+                          {story.title}
+                        </div>
+                        <div className="text-[11px] opacity-70 font-sans-ui truncate">
+                          By {story.author} &middot; {story.chapters.length} chs
+                        </div>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              )}
+              <a
+                href={buildHref('stories', { q: trimmedSearch })}
+                onClick={(e) => handleNavClick(e, 'stories', { q: trimmedSearch })}
+                className="flex items-center justify-between px-3.5 py-2.5 text-xs font-semibold text-[#C85A32] bg-[#2D142C]/[0.04] dark:bg-white/[0.04] hover:bg-[#C85A32]/15 border-t border-[#2D142C]/10 dark:border-white/10 transition-colors font-sans-ui"
+              >
+                <span>
+                  {searchResults.length > 0
+                    ? `View all ${searchResults.length} matches in Library`
+                    : 'Search in Library'}
+                </span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          )}
+        </div>
+
         {/* Zone 3: Reading Progress, Theme Toggles & Actions */}
-        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
           {activeProgress && (
             <a
               href={buildHref('reader', {
@@ -149,7 +284,7 @@ export const Navbar: React.FC = () => {
                   chapterNumber: activeProgress.chapterNumber
                 })
               }
-              className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#C85A32]/30 bg-[#C85A32]/5 hover:bg-[#C85A32]/10 transition-colors text-xs group"
+              className="hidden 2xl:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#C85A32]/30 bg-[#C85A32]/5 hover:bg-[#C85A32]/10 transition-colors text-xs group"
               title={`Resume reading: ${activeProgress.story.title}`}
             >
               <BookmarkCheck className="w-3.5 h-3.5 text-[#C85A32]" />
@@ -157,7 +292,7 @@ export const Navbar: React.FC = () => {
                 <span className="text-[10px] text-[#C85A32] font-semibold uppercase tracking-wider">
                   Resume
                 </span>
-                <span className="text-xs font-medium text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] truncate max-w-[130px]">
+                <span className="text-xs font-medium text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] truncate max-w-[120px]">
                   {activeProgress.story.title} &middot; Ch {activeProgress.chapterNumber}
                 </span>
               </div>
@@ -166,6 +301,16 @@ export const Navbar: React.FC = () => {
               </span>
             </a>
           )}
+
+          {/* Mobile Search Quick Button */}
+          <button
+            type="button"
+            onClick={handleOpenMobileSearch}
+            aria-label="Search stories"
+            className="md:hidden p-2 rounded-lg border border-[#2D142C]/15 dark:border-white/15 text-[#2D142C] dark:text-[#F9F6F0] hover:border-[#C85A32] cursor-pointer"
+          >
+            <Search className="w-4 h-4" />
+          </button>
 
           {/* Theme Toggles */}
           <div
@@ -235,7 +380,7 @@ export const Navbar: React.FC = () => {
           <a
             href={buildHref('stories')}
             onClick={(e) => handleNavClick(e, 'stories')}
-            className="hidden sm:flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#C85A32] hover:bg-[#b04d28] rounded shadow-xs hover:shadow transition-all duration-150 whitespace-nowrap shrink-0"
+            className="hidden sm:flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-[#C85A32] hover:bg-[#b04d28] rounded shadow-xs hover:shadow transition-all duration-150 whitespace-nowrap shrink-0"
           >
             <BookOpen className="w-3.5 h-3.5" />
             <span>Read Stories</span>
@@ -262,6 +407,53 @@ export const Navbar: React.FC = () => {
           id="mobile-nav-drawer"
           className="lg:hidden border-t border-[#2D142C]/10 dark:border-white/10 bg-[#F9F6F0] dark:bg-[#160C16] sepia:bg-[#F4ECE1] px-4 py-5 space-y-4 font-sans-ui text-sm"
         >
+          {/* Mobile Global Search */}
+          <form onSubmit={handleSearchSubmit} role="search" className="relative">
+            <label htmlFor="mobile-navbar-search" className="sr-only">
+              Search stories by title, author, or genre
+            </label>
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 opacity-50 pointer-events-none" />
+            <input
+              ref={mobileSearchInputRef}
+              id="mobile-navbar-search"
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search title, author, or genre..."
+              className="w-full pl-9 pr-16 py-2.5 text-xs rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-white/80 dark:bg-white/5 focus:outline-none focus:border-[#C85A32]"
+            />
+            <button
+              type="submit"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2.5 py-1 text-[11px] font-semibold bg-[#C85A32] text-white rounded cursor-pointer"
+            >
+              Go
+            </button>
+          </form>
+
+          {trimmedSearch.length > 0 && (
+            <div className="rounded-lg border border-[#2D142C]/10 dark:border-white/10 bg-white/70 dark:bg-white/[0.03] divide-y divide-[#2D142C]/10 dark:divide-white/10">
+              {searchResults.slice(0, 4).map((story) => (
+                <a
+                  key={story.id}
+                  href={buildHref('story-detail', { slug: story.slug })}
+                  onClick={(e) => handleNavClick(e, 'story-detail', { slug: story.slug })}
+                  className="flex items-center justify-between gap-2 px-3 py-2 text-xs hover:bg-[#C85A32]/10"
+                >
+                  <div className="min-w-0">
+                    <div className="font-display font-bold truncate">{story.title}</div>
+                    <div className="text-[11px] opacity-70 truncate">
+                      {story.author} &middot; {story.genre}
+                    </div>
+                  </div>
+                  <ArrowRight className="w-3.5 h-3.5 text-[#C85A32] shrink-0" />
+                </a>
+              ))}
+              {searchResults.length === 0 && (
+                <div className="px-3 py-2 text-xs opacity-65">No stories matching &ldquo;{trimmedSearch}&rdquo;.</div>
+              )}
+            </div>
+          )}
+
           <nav aria-label="Mobile navigation" className="flex flex-col space-y-2">
             <a
               ref={firstMobileLinkRef}
@@ -339,3 +531,4 @@ export const Navbar: React.FC = () => {
     </header>
   );
 };
+

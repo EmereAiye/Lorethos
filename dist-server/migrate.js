@@ -421,6 +421,165 @@ var AUTHORITATIVE_STORIES = [
         ]
       }
     ]
+  },
+  {
+    id: "story-harmattan-verses",
+    slug: "verses-of-the-harmattan",
+    title: "Verses of the Harmattan",
+    subtitle: "Collected Poems of Dust, Brass Lanterns, and Atlantic Dusk",
+    author: "Kemi Adeyemi",
+    authorBio: "Poet and essayist writing between Lagos and Accra, exploring memory, seasonal winds, and oral lyricism.",
+    genre: "Poetry",
+    tags: ["Poetry", "Lyric Verse", "Oral Tradition", "Anthology"],
+    coverImage: "/assets/images/book_cover_whispering_savanna_1794465562207.jpg",
+    synopsis: "A serialized poetry anthology tracing the dry northern wind from Sahelian courtyards to coastal harbors\u2014meditations on longing, kinship, and light surviving dust.",
+    prologueLore: "Each installment gathers three rhythmic cantos meant to be read slowly aloud at dusk.",
+    status: "Ongoing",
+    publicationStatus: "published",
+    accessTier: "free",
+    priceNgn: 0,
+    rating: 0,
+    ratingsCount: 0,
+    totalChapters: 3,
+    totalReads: 0,
+    freeChaptersCount: 3,
+    featured: false,
+    spotlightOrder: 5,
+    updatedAt: "Nov 2026",
+    chapters: [
+      {
+        id: "ch-harmattan-1",
+        storyId: "story-harmattan-verses",
+        chapterNumber: 1,
+        title: "I. When the Red Dust Arrives",
+        slug: "when-the-red-dust-arrives",
+        releaseDate: "Oct 18, 2026",
+        wordCount: 420,
+        readTimeMinutes: 3,
+        isFree: true,
+        excerpt: "At dawn the mango leaves wore a thin coat of ochre, and every door remembered the desert.",
+        content: [
+          "At dawn the mango leaves wore a thin coat of ochre, and every door remembered the desert.",
+          "We lit the brass lantern before sunrise, watching silver motes drift across the veranda like unspoken letters.",
+          "Dry wind carries no rain, yet it softens every hard edge of the city into amber quiet\u2014a truce between yesterday and bloom."
+        ],
+        ambientSoundscape: "fireplace"
+      },
+      {
+        id: "ch-harmattan-2",
+        storyId: "story-harmattan-verses",
+        chapterNumber: 2,
+        title: "II. Elegy for the Ferryman",
+        slug: "elegy-for-the-ferryman",
+        releaseDate: "Oct 25, 2026",
+        wordCount: 390,
+        readTimeMinutes: 3,
+        isFree: true,
+        excerpt: "His wooden oar measured the tide better than any clock in the harbor tower.",
+        content: [
+          "His wooden oar measured the tide better than any clock in the harbor tower.",
+          "Salt and cedar smoke lingered on his coat; he spoke only in gentle proverbs about patience and returning water.",
+          "Now the lagoon keeps his cadence in the hush between evening bells."
+        ],
+        ambientSoundscape: "rain"
+      },
+      {
+        id: "ch-harmattan-3",
+        storyId: "story-harmattan-verses",
+        chapterNumber: 3,
+        title: "III. Starlight on Tin Roofs",
+        slug: "starlight-on-tin-roofs",
+        releaseDate: "Nov 02, 2026",
+        wordCount: 460,
+        readTimeMinutes: 3,
+        isFree: true,
+        excerpt: "Night cools the corrugated iron until the whole street sings with tiny metallic sighs.",
+        content: [
+          "Night cools the corrugated iron until the whole street sings with tiny metallic sighs.",
+          "Above the courtyard, constellations bloom clear and radiant through the thinning haze, reminding us how small our quarrels are beneath an eternal sky."
+        ],
+        ambientSoundscape: "mythic_drone"
+      }
+    ]
+  },
+  {
+    id: "story-lagoon-letters",
+    slug: "letters-across-the-lagoon",
+    title: "Letters Across the Lagoon",
+    subtitle: "An Epistolary Novel of Two Architects Rebuilding a Waterfront Library",
+    author: "Tunde Babalola",
+    authorBio: "Fiction writer and urban chronicler focusing on memory, architecture, and quiet human resilience.",
+    genre: "Literary Fiction",
+    tags: ["Fiction", "Epistolary", "Contemporary", "Drama"],
+    coverImage: "/assets/images/book_cover_sunken_epoch_1794465563519.jpg",
+    synopsis: "Separated by a decade of silence and a contested waterfront restoration, two former partners exchange handwritten letters tucked inside architectural blueprints\u2014uncovering what happened the night the old reading hall burned.",
+    prologueLore: "Every chapter pairs one unsent draft with the letter that finally crossed the water.",
+    status: "Completed",
+    publicationStatus: "published",
+    accessTier: "free",
+    priceNgn: 0,
+    rating: 0,
+    ratingsCount: 0,
+    totalChapters: 3,
+    totalReads: 0,
+    freeChaptersCount: 3,
+    featured: false,
+    spotlightOrder: 6,
+    updatedAt: "Nov 2026",
+    chapters: [
+      {
+        id: "ch-lagoon-1",
+        storyId: "story-lagoon-letters",
+        chapterNumber: 1,
+        title: "Blueprint in Blue Ink",
+        slug: "blueprint-in-blue-ink",
+        releaseDate: "Oct 10, 2026",
+        wordCount: 1850,
+        readTimeMinutes: 7,
+        isFree: true,
+        excerpt: "You left your compass on the drafting table, as if you expected the tide to wait for our second draft.",
+        content: [
+          "You left your compass on the drafting table, as if you expected the tide to wait for our second draft.",
+          "The ferry from Tarkwa Bay still shakes at the pier every morning at seven. I carried your rolled elevations up the timber stairs and spread them across the long mahogany desk.",
+          "Someone had circled the west reading terrace in faint red pencil\u2014the exact corner where the roof timbers gave way ten winters ago."
+        ],
+        ambientSoundscape: "rain"
+      },
+      {
+        id: "ch-lagoon-2",
+        storyId: "story-lagoon-letters",
+        chapterNumber: 2,
+        title: "The Salt-Stained Ledger",
+        slug: "the-salt-stained-ledger",
+        releaseDate: "Oct 17, 2026",
+        wordCount: 1920,
+        readTimeMinutes: 8,
+        isFree: true,
+        excerpt: "Truth rarely arrives in grand speeches; mostly it hides in margin notes and forgotten invoices.",
+        content: [
+          "Truth rarely arrives in grand speeches; mostly it hides in margin notes and forgotten invoices.",
+          "Inside the archive drawer beneath the floorboards, Ada found the contractor receipt dated two days before the fire\u2014signed by a councilman who swore he had never visited the pier."
+        ],
+        ambientSoundscape: "fireplace"
+      },
+      {
+        id: "ch-lagoon-3",
+        storyId: "story-lagoon-letters",
+        chapterNumber: 3,
+        title: "Opening the Timber Windows",
+        slug: "opening-the-timber-windows",
+        releaseDate: "Oct 24, 2026",
+        wordCount: 2100,
+        readTimeMinutes: 8,
+        isFree: true,
+        excerpt: "When the shutters finally swung wide, golden afternoon light flooded every empty shelf.",
+        content: [
+          "When the shutters finally swung wide, golden afternoon light flooded every empty shelf.",
+          "Breeze off the lagoon carried the scent of fresh cedar and rain-washed stone as the first crates of books arrived at the harbor steps."
+        ],
+        ambientSoundscape: "rain"
+      }
+    ]
   }
 ];
 

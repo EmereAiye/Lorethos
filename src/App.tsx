@@ -3,6 +3,7 @@ import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { PaystackModal } from './components/PaystackModal';
+import { ReadingPreferencesModal } from './components/ReadingPreferencesModal';
 import { CheckCircle2, X, Loader2 } from 'lucide-react';
 
 const HomeView = lazy(() => import('./views/HomeView').then((m) => ({ default: m.HomeView })));
@@ -90,6 +91,7 @@ const MainContent: React.FC = () => {
       </main>
       <Footer />
       <PaystackModal />
+      <ReadingPreferencesModal />
 
       {/* Global Floating Reading Progress Dock */}
       {currentRoute !== 'reader' && activeProgress && (

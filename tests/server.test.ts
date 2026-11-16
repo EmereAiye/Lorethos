@@ -75,7 +75,23 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     const catalogRes = await fetch(`${baseUrl}/api/stories`);
     assert.equal(catalogRes.status, 200);
     const catalogData = await catalogRes.json();
-    assert.ok(Array.isArray(catalogData.stories) && catalogData.stories.length >= 4);
+    assert.ok(Array.isArray(catalogData.stories) && catalogData.stories.length >= 6);
+
+    const poetrySearchRes = await fetch(`${baseUrl}/api/stories?q=Poetry`);
+    assert.equal(poetrySearchRes.status, 200);
+    const poetrySearchData = await poetrySearchRes.json();
+    assert.ok(
+      poetrySearchData.stories.some((s: { slug: string }) => s.slug === 'verses-of-the-harmattan'),
+      'Expected Poetry search to return Verses of the Harmattan'
+    );
+
+    const authorSearchRes = await fetch(`${baseUrl}/api/stories?q=Tunde`);
+    assert.equal(authorSearchRes.status, 200);
+    const authorSearchData = await authorSearchRes.json();
+    assert.ok(
+      authorSearchData.stories.some((s: { slug: string }) => s.slug === 'letters-across-the-lagoon'),
+      'Expected author search to return Letters Across the Lagoon'
+    );
 
     const obsidian = catalogData.stories.find((s: { slug: string }) => s.slug === 'the-obsidian-throne');
     assert.ok(obsidian, 'Expected The Obsidian Throne in public catalog');

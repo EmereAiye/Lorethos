@@ -156,4 +156,5 @@ export interface ReaderSettings {
   ambientSound: boolean;
   ambientTrack: 'fireplace' | 'rain' | 'mythic_drone' | 'silence';
   ambientVolume: number;
+  adaptiveAudio?: boolean;
 }

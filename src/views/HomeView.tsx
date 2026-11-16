@@ -3,10 +3,22 @@ import { useApp } from '../context/AppContext';
 import { BookOpen, Sparkles, ArrowRight, Check, MessageSquare, Headphones } from 'lucide-react';
 
 export const HomeView: React.FC = () => {
-  const { stories, navigate, buildHref, openPaystackCheckout, user } = useApp();
+  const {
+    stories,
+    navigate,
+    buildHref,
+    openPaystackCheckout,
+    user,
+    isAuthenticated,
+    preferredGenres,
+    openReadingPrompt
+  } = useApp();
 
   const flagshipStory = stories.find(s => s.id === 'story-obsidian-throne') || stories[0];
   const featuredStories = stories.filter(s => s.featured);
+  const personalizedStories = isAuthenticated && preferredGenres.length > 0
+    ? stories.filter(s => preferredGenres.includes(s.genre))
+    : [];
 
   const latestChapters = stories.flatMap(s =>
     s.chapters.slice(-2).map(ch => ({
@@ -141,6 +153,76 @@ export const HomeView: React.FC = () => {
                 </a>
               </div>
 
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Personalized Reading Interests Shelf */}
+      {isAuthenticated && personalizedStories.length > 0 && (
+        <section className="py-12 border-b border-[#2D142C]/10 dark:border-white/10 bg-[#C85A32]/[0.04]">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+              <div>
+                <div className="text-xs tracking-wider uppercase text-[#C85A32] font-semibold font-sans-ui mb-1">
+                  Picked for {user.name.trim().split(/\s+/)[0] || 'You'} &middot; {preferredGenres.join(', ')}
+                </div>
+                <h2 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight">
+                  Matching Your Reading Mood
+                </h2>
+              </div>
+              <div className="flex items-center gap-3 text-xs font-sans-ui">
+                <button
+                  type="button"
+                  onClick={openReadingPrompt}
+                  className="px-3 py-1.5 rounded-lg border border-[#C85A32]/35 text-[#C85A32] font-semibold hover:bg-[#C85A32] hover:text-white transition-colors cursor-pointer"
+                >
+                  Change Preferences
+                </button>
+                <a
+                  href={buildHref('stories', preferredGenres.length === 1 ? { genre: preferredGenres[0] } : { interests: '1' })}
+                  onClick={(e) =>
+                    handleNav(
+                      e,
+                      'stories',
+                      preferredGenres.length === 1 ? { genre: preferredGenres[0] } : { interests: '1' }
+                    )
+                  }
+                  className="font-semibold text-[#C85A32] hover:underline flex items-center gap-1"
+                >
+                  <span>Open in Library</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </a>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              {personalizedStories.slice(0, 4).map((story) => (
+                <a
+                  key={story.id}
+                  href={buildHref('story-detail', { slug: story.slug })}
+                  onClick={(e) => handleNav(e, 'story-detail', { slug: story.slug })}
+                  className="p-3.5 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 hover:border-[#C85A32]/50 transition-all flex items-center gap-3.5 group shadow-2xs"
+                >
+                  <img
+                    src={story.coverImage}
+                    alt={`${story.title} cover`}
+                    loading="lazy"
+                    className="w-14 h-20 object-cover rounded border border-current/10 shrink-0"
+                  />
+                  <div className="min-w-0 space-y-1">
+                    <span className="text-[10px] uppercase tracking-wider font-semibold text-[#C85A32] font-sans-ui block">
+                      {story.genre}
+                    </span>
+                    <h3 className="font-display text-base font-bold leading-tight group-hover:text-[#C85A32] transition-colors line-clamp-1">
+                      {story.title}
+                    </h3>
+                    <p className="text-[11px] opacity-70 font-sans-ui truncate">
+                      By {story.author} &middot; {story.chapters.length} chs
+                    </p>
+                  </div>
+                </a>
+              ))}
             </div>
           </div>
         </section>

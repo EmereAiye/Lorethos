@@ -431,6 +431,165 @@ var AUTHORITATIVE_STORIES = [
         ]
       }
     ]
+  },
+  {
+    id: "story-harmattan-verses",
+    slug: "verses-of-the-harmattan",
+    title: "Verses of the Harmattan",
+    subtitle: "Collected Poems of Dust, Brass Lanterns, and Atlantic Dusk",
+    author: "Kemi Adeyemi",
+    authorBio: "Poet and essayist writing between Lagos and Accra, exploring memory, seasonal winds, and oral lyricism.",
+    genre: "Poetry",
+    tags: ["Poetry", "Lyric Verse", "Oral Tradition", "Anthology"],
+    coverImage: "/assets/images/book_cover_whispering_savanna_1794465562207.jpg",
+    synopsis: "A serialized poetry anthology tracing the dry northern wind from Sahelian courtyards to coastal harbors\u2014meditations on longing, kinship, and light surviving dust.",
+    prologueLore: "Each installment gathers three rhythmic cantos meant to be read slowly aloud at dusk.",
+    status: "Ongoing",
+    publicationStatus: "published",
+    accessTier: "free",
+    priceNgn: 0,
+    rating: 0,
+    ratingsCount: 0,
+    totalChapters: 3,
+    totalReads: 0,
+    freeChaptersCount: 3,
+    featured: false,
+    spotlightOrder: 5,
+    updatedAt: "Nov 2026",
+    chapters: [
+      {
+        id: "ch-harmattan-1",
+        storyId: "story-harmattan-verses",
+        chapterNumber: 1,
+        title: "I. When the Red Dust Arrives",
+        slug: "when-the-red-dust-arrives",
+        releaseDate: "Oct 18, 2026",
+        wordCount: 420,
+        readTimeMinutes: 3,
+        isFree: true,
+        excerpt: "At dawn the mango leaves wore a thin coat of ochre, and every door remembered the desert.",
+        content: [
+          "At dawn the mango leaves wore a thin coat of ochre, and every door remembered the desert.",
+          "We lit the brass lantern before sunrise, watching silver motes drift across the veranda like unspoken letters.",
+          "Dry wind carries no rain, yet it softens every hard edge of the city into amber quiet\u2014a truce between yesterday and bloom."
+        ],
+        ambientSoundscape: "fireplace"
+      },
+      {
+        id: "ch-harmattan-2",
+        storyId: "story-harmattan-verses",
+        chapterNumber: 2,
+        title: "II. Elegy for the Ferryman",
+        slug: "elegy-for-the-ferryman",
+        releaseDate: "Oct 25, 2026",
+        wordCount: 390,
+        readTimeMinutes: 3,
+        isFree: true,
+        excerpt: "His wooden oar measured the tide better than any clock in the harbor tower.",
+        content: [
+          "His wooden oar measured the tide better than any clock in the harbor tower.",
+          "Salt and cedar smoke lingered on his coat; he spoke only in gentle proverbs about patience and returning water.",
+          "Now the lagoon keeps his cadence in the hush between evening bells."
+        ],
+        ambientSoundscape: "rain"
+      },
+      {
+        id: "ch-harmattan-3",
+        storyId: "story-harmattan-verses",
+        chapterNumber: 3,
+        title: "III. Starlight on Tin Roofs",
+        slug: "starlight-on-tin-roofs",
+        releaseDate: "Nov 02, 2026",
+        wordCount: 460,
+        readTimeMinutes: 3,
+        isFree: true,
+        excerpt: "Night cools the corrugated iron until the whole street sings with tiny metallic sighs.",
+        content: [
+          "Night cools the corrugated iron until the whole street sings with tiny metallic sighs.",
+          "Above the courtyard, constellations bloom clear and radiant through the thinning haze, reminding us how small our quarrels are beneath an eternal sky."
+        ],
+        ambientSoundscape: "mythic_drone"
+      }
+    ]
+  },
+  {
+    id: "story-lagoon-letters",
+    slug: "letters-across-the-lagoon",
+    title: "Letters Across the Lagoon",
+    subtitle: "An Epistolary Novel of Two Architects Rebuilding a Waterfront Library",
+    author: "Tunde Babalola",
+    authorBio: "Fiction writer and urban chronicler focusing on memory, architecture, and quiet human resilience.",
+    genre: "Literary Fiction",
+    tags: ["Fiction", "Epistolary", "Contemporary", "Drama"],
+    coverImage: "/assets/images/book_cover_sunken_epoch_1794465563519.jpg",
+    synopsis: "Separated by a decade of silence and a contested waterfront restoration, two former partners exchange handwritten letters tucked inside architectural blueprints\u2014uncovering what happened the night the old reading hall burned.",
+    prologueLore: "Every chapter pairs one unsent draft with the letter that finally crossed the water.",
+    status: "Completed",
+    publicationStatus: "published",
+    accessTier: "free",
+    priceNgn: 0,
+    rating: 0,
+    ratingsCount: 0,
+    totalChapters: 3,
+    totalReads: 0,
+    freeChaptersCount: 3,
+    featured: false,
+    spotlightOrder: 6,
+    updatedAt: "Nov 2026",
+    chapters: [
+      {
+        id: "ch-lagoon-1",
+        storyId: "story-lagoon-letters",
+        chapterNumber: 1,
+        title: "Blueprint in Blue Ink",
+        slug: "blueprint-in-blue-ink",
+        releaseDate: "Oct 10, 2026",
+        wordCount: 1850,
+        readTimeMinutes: 7,
+        isFree: true,
+        excerpt: "You left your compass on the drafting table, as if you expected the tide to wait for our second draft.",
+        content: [
+          "You left your compass on the drafting table, as if you expected the tide to wait for our second draft.",
+          "The ferry from Tarkwa Bay still shakes at the pier every morning at seven. I carried your rolled elevations up the timber stairs and spread them across the long mahogany desk.",
+          "Someone had circled the west reading terrace in faint red pencil\u2014the exact corner where the roof timbers gave way ten winters ago."
+        ],
+        ambientSoundscape: "rain"
+      },
+      {
+        id: "ch-lagoon-2",
+        storyId: "story-lagoon-letters",
+        chapterNumber: 2,
+        title: "The Salt-Stained Ledger",
+        slug: "the-salt-stained-ledger",
+        releaseDate: "Oct 17, 2026",
+        wordCount: 1920,
+        readTimeMinutes: 8,
+        isFree: true,
+        excerpt: "Truth rarely arrives in grand speeches; mostly it hides in margin notes and forgotten invoices.",
+        content: [
+          "Truth rarely arrives in grand speeches; mostly it hides in margin notes and forgotten invoices.",
+          "Inside the archive drawer beneath the floorboards, Ada found the contractor receipt dated two days before the fire\u2014signed by a councilman who swore he had never visited the pier."
+        ],
+        ambientSoundscape: "fireplace"
+      },
+      {
+        id: "ch-lagoon-3",
+        storyId: "story-lagoon-letters",
+        chapterNumber: 3,
+        title: "Opening the Timber Windows",
+        slug: "opening-the-timber-windows",
+        releaseDate: "Oct 24, 2026",
+        wordCount: 2100,
+        readTimeMinutes: 8,
+        isFree: true,
+        excerpt: "When the shutters finally swung wide, golden afternoon light flooded every empty shelf.",
+        content: [
+          "When the shutters finally swung wide, golden afternoon light flooded every empty shelf.",
+          "Breeze off the lagoon carried the scent of fresh cedar and rain-washed stone as the first crates of books arrived at the harbor steps."
+        ],
+        ambientSoundscape: "rain"
+      }
+    ]
   }
 ];
 function sanitizeStoryForPublic(story) {
@@ -505,11 +664,16 @@ var LorethosRepository = class {
   constructor() {
     this.pool = null;
     this.initialized = false;
-    if (process.env.DATABASE_URL?.trim()) {
+    this.initPromise = null;
+    const databaseUrl = process.env.DATABASE_URL?.trim();
+    if (databaseUrl) {
+      const isLocalDb = databaseUrl.includes("localhost") || databaseUrl.includes("127.0.0.1") || databaseUrl.includes("@postgres:");
+      const disableSsl = databaseUrl.includes("sslmode=disable");
       this.pool = new Pool({
-        connectionString: process.env.DATABASE_URL.trim(),
+        connectionString: databaseUrl,
         max: 10,
-        connectionTimeoutMillis: 1e4
+        connectionTimeoutMillis: 1e4,
+        ...isLocalDb || disableSsl ? {} : { ssl: { rejectUnauthorized: false } }
       });
       this.pool.on("error", (err) => {
         console.error("PostgreSQL pool error:", err);
@@ -773,203 +937,210 @@ var LorethosRepository = class {
     }
   }
   async initDatabase() {
-    if (this.initialized || !this.pool) return;
-    this.initialized = true;
-    try {
-      await this.ensurePostgresSchema(this.pool);
-      await this.pool.query("SELECT 1 FROM stories LIMIT 1");
-      const [
-        storiesRes,
-        chaptersRes,
-        usersRes,
-        subsRes,
-        entRes,
-        bmRes,
-        progRes,
-        hlRes,
-        cmtRes,
-        ordRes,
-        evRes,
-        inqRes
-      ] = await Promise.all([
-        this.pool.query("SELECT * FROM stories ORDER BY spotlight_order ASC NULLS LAST, created_at DESC"),
-        this.pool.query("SELECT * FROM chapters ORDER BY chapter_number ASC"),
-        this.pool.query("SELECT * FROM users"),
-        this.pool.query("SELECT * FROM subscriptions"),
-        this.pool.query("SELECT * FROM entitlements"),
-        this.pool.query("SELECT * FROM bookmarks"),
-        this.pool.query("SELECT * FROM reading_progress"),
-        this.pool.query("SELECT * FROM highlights ORDER BY created_at DESC"),
-        this.pool.query("SELECT * FROM chapter_comments ORDER BY created_at DESC"),
-        this.pool.query("SELECT * FROM orders ORDER BY created_at DESC"),
-        this.pool.query("SELECT event_id FROM payment_events"),
-        this.pool.query("SELECT * FROM contacts ORDER BY submitted_at DESC")
-      ]);
-      if (storiesRes.rows.length > 0) {
-        const chaptersByStory = /* @__PURE__ */ new Map();
-        for (const row of chaptersRes.rows) {
-          const list = chaptersByStory.get(row.story_id) || [];
-          list.push({
-            id: row.id,
-            storyId: row.story_id,
-            chapterNumber: Number(row.chapter_number),
-            title: row.title,
-            slug: row.slug,
-            releaseDate: row.release_date_label,
-            wordCount: Number(row.word_count),
-            readTimeMinutes: Number(row.read_time_minutes),
-            isFree: Boolean(row.is_free),
-            excerpt: row.excerpt,
-            content: Array.isArray(row.content) ? row.content : [],
-            ambientSoundscape: row.ambient_soundscape || void 0
+    const pool = this.pool;
+    if (this.initialized || !pool) return;
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = (async () => {
+      try {
+        await this.ensurePostgresSchema(pool);
+        await pool.query("SELECT 1 FROM stories LIMIT 1");
+        this.initialized = true;
+        const [
+          storiesRes,
+          chaptersRes,
+          usersRes,
+          subsRes,
+          entRes,
+          bmRes,
+          progRes,
+          hlRes,
+          cmtRes,
+          ordRes,
+          evRes,
+          inqRes
+        ] = await Promise.all([
+          pool.query("SELECT * FROM stories ORDER BY spotlight_order ASC NULLS LAST, created_at DESC"),
+          pool.query("SELECT * FROM chapters ORDER BY chapter_number ASC"),
+          pool.query("SELECT * FROM users"),
+          pool.query("SELECT * FROM subscriptions"),
+          pool.query("SELECT * FROM entitlements"),
+          pool.query("SELECT * FROM bookmarks"),
+          pool.query("SELECT * FROM reading_progress"),
+          pool.query("SELECT * FROM highlights ORDER BY created_at DESC"),
+          pool.query("SELECT * FROM chapter_comments ORDER BY created_at DESC"),
+          pool.query("SELECT * FROM orders ORDER BY created_at DESC"),
+          pool.query("SELECT event_id FROM payment_events"),
+          pool.query("SELECT * FROM contacts ORDER BY submitted_at DESC")
+        ]);
+        if (storiesRes.rows.length > 0) {
+          const chaptersByStory = /* @__PURE__ */ new Map();
+          for (const row of chaptersRes.rows) {
+            const list = chaptersByStory.get(row.story_id) || [];
+            list.push({
+              id: row.id,
+              storyId: row.story_id,
+              chapterNumber: Number(row.chapter_number),
+              title: row.title,
+              slug: row.slug,
+              releaseDate: row.release_date_label,
+              wordCount: Number(row.word_count),
+              readTimeMinutes: Number(row.read_time_minutes),
+              isFree: Boolean(row.is_free),
+              excerpt: row.excerpt,
+              content: Array.isArray(row.content) ? row.content : [],
+              ambientSoundscape: row.ambient_soundscape || void 0
+            });
+            chaptersByStory.set(row.story_id, list);
+          }
+          this.state.stories = storiesRes.rows.map((row) => {
+            const chs = chaptersByStory.get(row.id) || [];
+            return {
+              id: row.id,
+              slug: row.slug,
+              title: row.title,
+              subtitle: row.subtitle,
+              author: row.author,
+              authorBio: row.author_bio,
+              genre: row.genre,
+              tags: Array.isArray(row.tags) ? row.tags : [],
+              coverImage: row.cover_image,
+              synopsis: row.synopsis,
+              prologueLore: row.prologue_lore,
+              status: row.status,
+              publicationStatus: row.publication_status || "published",
+              accessTier: row.access_tier,
+              priceNgn: Number(row.price_ngn),
+              rating: 0,
+              ratingsCount: 0,
+              totalChapters: chs.length,
+              totalReads: 0,
+              freeChaptersCount: Number(row.free_chapters_count),
+              featured: Boolean(row.featured),
+              spotlightOrder: row.spotlight_order !== null ? Number(row.spotlight_order) : void 0,
+              updatedAt: row.updated_at_label,
+              chapters: chs
+            };
           });
-          chaptersByStory.set(row.story_id, list);
         }
-        this.state.stories = storiesRes.rows.map((row) => {
-          const chs = chaptersByStory.get(row.id) || [];
-          return {
-            id: row.id,
-            slug: row.slug,
-            title: row.title,
-            subtitle: row.subtitle,
-            author: row.author,
-            authorBio: row.author_bio,
-            genre: row.genre,
-            tags: Array.isArray(row.tags) ? row.tags : [],
-            coverImage: row.cover_image,
-            synopsis: row.synopsis,
-            prologueLore: row.prologue_lore,
-            status: row.status,
-            publicationStatus: row.publication_status || "published",
-            accessTier: row.access_tier,
-            priceNgn: Number(row.price_ngn),
-            rating: 0,
-            ratingsCount: 0,
-            totalChapters: chs.length,
-            totalReads: 0,
-            freeChaptersCount: Number(row.free_chapters_count),
-            featured: Boolean(row.featured),
-            spotlightOrder: row.spotlight_order !== null ? Number(row.spotlight_order) : void 0,
-            updatedAt: row.updated_at_label,
-            chapters: chs
+        const subByUser = /* @__PURE__ */ new Map();
+        for (const s of subsRes.rows) {
+          subByUser.set(s.user_id, {
+            plan: s.plan,
+            status: s.status,
+            amountNgn: Number(s.amount_ngn),
+            validUntil: s.valid_until ? new Date(s.valid_until).toISOString() : void 0,
+            renewsAt: s.valid_until ? new Date(s.valid_until).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : void 0
+          });
+        }
+        const entitlementsByUser = /* @__PURE__ */ new Map();
+        for (const e of entRes.rows) {
+          const list = entitlementsByUser.get(e.user_id) || [];
+          list.push(e.story_id);
+          entitlementsByUser.set(e.user_id, list);
+        }
+        const bookmarksByUser = /* @__PURE__ */ new Map();
+        for (const b of bmRes.rows) {
+          const list = bookmarksByUser.get(b.user_id) || [];
+          list.push(b.chapter_id);
+          bookmarksByUser.set(b.user_id, list);
+        }
+        const progressByUser = /* @__PURE__ */ new Map();
+        for (const p of progRes.rows) {
+          const map = progressByUser.get(p.user_id) || {};
+          map[p.story_id] = {
+            chapterId: p.chapter_id,
+            chapterNumber: Number(p.chapter_number),
+            progressPercent: Number(p.progress_percent),
+            lastReadAt: new Date(p.last_read_at).toISOString()
           };
-        });
+          progressByUser.set(p.user_id, map);
+        }
+        this.state.users = usersRes.rows.map((u) => ({
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          passwordHash: u.password_hash,
+          role: u.role,
+          subscription: subByUser.get(u.id) || { plan: "free", status: "none", amountNgn: 0 },
+          unlockedStoryIds: entitlementsByUser.get(u.id) || [],
+          bookmarkedChapterIds: bookmarksByUser.get(u.id) || [],
+          readingProgress: progressByUser.get(u.id) || {},
+          readingGoal: u.reading_goal || buildDefaultReadingGoal(),
+          createdAt: new Date(u.created_at).toISOString()
+        }));
+        this.state.highlights = {};
+        const storyLookup = new Map(this.state.stories.map((s) => [s.id, s]));
+        for (const h of hlRes.rows) {
+          const st = storyLookup.get(h.story_id);
+          const ch = st?.chapters.find((c) => c.id === h.chapter_id);
+          const list = this.state.highlights[h.user_id] || [];
+          list.push({
+            id: h.id,
+            storyId: h.story_id,
+            storyTitle: st?.title || "",
+            storySlug: st?.slug || "",
+            chapterId: h.chapter_id,
+            chapterNumber: ch?.chapterNumber || 1,
+            chapterTitle: ch?.title || "",
+            paragraphIndex: Number(h.paragraph_index),
+            excerpt: h.excerpt,
+            color: h.color,
+            note: h.note || void 0,
+            createdAt: new Date(h.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+          });
+          this.state.highlights[h.user_id] = list;
+        }
+        this.state.comments = cmtRes.rows.map((c) => ({
+          id: c.id,
+          storyId: c.story_id,
+          chapterId: c.chapter_id,
+          authorName: c.author_name,
+          tag: c.tag,
+          body: c.body,
+          createdAt: new Date(c.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+        }));
+        this.state.orders = ordRes.rows.map((o) => ({
+          id: o.id,
+          reference: o.reference,
+          userId: o.user_id,
+          customerEmail: o.customer_email,
+          itemType: o.item_type,
+          planId: o.plan_id || void 0,
+          storyId: o.story_id || void 0,
+          itemName: o.item_name,
+          amountNgn: Number(o.amount_ngn),
+          currency: "NGN",
+          channel: o.channel,
+          status: o.status,
+          createdAt: new Date(o.created_at).toISOString(),
+          fulfilledAt: o.fulfilled_at ? new Date(o.fulfilled_at).toISOString() : void 0
+        }));
+        this.state.processedEventIds = evRes.rows.map((e) => e.event_id);
+        this.state.inquiries = inqRes.rows.map((i) => ({
+          id: i.id,
+          referenceId: i.reference_id,
+          name: i.name,
+          email: i.email,
+          inquiryType: i.inquiry_type,
+          subject: i.subject,
+          message: i.message,
+          submittedAt: new Date(i.submitted_at).toLocaleString("en-US", {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit"
+          })
+        }));
+      } catch (err) {
+        console.warn(
+          "PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:",
+          err instanceof Error ? err.message : err
+        );
+      } finally {
+        this.initPromise = null;
       }
-      const subByUser = /* @__PURE__ */ new Map();
-      for (const s of subsRes.rows) {
-        subByUser.set(s.user_id, {
-          plan: s.plan,
-          status: s.status,
-          amountNgn: Number(s.amount_ngn),
-          validUntil: s.valid_until ? new Date(s.valid_until).toISOString() : void 0,
-          renewsAt: s.valid_until ? new Date(s.valid_until).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : void 0
-        });
-      }
-      const entitlementsByUser = /* @__PURE__ */ new Map();
-      for (const e of entRes.rows) {
-        const list = entitlementsByUser.get(e.user_id) || [];
-        list.push(e.story_id);
-        entitlementsByUser.set(e.user_id, list);
-      }
-      const bookmarksByUser = /* @__PURE__ */ new Map();
-      for (const b of bmRes.rows) {
-        const list = bookmarksByUser.get(b.user_id) || [];
-        list.push(b.chapter_id);
-        bookmarksByUser.set(b.user_id, list);
-      }
-      const progressByUser = /* @__PURE__ */ new Map();
-      for (const p of progRes.rows) {
-        const map = progressByUser.get(p.user_id) || {};
-        map[p.story_id] = {
-          chapterId: p.chapter_id,
-          chapterNumber: Number(p.chapter_number),
-          progressPercent: Number(p.progress_percent),
-          lastReadAt: new Date(p.last_read_at).toISOString()
-        };
-        progressByUser.set(p.user_id, map);
-      }
-      this.state.users = usersRes.rows.map((u) => ({
-        id: u.id,
-        name: u.name,
-        email: u.email,
-        passwordHash: u.password_hash,
-        role: u.role,
-        subscription: subByUser.get(u.id) || { plan: "free", status: "none", amountNgn: 0 },
-        unlockedStoryIds: entitlementsByUser.get(u.id) || [],
-        bookmarkedChapterIds: bookmarksByUser.get(u.id) || [],
-        readingProgress: progressByUser.get(u.id) || {},
-        readingGoal: u.reading_goal || buildDefaultReadingGoal(),
-        createdAt: new Date(u.created_at).toISOString()
-      }));
-      this.state.highlights = {};
-      const storyLookup = new Map(this.state.stories.map((s) => [s.id, s]));
-      for (const h of hlRes.rows) {
-        const st = storyLookup.get(h.story_id);
-        const ch = st?.chapters.find((c) => c.id === h.chapter_id);
-        const list = this.state.highlights[h.user_id] || [];
-        list.push({
-          id: h.id,
-          storyId: h.story_id,
-          storyTitle: st?.title || "",
-          storySlug: st?.slug || "",
-          chapterId: h.chapter_id,
-          chapterNumber: ch?.chapterNumber || 1,
-          chapterTitle: ch?.title || "",
-          paragraphIndex: Number(h.paragraph_index),
-          excerpt: h.excerpt,
-          color: h.color,
-          note: h.note || void 0,
-          createdAt: new Date(h.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-        });
-        this.state.highlights[h.user_id] = list;
-      }
-      this.state.comments = cmtRes.rows.map((c) => ({
-        id: c.id,
-        storyId: c.story_id,
-        chapterId: c.chapter_id,
-        authorName: c.author_name,
-        tag: c.tag,
-        body: c.body,
-        createdAt: new Date(c.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-      }));
-      this.state.orders = ordRes.rows.map((o) => ({
-        id: o.id,
-        reference: o.reference,
-        userId: o.user_id,
-        customerEmail: o.customer_email,
-        itemType: o.item_type,
-        planId: o.plan_id || void 0,
-        storyId: o.story_id || void 0,
-        itemName: o.item_name,
-        amountNgn: Number(o.amount_ngn),
-        currency: "NGN",
-        channel: o.channel,
-        status: o.status,
-        createdAt: new Date(o.created_at).toISOString(),
-        fulfilledAt: o.fulfilled_at ? new Date(o.fulfilled_at).toISOString() : void 0
-      }));
-      this.state.processedEventIds = evRes.rows.map((e) => e.event_id);
-      this.state.inquiries = inqRes.rows.map((i) => ({
-        id: i.id,
-        referenceId: i.reference_id,
-        name: i.name,
-        email: i.email,
-        inquiryType: i.inquiry_type,
-        subject: i.subject,
-        message: i.message,
-        submittedAt: new Date(i.submitted_at).toLocaleString("en-US", {
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit"
-        })
-      }));
-    } catch (err) {
-      console.warn(
-        "PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:",
-        err instanceof Error ? err.message : err
-      );
-    }
+    })();
+    return this.initPromise;
   }
   isPostgresEnabled() {
     return this.pool !== null;
@@ -1663,6 +1834,10 @@ var EPHEMERAL_DEV_SECRET = crypto2.randomBytes(32).toString("hex");
 function getSessionSecret() {
   const configured = process.env.SESSION_SECRET?.trim();
   if (configured) return configured;
+  if (process.env.VERCEL) {
+    const seed = process.env.DATABASE_URL || process.env.PAYSTACK_SECRET_KEY || process.env.GEMINI_API_KEY || process.env.VERCEL_PROJECT_ID || process.env.VERCEL_URL || "lorethos-vercel-fallback";
+    return crypto2.createHmac("sha256", "lorethos-session-key").update(seed).digest("hex");
+  }
   if (process.env.NODE_ENV === "production") {
     console.warn("WARNING: SESSION_SECRET is not set in production; using ephemeral secret.");
   }
@@ -2006,7 +2181,7 @@ async function createApp(options) {
     const isOwner = user?.role === "owner";
     let stories = repo.getStories({ includeUnpublished: isOwner }).map(sanitizeStoryForPublic);
     stories = stories.filter((story) => {
-      const matchesSearch = !q || story.title.toLowerCase().includes(q) || story.subtitle.toLowerCase().includes(q) || story.author.toLowerCase().includes(q) || story.synopsis.toLowerCase().includes(q) || story.tags.some((t) => t.toLowerCase().includes(q));
+      const matchesSearch = !q || story.title.toLowerCase().includes(q) || story.subtitle.toLowerCase().includes(q) || story.author.toLowerCase().includes(q) || story.genre.toLowerCase().includes(q) || story.synopsis.toLowerCase().includes(q) || story.tags.some((t) => t.toLowerCase().includes(q));
       const matchesGenre = genre === "All" || story.genre === genre;
       const matchesStatus = status === "All" || story.status === status;
       const matchesTier = tier === "All" || tier === "Free" && story.accessTier === "free" || tier === "Subscription" && story.accessTier === "subscription" || tier === "Purchase" && story.accessTier === "purchase";
@@ -2909,7 +3084,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
   }
   return app;
 }
-var isDirectExecution = !process.env.LORETHOS_NO_LISTEN;
+var isDirectExecution = !process.env.LORETHOS_NO_LISTEN && !process.env.VERCEL;
 if (isDirectExecution) {
   const httpServer = http.createServer();
   createApp({ withVite: process.env.NODE_ENV !== "production", httpServer }).then((app) => {

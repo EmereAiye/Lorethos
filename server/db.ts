@@ -124,13 +124,21 @@ class LorethosRepository {
   private pool: Pool | null = null;
   private state: PersistedSnapshot;
   private initialized = false;
+  private initPromise: Promise<void> | null = null;
 
   constructor() {
-    if (process.env.DATABASE_URL?.trim()) {
+    const databaseUrl = process.env.DATABASE_URL?.trim();
+    if (databaseUrl) {
+      const isLocalDb =
+        databaseUrl.includes('localhost') ||
+        databaseUrl.includes('127.0.0.1') ||
+        databaseUrl.includes('@postgres:');
+      const disableSsl = databaseUrl.includes('sslmode=disable');
       this.pool = new Pool({
-        connectionString: process.env.DATABASE_URL.trim(),
+        connectionString: databaseUrl,
         max: 10,
-        connectionTimeoutMillis: 10000
+        connectionTimeoutMillis: 10000,
+        ...(isLocalDb || disableSsl ? {} : { ssl: { rejectUnauthorized: false } }),
       });
       this.pool.on('error', (err) => {
         console.error('PostgreSQL pool error:', err);
@@ -404,12 +412,15 @@ class LorethosRepository {
   }
 
   public async initDatabase(): Promise<void> {
-    if (this.initialized || !this.pool) return;
-    this.initialized = true;
+    const pool = this.pool;
+    if (this.initialized || !pool) return;
+    if (this.initPromise) return this.initPromise;
 
-    try {
-      await this.ensurePostgresSchema(this.pool);
-      await this.pool.query('SELECT 1 FROM stories LIMIT 1');
+    this.initPromise = (async () => {
+      try {
+        await this.ensurePostgresSchema(pool);
+        await pool.query('SELECT 1 FROM stories LIMIT 1');
+        this.initialized = true;
 
       const [
         storiesRes,
@@ -425,18 +436,18 @@ class LorethosRepository {
         evRes,
         inqRes
       ] = await Promise.all([
-        this.pool.query('SELECT * FROM stories ORDER BY spotlight_order ASC NULLS LAST, created_at DESC'),
-        this.pool.query('SELECT * FROM chapters ORDER BY chapter_number ASC'),
-        this.pool.query('SELECT * FROM users'),
-        this.pool.query('SELECT * FROM subscriptions'),
-        this.pool.query('SELECT * FROM entitlements'),
-        this.pool.query('SELECT * FROM bookmarks'),
-        this.pool.query('SELECT * FROM reading_progress'),
-        this.pool.query('SELECT * FROM highlights ORDER BY created_at DESC'),
-        this.pool.query('SELECT * FROM chapter_comments ORDER BY created_at DESC'),
-        this.pool.query('SELECT * FROM orders ORDER BY created_at DESC'),
-        this.pool.query('SELECT event_id FROM payment_events'),
-        this.pool.query('SELECT * FROM contacts ORDER BY submitted_at DESC')
+        pool.query('SELECT * FROM stories ORDER BY spotlight_order ASC NULLS LAST, created_at DESC'),
+        pool.query('SELECT * FROM chapters ORDER BY chapter_number ASC'),
+        pool.query('SELECT * FROM users'),
+        pool.query('SELECT * FROM subscriptions'),
+        pool.query('SELECT * FROM entitlements'),
+        pool.query('SELECT * FROM bookmarks'),
+        pool.query('SELECT * FROM reading_progress'),
+        pool.query('SELECT * FROM highlights ORDER BY created_at DESC'),
+        pool.query('SELECT * FROM chapter_comments ORDER BY created_at DESC'),
+        pool.query('SELECT * FROM orders ORDER BY created_at DESC'),
+        pool.query('SELECT event_id FROM payment_events'),
+        pool.query('SELECT * FROM contacts ORDER BY submitted_at DESC')
       ]);
 
       if (storiesRes.rows.length > 0) {
@@ -611,12 +622,17 @@ class LorethosRepository {
           minute: '2-digit'
         })
       }));
-    } catch (err) {
-      console.warn(
-        'PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:',
-        err instanceof Error ? err.message : err
-      );
-    }
+      } catch (err) {
+        console.warn(
+          'PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:',
+          err instanceof Error ? err.message : err
+        );
+      } finally {
+        this.initPromise = null;
+      }
+    })();
+
+    return this.initPromise;
   }
 
   public isPostgresEnabled(): boolean {
