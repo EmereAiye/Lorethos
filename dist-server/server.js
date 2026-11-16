@@ -2,6 +2,7 @@
 import "dotenv/config";
 import crypto2 from "node:crypto";
 import fs2 from "node:fs/promises";
+import http from "node:http";
 import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
@@ -29,6 +30,7 @@ var AUTHORITATIVE_STORIES = [
     synopsis: "When the High Citadels of Ostraka crumble under the shadow of the Black Eclipse, King Vane must summon an ancient blood-pact bound to the Obsidian Throne. Betrayal lurks behind velvet banners, and each decree carves a deeper fracture in the realm.",
     prologueLore: "Before the nine pillars fell, there existed only the Primordial Hearth. The kings of the First Spire forged their crowns not of gold, but of quenched astral glass plucked from the crater of Mount Veridia.",
     status: "Ongoing",
+    publicationStatus: "published",
     accessTier: "subscription",
     priceNgn: 2800,
     rating: 0,
@@ -152,6 +154,7 @@ var AUTHORITATIVE_STORIES = [
     synopsis: "Under the cosmic expanse of the Sahel night, young navigator Boma is chosen to carry the ancestral seed across the singing sands. When the ancient Baobab tree illuminates with celestial runes, she discovers her ancestors did not merely observe the stars\u2014they built highways between them.",
     prologueLore: "In the beginning, when the earth was red clay drying under the midday breath of Olorun, the first grandmother planted her brass hairpin into the cracked mud. By sundown, it had grown roots of thunder and branches of indigo sky.",
     status: "Ongoing",
+    publicationStatus: "published",
     accessTier: "subscription",
     priceNgn: 2500,
     rating: 0,
@@ -252,6 +255,7 @@ var AUTHORITATIVE_STORIES = [
     synopsis: "Miles beneath the crashing storms of the Cerulean Trench lies Atal-Mor, a submerged metropolis preserved in a glowing abyssal bubble. Diver Captain Kaelen uncovers an ornate golden reliquary containing the living memory of a drowned world\u2014and the warning that the ocean is rising again.",
     prologueLore: "The waters did not take Atal-Mor out of wrath. They took it out of longing. When humanity turned its eyes solely toward fire and iron, the oceans rose to cradle the temples of philosophy in perpetual blue repose.",
     status: "Completed",
+    publicationStatus: "published",
     accessTier: "purchase",
     priceNgn: 3200,
     rating: 0,
@@ -346,6 +350,7 @@ var AUTHORITATIVE_STORIES = [
     synopsis: "In the grand royal scriptorium of House Valerius, every royal decree is written in red squid ink. But when apprentice copyist Lucien discovers a parchment with an encrypted ledger hidden between illuminated vellum pages, he realizes the last three kings were not assassinated by neighboring empires\u2014they were executed by their own royal scribes.",
     prologueLore: "The ink never lies, but the scribe may dip his quill in poison as easily as in gall. In Veritas, power resides not with the prince who speaks, but with the quiet clerk who transcribes his words for posterity.",
     status: "Ongoing",
+    publicationStatus: "published",
     accessTier: "subscription",
     priceNgn: 2200,
     rating: 0,
@@ -445,21 +450,31 @@ var PLAN_PRICES_NGN = {
   monthly: { amountNgn: 3500, label: "Patron Monthly Subscription" },
   annual: { amountNgn: 32e3, label: "Patron Annual Subscription (12 Months)" }
 };
-var OWNER_EMAIL = (process.env.OWNER_EMAIL || "Emmymasterwise@gmail.com").trim().toLowerCase();
-var STATE_FILE = process.env.LORETHOS_DATA_FILE || "/tmp/lorethos-server-state.json";
+function getOwnerEmail() {
+  return (process.env.OWNER_EMAIL || "Emmymasterwise@gmail.com").trim().toLowerCase();
+}
+function getStateFilePath() {
+  return process.env.LORETHOS_DATA_FILE || "/tmp/lorethos-server-state.json";
+}
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
   const hash = crypto.scryptSync(password, salt, 64).toString("hex");
   return `${salt}:${hash}`;
 }
 function verifyPassword(password, storedHash) {
+  if (!password || !storedHash || typeof storedHash !== "string") return false;
   const parts = storedHash.split(":");
   if (parts.length !== 2) return false;
   const [salt, expectedHex] = parts;
-  const derived = crypto.scryptSync(password, salt, 64);
-  const expected = Buffer.from(expectedHex, "hex");
-  if (derived.length !== expected.length) return false;
-  return crypto.timingSafeEqual(derived, expected);
+  if (!salt || !expectedHex) return false;
+  try {
+    const derived = crypto.scryptSync(password, salt, 64);
+    const expected = Buffer.from(expectedHex, "hex");
+    if (derived.length !== expected.length) return false;
+    return crypto.timingSafeEqual(derived, expected);
+  } catch {
+    return false;
+  }
 }
 function buildDefaultReadingGoal() {
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -489,9 +504,10 @@ function buildDefaultReadingGoal() {
 var LorethosRepository = class {
   constructor() {
     this.pool = null;
-    if (process.env.DATABASE_URL) {
+    this.initialized = false;
+    if (process.env.DATABASE_URL?.trim()) {
       this.pool = new Pool({
-        connectionString: process.env.DATABASE_URL,
+        connectionString: process.env.DATABASE_URL.trim(),
         max: 10,
         connectionTimeoutMillis: 1e4
       });
@@ -502,18 +518,35 @@ var LorethosRepository = class {
     this.state = this.loadInitialSnapshot();
   }
   loadInitialSnapshot() {
+    const stateFile = getStateFilePath();
     try {
-      if (fs.existsSync(STATE_FILE)) {
-        const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+      if (fs.existsSync(stateFile)) {
+        const parsed = JSON.parse(fs.readFileSync(stateFile, "utf8"));
         if (Array.isArray(parsed.stories) && parsed.stories.length > 0) {
-          return parsed;
+          return {
+            users: parsed.users || [],
+            stories: parsed.stories.map((s) => ({
+              ...s,
+              publicationStatus: s.publicationStatus || "published",
+              totalChapters: s.chapters.length
+            })),
+            orders: parsed.orders || [],
+            processedEventIds: parsed.processedEventIds || [],
+            highlights: parsed.highlights || {},
+            comments: parsed.comments || [],
+            inquiries: parsed.inquiries || []
+          };
         }
       }
     } catch {
     }
     return {
       users: [],
-      stories: AUTHORITATIVE_STORIES.map((s) => ({ ...s, totalChapters: s.chapters.length })),
+      stories: AUTHORITATIVE_STORIES.map((s) => ({
+        ...s,
+        publicationStatus: s.publicationStatus || "published",
+        totalChapters: s.chapters.length
+      })),
       orders: [],
       processedEventIds: [],
       highlights: {},
@@ -522,10 +555,420 @@ var LorethosRepository = class {
     };
   }
   persistSnapshot() {
+    const stateFile = getStateFilePath();
     try {
-      fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-      fs.writeFileSync(STATE_FILE, JSON.stringify(this.state, null, 2));
+      fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+      fs.writeFileSync(stateFile, JSON.stringify(this.state, null, 2));
     } catch {
+    }
+  }
+  mirrorToPostgres(task) {
+    if (!this.pool) return;
+    const pool = this.pool;
+    void task(pool).catch((err) => {
+      console.error("PostgreSQL persistence mirror warning:", err instanceof Error ? err.message : err);
+    });
+  }
+  async ensurePostgresSchema(pool) {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('reader', 'owner')),
+        reading_goal JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS reading_goal JSONB;
+      CREATE TABLE IF NOT EXISTS stories (
+        id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        subtitle TEXT NOT NULL,
+        author TEXT NOT NULL,
+        author_bio TEXT NOT NULL,
+        genre TEXT NOT NULL,
+        tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+        cover_image TEXT NOT NULL,
+        synopsis TEXT NOT NULL,
+        prologue_lore TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'Ongoing' CHECK (status IN ('Ongoing', 'Completed', 'Hiatus')),
+        publication_status TEXT NOT NULL DEFAULT 'published' CHECK (publication_status IN ('draft', 'review', 'published')),
+        access_tier TEXT NOT NULL DEFAULT 'subscription' CHECK (access_tier IN ('free', 'subscription', 'purchase')),
+        price_ngn INTEGER NOT NULL DEFAULT 0 CHECK (price_ngn >= 0),
+        free_chapters_count INTEGER NOT NULL DEFAULT 3 CHECK (free_chapters_count >= 0),
+        featured BOOLEAN NOT NULL DEFAULT FALSE,
+        spotlight_order INTEGER,
+        updated_at_label TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      ALTER TABLE stories ADD COLUMN IF NOT EXISTS publication_status TEXT NOT NULL DEFAULT 'published';
+      CREATE TABLE IF NOT EXISTS chapters (
+        id TEXT PRIMARY KEY,
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        chapter_number INTEGER NOT NULL CHECK (chapter_number > 0),
+        title TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        release_date_label TEXT NOT NULL,
+        word_count INTEGER NOT NULL DEFAULT 0,
+        read_time_minutes INTEGER NOT NULL DEFAULT 1,
+        is_free BOOLEAN NOT NULL DEFAULT FALSE,
+        excerpt TEXT NOT NULL,
+        content JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ambient_soundscape TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (story_id, chapter_number)
+      );
+      CREATE TABLE IF NOT EXISTS orders (
+        id TEXT PRIMARY KEY,
+        reference TEXT NOT NULL UNIQUE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        customer_email TEXT NOT NULL,
+        item_type TEXT NOT NULL CHECK (item_type IN ('subscription', 'book_purchase')),
+        plan_id TEXT CHECK (plan_id IN ('monthly', 'annual')),
+        story_id TEXT REFERENCES stories(id) ON DELETE SET NULL,
+        item_name TEXT NOT NULL,
+        amount_ngn INTEGER NOT NULL CHECK (amount_ngn > 0),
+        currency TEXT NOT NULL DEFAULT 'NGN',
+        channel TEXT NOT NULL DEFAULT 'hosted',
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'success', 'failed')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        fulfilled_at TIMESTAMPTZ
+      );
+      CREATE TABLE IF NOT EXISTS payment_events (
+        event_id TEXT PRIMARY KEY,
+        order_reference TEXT REFERENCES orders(reference) ON DELETE SET NULL,
+        event_type TEXT NOT NULL,
+        payload JSONB NOT NULL,
+        processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS entitlements (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        source_order_id TEXT REFERENCES orders(id) ON DELETE SET NULL,
+        granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, story_id)
+      );
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        plan TEXT NOT NULL DEFAULT 'free' CHECK (plan IN ('free', 'monthly', 'annual')),
+        status TEXT NOT NULL DEFAULT 'none' CHECK (status IN ('active', 'expired', 'none')),
+        amount_ngn INTEGER NOT NULL DEFAULT 0,
+        valid_until TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS reading_progress (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        chapter_number INTEGER NOT NULL,
+        progress_percent INTEGER NOT NULL CHECK (progress_percent >= 0 AND progress_percent <= 100),
+        last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, story_id)
+      );
+      CREATE TABLE IF NOT EXISTS bookmarks (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, chapter_id)
+      );
+      CREATE TABLE IF NOT EXISTS highlights (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        paragraph_index INTEGER NOT NULL,
+        excerpt TEXT NOT NULL,
+        color TEXT NOT NULL CHECK (color IN ('terracotta', 'gold', 'sage')),
+        note TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, chapter_id, paragraph_index)
+      );
+      CREATE TABLE IF NOT EXISTS chapter_comments (
+        id TEXT PRIMARY KEY,
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        author_name TEXT NOT NULL,
+        tag TEXT NOT NULL CHECK (tag IN ('Reaction', 'Lore', 'Theory')),
+        body TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS contacts (
+        id TEXT PRIMARY KEY,
+        reference_id TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        inquiry_type TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        message TEXT NOT NULL,
+        submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    const countRes = await pool.query("SELECT COUNT(*)::int AS cnt FROM stories");
+    if ((countRes.rows[0]?.cnt ?? 0) === 0) {
+      for (const story of AUTHORITATIVE_STORIES) {
+        await pool.query(
+          `INSERT INTO stories (
+            id, slug, title, subtitle, author, author_bio, genre, tags,
+            cover_image, synopsis, prologue_lore, status, publication_status,
+            access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          ON CONFLICT (id) DO NOTHING`,
+          [
+            story.id,
+            story.slug,
+            story.title,
+            story.subtitle,
+            story.author,
+            story.authorBio,
+            story.genre,
+            JSON.stringify(story.tags),
+            story.coverImage,
+            story.synopsis,
+            story.prologueLore,
+            story.status,
+            story.publicationStatus || "published",
+            story.accessTier,
+            story.priceNgn,
+            story.freeChaptersCount,
+            story.featured,
+            story.spotlightOrder ?? null,
+            story.updatedAt
+          ]
+        );
+        for (const ch of story.chapters) {
+          await pool.query(
+            `INSERT INTO chapters (
+              id, story_id, chapter_number, title, slug, release_date_label,
+              word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
+            ON CONFLICT (id) DO NOTHING`,
+            [
+              ch.id,
+              story.id,
+              ch.chapterNumber,
+              ch.title,
+              ch.slug,
+              ch.releaseDate,
+              ch.wordCount,
+              ch.readTimeMinutes,
+              ch.isFree,
+              ch.excerpt,
+              JSON.stringify(ch.content),
+              ch.ambientSoundscape ?? null
+            ]
+          );
+        }
+      }
+    }
+  }
+  async initDatabase() {
+    if (this.initialized || !this.pool) return;
+    this.initialized = true;
+    try {
+      await this.ensurePostgresSchema(this.pool);
+      await this.pool.query("SELECT 1 FROM stories LIMIT 1");
+      const [
+        storiesRes,
+        chaptersRes,
+        usersRes,
+        subsRes,
+        entRes,
+        bmRes,
+        progRes,
+        hlRes,
+        cmtRes,
+        ordRes,
+        evRes,
+        inqRes
+      ] = await Promise.all([
+        this.pool.query("SELECT * FROM stories ORDER BY spotlight_order ASC NULLS LAST, created_at DESC"),
+        this.pool.query("SELECT * FROM chapters ORDER BY chapter_number ASC"),
+        this.pool.query("SELECT * FROM users"),
+        this.pool.query("SELECT * FROM subscriptions"),
+        this.pool.query("SELECT * FROM entitlements"),
+        this.pool.query("SELECT * FROM bookmarks"),
+        this.pool.query("SELECT * FROM reading_progress"),
+        this.pool.query("SELECT * FROM highlights ORDER BY created_at DESC"),
+        this.pool.query("SELECT * FROM chapter_comments ORDER BY created_at DESC"),
+        this.pool.query("SELECT * FROM orders ORDER BY created_at DESC"),
+        this.pool.query("SELECT event_id FROM payment_events"),
+        this.pool.query("SELECT * FROM contacts ORDER BY submitted_at DESC")
+      ]);
+      if (storiesRes.rows.length > 0) {
+        const chaptersByStory = /* @__PURE__ */ new Map();
+        for (const row of chaptersRes.rows) {
+          const list = chaptersByStory.get(row.story_id) || [];
+          list.push({
+            id: row.id,
+            storyId: row.story_id,
+            chapterNumber: Number(row.chapter_number),
+            title: row.title,
+            slug: row.slug,
+            releaseDate: row.release_date_label,
+            wordCount: Number(row.word_count),
+            readTimeMinutes: Number(row.read_time_minutes),
+            isFree: Boolean(row.is_free),
+            excerpt: row.excerpt,
+            content: Array.isArray(row.content) ? row.content : [],
+            ambientSoundscape: row.ambient_soundscape || void 0
+          });
+          chaptersByStory.set(row.story_id, list);
+        }
+        this.state.stories = storiesRes.rows.map((row) => {
+          const chs = chaptersByStory.get(row.id) || [];
+          return {
+            id: row.id,
+            slug: row.slug,
+            title: row.title,
+            subtitle: row.subtitle,
+            author: row.author,
+            authorBio: row.author_bio,
+            genre: row.genre,
+            tags: Array.isArray(row.tags) ? row.tags : [],
+            coverImage: row.cover_image,
+            synopsis: row.synopsis,
+            prologueLore: row.prologue_lore,
+            status: row.status,
+            publicationStatus: row.publication_status || "published",
+            accessTier: row.access_tier,
+            priceNgn: Number(row.price_ngn),
+            rating: 0,
+            ratingsCount: 0,
+            totalChapters: chs.length,
+            totalReads: 0,
+            freeChaptersCount: Number(row.free_chapters_count),
+            featured: Boolean(row.featured),
+            spotlightOrder: row.spotlight_order !== null ? Number(row.spotlight_order) : void 0,
+            updatedAt: row.updated_at_label,
+            chapters: chs
+          };
+        });
+      }
+      const subByUser = /* @__PURE__ */ new Map();
+      for (const s of subsRes.rows) {
+        subByUser.set(s.user_id, {
+          plan: s.plan,
+          status: s.status,
+          amountNgn: Number(s.amount_ngn),
+          validUntil: s.valid_until ? new Date(s.valid_until).toISOString() : void 0,
+          renewsAt: s.valid_until ? new Date(s.valid_until).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : void 0
+        });
+      }
+      const entitlementsByUser = /* @__PURE__ */ new Map();
+      for (const e of entRes.rows) {
+        const list = entitlementsByUser.get(e.user_id) || [];
+        list.push(e.story_id);
+        entitlementsByUser.set(e.user_id, list);
+      }
+      const bookmarksByUser = /* @__PURE__ */ new Map();
+      for (const b of bmRes.rows) {
+        const list = bookmarksByUser.get(b.user_id) || [];
+        list.push(b.chapter_id);
+        bookmarksByUser.set(b.user_id, list);
+      }
+      const progressByUser = /* @__PURE__ */ new Map();
+      for (const p of progRes.rows) {
+        const map = progressByUser.get(p.user_id) || {};
+        map[p.story_id] = {
+          chapterId: p.chapter_id,
+          chapterNumber: Number(p.chapter_number),
+          progressPercent: Number(p.progress_percent),
+          lastReadAt: new Date(p.last_read_at).toISOString()
+        };
+        progressByUser.set(p.user_id, map);
+      }
+      this.state.users = usersRes.rows.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        passwordHash: u.password_hash,
+        role: u.role,
+        subscription: subByUser.get(u.id) || { plan: "free", status: "none", amountNgn: 0 },
+        unlockedStoryIds: entitlementsByUser.get(u.id) || [],
+        bookmarkedChapterIds: bookmarksByUser.get(u.id) || [],
+        readingProgress: progressByUser.get(u.id) || {},
+        readingGoal: u.reading_goal || buildDefaultReadingGoal(),
+        createdAt: new Date(u.created_at).toISOString()
+      }));
+      this.state.highlights = {};
+      const storyLookup = new Map(this.state.stories.map((s) => [s.id, s]));
+      for (const h of hlRes.rows) {
+        const st = storyLookup.get(h.story_id);
+        const ch = st?.chapters.find((c) => c.id === h.chapter_id);
+        const list = this.state.highlights[h.user_id] || [];
+        list.push({
+          id: h.id,
+          storyId: h.story_id,
+          storyTitle: st?.title || "",
+          storySlug: st?.slug || "",
+          chapterId: h.chapter_id,
+          chapterNumber: ch?.chapterNumber || 1,
+          chapterTitle: ch?.title || "",
+          paragraphIndex: Number(h.paragraph_index),
+          excerpt: h.excerpt,
+          color: h.color,
+          note: h.note || void 0,
+          createdAt: new Date(h.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+        });
+        this.state.highlights[h.user_id] = list;
+      }
+      this.state.comments = cmtRes.rows.map((c) => ({
+        id: c.id,
+        storyId: c.story_id,
+        chapterId: c.chapter_id,
+        authorName: c.author_name,
+        tag: c.tag,
+        body: c.body,
+        createdAt: new Date(c.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      }));
+      this.state.orders = ordRes.rows.map((o) => ({
+        id: o.id,
+        reference: o.reference,
+        userId: o.user_id,
+        customerEmail: o.customer_email,
+        itemType: o.item_type,
+        planId: o.plan_id || void 0,
+        storyId: o.story_id || void 0,
+        itemName: o.item_name,
+        amountNgn: Number(o.amount_ngn),
+        currency: "NGN",
+        channel: o.channel,
+        status: o.status,
+        createdAt: new Date(o.created_at).toISOString(),
+        fulfilledAt: o.fulfilled_at ? new Date(o.fulfilled_at).toISOString() : void 0
+      }));
+      this.state.processedEventIds = evRes.rows.map((e) => e.event_id);
+      this.state.inquiries = inqRes.rows.map((i) => ({
+        id: i.id,
+        referenceId: i.reference_id,
+        name: i.name,
+        email: i.email,
+        inquiryType: i.inquiry_type,
+        subject: i.subject,
+        message: i.message,
+        submittedAt: new Date(i.submitted_at).toLocaleString("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit"
+        })
+      }));
+    } catch (err) {
+      console.warn(
+        "PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:",
+        err instanceof Error ? err.message : err
+      );
     }
   }
   isPostgresEnabled() {
@@ -560,9 +1003,77 @@ var LorethosRepository = class {
     const normalized = email.trim().toLowerCase();
     return this.state.users.find((u) => u.email.toLowerCase() === normalized);
   }
+  async hydrateSingleUserFromPostgres(whereClause, param) {
+    if (!this.pool) return void 0;
+    try {
+      const userRes = await this.pool.query(
+        `SELECT * FROM users WHERE ${whereClause} LIMIT 1`,
+        [param]
+      );
+      if (userRes.rows.length === 0) return void 0;
+      const u = userRes.rows[0];
+      const [subRes, entRes, bmRes, progRes] = await Promise.all([
+        this.pool.query("SELECT * FROM subscriptions WHERE user_id = $1 LIMIT 1", [u.id]),
+        this.pool.query("SELECT story_id FROM entitlements WHERE user_id = $1", [u.id]),
+        this.pool.query("SELECT chapter_id FROM bookmarks WHERE user_id = $1", [u.id]),
+        this.pool.query("SELECT * FROM reading_progress WHERE user_id = $1", [u.id])
+      ]);
+      const subRow = subRes.rows[0];
+      const subscription = subRow ? {
+        plan: subRow.plan,
+        status: subRow.status,
+        amountNgn: Number(subRow.amount_ngn),
+        validUntil: subRow.valid_until ? new Date(subRow.valid_until).toISOString() : void 0,
+        renewsAt: subRow.valid_until ? new Date(subRow.valid_until).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : void 0
+      } : { plan: "free", status: "none", amountNgn: 0 };
+      const readingProgress = {};
+      for (const p of progRes.rows) {
+        readingProgress[p.story_id] = {
+          chapterId: p.chapter_id,
+          chapterNumber: Number(p.chapter_number),
+          progressPercent: Number(p.progress_percent),
+          lastReadAt: new Date(p.last_read_at).toISOString()
+        };
+      }
+      const hydrated = {
+        id: u.id,
+        name: u.name,
+        email: String(u.email).trim().toLowerCase(),
+        passwordHash: u.password_hash,
+        role: u.role === "owner" || String(u.email).trim().toLowerCase() === getOwnerEmail() ? "owner" : "reader",
+        subscription,
+        unlockedStoryIds: entRes.rows.map((r) => r.story_id),
+        bookmarkedChapterIds: bmRes.rows.map((r) => r.chapter_id),
+        readingProgress,
+        readingGoal: u.reading_goal || buildDefaultReadingGoal(),
+        createdAt: new Date(u.created_at).toISOString()
+      };
+      const existingIdx = this.state.users.findIndex((x) => x.id === hydrated.id || x.email.toLowerCase() === hydrated.email);
+      if (existingIdx >= 0) {
+        this.state.users[existingIdx] = hydrated;
+      } else {
+        this.state.users.push(hydrated);
+      }
+      this.persistSnapshot();
+      return hydrated;
+    } catch {
+      return void 0;
+    }
+  }
+  async findUserById(userId) {
+    const cached = this.getUserById(userId);
+    if (cached) return cached;
+    return this.hydrateSingleUserFromPostgres("id = $1", userId);
+  }
+  async findUserByEmail(email) {
+    const normalized = email.trim().toLowerCase();
+    const cached = this.getUserByEmail(normalized);
+    if (cached) return cached;
+    return this.hydrateSingleUserFromPostgres("LOWER(email) = $1", normalized);
+  }
   async createUser(name, email, password) {
     const normalizedEmail = email.trim().toLowerCase();
-    const isOwner = normalizedEmail === OWNER_EMAIL;
+    const isOwner = normalizedEmail === getOwnerEmail();
     const record = {
       id: `usr_${crypto.randomUUID()}`,
       name: name.trim(),
@@ -576,36 +1087,50 @@ var LorethosRepository = class {
       readingGoal: buildDefaultReadingGoal(),
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    this.state.users.push(record);
-    this.persistSnapshot();
     if (this.pool) {
       try {
         await this.pool.query(
-          `INSERT INTO users (id, name, email, password_hash, role, created_at)
-           VALUES ($1, $2, $3, $4, $5, NOW()) ON CONFLICT (email) DO NOTHING`,
-          [record.id, record.name, record.email, record.passwordHash, record.role]
+          `INSERT INTO users (id, name, email, password_hash, role, reading_goal, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
+          [record.id, record.name, record.email, record.passwordHash, record.role, JSON.stringify(record.readingGoal)]
+        );
+        await this.pool.query(
+          `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
+           VALUES ($1, $2, 'free', 'none', 0) ON CONFLICT (user_id) DO NOTHING`,
+          [`sub_${record.id}`, record.id]
         );
       } catch (err) {
         console.error("Failed to mirror user into PostgreSQL:", err);
       }
     }
+    this.state.users.push(record);
+    this.persistSnapshot();
     return record;
   }
-  getStories() {
-    return this.state.stories.map((s) => ({
+  getStories(options) {
+    const includeUnpublished = Boolean(options?.includeUnpublished);
+    return this.state.stories.filter((s) => includeUnpublished || (s.publicationStatus || "published") === "published").map((s) => ({
       ...s,
+      publicationStatus: s.publicationStatus || "published",
       totalChapters: s.chapters.length
     }));
   }
-  getStoryBySlug(slug) {
+  getStoryBySlug(slug, options) {
     const story = this.state.stories.find((s) => s.slug === slug);
-    return story ? { ...story, totalChapters: story.chapters.length } : void 0;
+    if (!story) return void 0;
+    const status = story.publicationStatus || "published";
+    if (!options?.includeUnpublished && status !== "published") return void 0;
+    return { ...story, publicationStatus: status, totalChapters: story.chapters.length };
   }
   getStoryById(storyId) {
     const story = this.state.stories.find((s) => s.id === storyId);
-    return story ? { ...story, totalChapters: story.chapters.length } : void 0;
+    return story ? { ...story, publicationStatus: story.publicationStatus || "published", totalChapters: story.chapters.length } : void 0;
   }
   hasAccessToChapter(user, story, chapter) {
+    const pubStatus = story.publicationStatus || "published";
+    if (pubStatus !== "published" && user?.role !== "owner") {
+      return false;
+    }
     if (chapter.isFree || story.accessTier === "free") return true;
     if (!user) return false;
     if (user.role === "owner") return true;
@@ -614,35 +1139,84 @@ var LorethosRepository = class {
     return false;
   }
   addStory(input) {
-    const baseSlug = input.slug || input.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    const baseSlug = input.slug || input.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "story";
     const slug = this.state.stories.some((s) => s.slug === baseSlug) ? `${baseSlug}-${Date.now().toString(36)}` : baseSlug;
     const id = `story-${Date.now()}`;
+    const initialChapterId = `ch-${Date.now()}-1`;
+    const initialChapter = {
+      id: initialChapterId,
+      storyId: id,
+      chapterNumber: 1,
+      title: "Chapter 1: Opening",
+      slug: "chapter-1-opening",
+      releaseDate: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" }),
+      wordCount: 350,
+      readTimeMinutes: 2,
+      isFree: true,
+      excerpt: "Opening chapter draft.",
+      content: ["Begin writing this series in the chapter studio."]
+    };
     const newStory = {
       ...input,
       id,
       slug,
+      publicationStatus: input.publicationStatus || "draft",
       rating: 0,
       ratingsCount: 0,
       totalReads: 0,
       totalChapters: 1,
-      chapters: [
-        {
-          id: `ch-${Date.now()}-1`,
-          storyId: id,
-          chapterNumber: 1,
-          title: "Chapter 1: Opening",
-          slug: "chapter-1-opening",
-          releaseDate: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" }),
-          wordCount: 350,
-          readTimeMinutes: 2,
-          isFree: true,
-          excerpt: "Opening chapter draft.",
-          content: ["Begin writing this series in the chapter studio."]
-        }
-      ]
+      chapters: [initialChapter]
     };
     this.state.stories.unshift(newStory);
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO stories (
+          id, slug, title, subtitle, author, author_bio, genre, tags, cover_image,
+          synopsis, prologue_lore, status, publication_status, access_tier, price_ngn,
+          free_chapters_count, featured, updated_at_label
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+        [
+          newStory.id,
+          newStory.slug,
+          newStory.title,
+          newStory.subtitle,
+          newStory.author,
+          newStory.authorBio,
+          newStory.genre,
+          JSON.stringify(newStory.tags),
+          newStory.coverImage,
+          newStory.synopsis,
+          newStory.prologueLore,
+          newStory.status,
+          newStory.publicationStatus,
+          newStory.accessTier,
+          newStory.priceNgn,
+          newStory.freeChaptersCount,
+          newStory.featured,
+          newStory.updatedAt
+        ]
+      );
+      await pool.query(
+        `INSERT INTO chapters (
+          id, story_id, chapter_number, title, slug, release_date_label,
+          word_count, read_time_minutes, is_free, excerpt, content
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
+        [
+          initialChapter.id,
+          newStory.id,
+          initialChapter.chapterNumber,
+          initialChapter.title,
+          initialChapter.slug,
+          initialChapter.releaseDate,
+          initialChapter.wordCount,
+          initialChapter.readTimeMinutes,
+          initialChapter.isFree,
+          initialChapter.excerpt,
+          JSON.stringify(initialChapter.content)
+        ]
+      );
+    });
     return newStory;
   }
   addChapterToStory(storyId, chapterData) {
@@ -657,6 +1231,31 @@ var LorethosRepository = class {
     story.totalChapters = story.chapters.length;
     story.updatedAt = (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" });
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO chapters (
+          id, story_id, chapter_number, title, slug, release_date_label,
+          word_count, read_time_minutes, is_free, excerpt, content
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
+        [
+          newChapter.id,
+          storyId,
+          newChapter.chapterNumber,
+          newChapter.title,
+          newChapter.slug,
+          newChapter.releaseDate,
+          newChapter.wordCount,
+          newChapter.readTimeMinutes,
+          newChapter.isFree,
+          newChapter.excerpt,
+          JSON.stringify(newChapter.content)
+        ]
+      );
+      await pool.query("UPDATE stories SET updated_at_label = $1, updated_at = NOW() WHERE id = $2", [
+        story.updatedAt,
+        storyId
+      ]);
+    });
     return newChapter;
   }
   updateStoryPricing(storyId, tier, priceNgn, freeChaptersCount) {
@@ -670,6 +1269,29 @@ var LorethosRepository = class {
       isFree: tier === "free" ? true : idx < story.freeChaptersCount
     }));
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        "UPDATE stories SET access_tier = $1, price_ngn = $2, free_chapters_count = $3, updated_at = NOW() WHERE id = $4",
+        [story.accessTier, story.priceNgn, story.freeChaptersCount, storyId]
+      );
+      for (const ch of story.chapters) {
+        await pool.query("UPDATE chapters SET is_free = $1 WHERE id = $2", [ch.isFree, ch.id]);
+      }
+    });
+    return story;
+  }
+  updateStoryWorkflow(storyId, publicationStatus) {
+    const story = this.state.stories.find((s) => s.id === storyId);
+    if (!story) return null;
+    story.publicationStatus = publicationStatus;
+    story.updatedAt = (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", year: "numeric" });
+    this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        "UPDATE stories SET publication_status = $1, updated_at_label = $2, updated_at = NOW() WHERE id = $3",
+        [publicationStatus, story.updatedAt, storyId]
+      );
+    });
     return story;
   }
   toggleBookmark(userId, chapterId) {
@@ -678,18 +1300,41 @@ var LorethosRepository = class {
     const exists = user.bookmarkedChapterIds.includes(chapterId);
     user.bookmarkedChapterIds = exists ? user.bookmarkedChapterIds.filter((id) => id !== chapterId) : [...user.bookmarkedChapterIds, chapterId];
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      if (exists) {
+        await pool.query("DELETE FROM bookmarks WHERE user_id = $1 AND chapter_id = $2", [userId, chapterId]);
+      } else {
+        await pool.query(
+          "INSERT INTO bookmarks (user_id, chapter_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+          [userId, chapterId]
+        );
+      }
+    });
     return user.bookmarkedChapterIds;
   }
   recordProgress(userId, storyId, chapterId, chapterNumber, progressPercent) {
     const user = this.getUserById(userId);
     if (!user) return null;
+    const clamped = Math.min(100, Math.max(0, Math.round(progressPercent)));
     user.readingProgress[storyId] = {
       chapterId,
       chapterNumber,
-      progressPercent: Math.min(100, Math.max(0, Math.round(progressPercent))),
+      progressPercent: clamped,
       lastReadAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO reading_progress (user_id, story_id, chapter_id, chapter_number, progress_percent, last_read_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (user_id, story_id) DO UPDATE SET
+           chapter_id = EXCLUDED.chapter_id,
+           chapter_number = EXCLUDED.chapter_number,
+           progress_percent = EXCLUDED.progress_percent,
+           last_read_at = NOW()`,
+        [userId, storyId, chapterId, chapterNumber, clamped]
+      );
+    });
     return user.readingProgress;
   }
   updateReadingGoal(userId, goal) {
@@ -697,6 +1342,12 @@ var LorethosRepository = class {
     if (!user) return null;
     user.readingGoal = goal;
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query("UPDATE users SET reading_goal = $1::jsonb, updated_at = NOW() WHERE id = $2", [
+        JSON.stringify(goal),
+        userId
+      ]);
+    });
     return user.readingGoal;
   }
   cancelSubscription(userId) {
@@ -707,6 +1358,12 @@ var LorethosRepository = class {
       status: "expired"
     };
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `UPDATE subscriptions SET status = 'expired', updated_at = NOW() WHERE user_id = $1`,
+        [userId]
+      );
+    });
     return user.subscription;
   }
   createOrder(params) {
@@ -728,6 +1385,28 @@ var LorethosRepository = class {
     };
     this.state.orders.unshift(order);
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO orders (
+          id, reference, user_id, customer_email, item_type, plan_id, story_id,
+          item_name, amount_ngn, currency, channel, status
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          order.id,
+          order.reference,
+          order.userId,
+          order.customerEmail,
+          order.itemType,
+          order.planId ?? null,
+          order.storyId ?? null,
+          order.itemName,
+          order.amountNgn,
+          order.currency,
+          order.channel,
+          order.status
+        ]
+      );
+    });
     return order;
   }
   getOrderByReference(reference) {
@@ -745,6 +1424,9 @@ var LorethosRepository = class {
     if (currency.toUpperCase() !== order.currency || paidAmountKobo < order.amountNgn * 100) {
       order.status = "failed";
       this.persistSnapshot();
+      this.mirrorToPostgres(async (pool) => {
+        await pool.query(`UPDATE orders SET status = 'failed' WHERE id = $1`, [order.id]);
+      });
       return { ok: false, reason: "Amount or currency mismatch." };
     }
     if (order.status === "success") {
@@ -758,6 +1440,7 @@ var LorethosRepository = class {
     if (!user) {
       return { ok: false, reason: "Order owner account missing." };
     }
+    let validUntilIso = null;
     if (order.itemType === "subscription") {
       const validUntil = /* @__PURE__ */ new Date();
       if (order.planId === "annual") {
@@ -765,11 +1448,12 @@ var LorethosRepository = class {
       } else {
         validUntil.setMonth(validUntil.getMonth() + 1);
       }
+      validUntilIso = validUntil.toISOString();
       user.subscription = {
         plan: order.planId || "monthly",
         status: "active",
         amountNgn: order.amountNgn,
-        validUntil: validUntil.toISOString(),
+        validUntil: validUntilIso,
         renewsAt: validUntil.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
       };
     } else if (order.itemType === "book_purchase" && order.storyId) {
@@ -784,6 +1468,50 @@ var LorethosRepository = class {
       this.state.processedEventIds.push(eventId);
     }
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `UPDATE orders SET status = 'success', channel = $1, fulfilled_at = NOW() WHERE id = $2`,
+          [channel, order.id]
+        );
+        if (eventId) {
+          await client.query(
+            `INSERT INTO payment_events (event_id, order_reference, event_type, payload)
+             VALUES ($1, $2, 'charge.success', $3::jsonb)
+             ON CONFLICT (event_id) DO NOTHING`,
+            [eventId, order.reference, JSON.stringify({ paidAmountKobo, currency, channel })]
+          );
+        }
+        if (order.itemType === "subscription") {
+          await client.query(
+            `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn, valid_until, updated_at)
+             VALUES ($1, $2, $3, 'active', $4, $5, NOW())
+             ON CONFLICT (user_id) DO UPDATE SET
+               plan = EXCLUDED.plan,
+               status = 'active',
+               amount_ngn = EXCLUDED.amount_ngn,
+               valid_until = EXCLUDED.valid_until,
+               updated_at = NOW()`,
+            [`sub_${user.id}`, user.id, order.planId || "monthly", order.amountNgn, validUntilIso]
+          );
+        } else if (order.itemType === "book_purchase" && order.storyId) {
+          await client.query(
+            `INSERT INTO entitlements (id, user_id, story_id, source_order_id)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (user_id, story_id) DO NOTHING`,
+            [`ent_${crypto.randomUUID()}`, user.id, order.storyId, order.id]
+          );
+        }
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+    });
     return { ok: true, order };
   }
   getUserTransactions(userId) {
@@ -808,7 +1536,7 @@ var LorethosRepository = class {
       grossRevenueNgn,
       activeSubscribers,
       totalRegisteredUsers: this.state.users.length,
-      publishedStoriesCount: this.state.stories.length,
+      publishedStoriesCount: this.state.stories.filter((s) => (s.publicationStatus || "published") === "published").length,
       publishedChaptersCount: this.state.stories.reduce((sum, s) => sum + s.chapters.length, 0),
       inquiries: this.state.inquiries,
       transactions: this.state.orders.map((o) => ({
@@ -840,21 +1568,53 @@ var LorethosRepository = class {
     }
     this.state.highlights[userId] = existingList;
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO highlights (id, user_id, story_id, chapter_id, paragraph_index, excerpt, color, note)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (user_id, chapter_id, paragraph_index) DO UPDATE SET
+           excerpt = EXCLUDED.excerpt,
+           color = EXCLUDED.color,
+           note = EXCLUDED.note`,
+        [
+          highlight.id,
+          userId,
+          highlight.storyId,
+          highlight.chapterId,
+          highlight.paragraphIndex,
+          highlight.excerpt,
+          highlight.color,
+          highlight.note ?? null
+        ]
+      );
+    });
     return existingList;
   }
   deleteHighlight(userId, highlightId) {
     const existingList = this.state.highlights[userId] || [];
     this.state.highlights[userId] = existingList.filter((h) => h.id !== highlightId);
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query("DELETE FROM highlights WHERE id = $1 AND user_id = $2", [highlightId, userId]);
+    });
     return this.state.highlights[userId];
   }
   getComments(chapterId) {
     if (!chapterId) return this.state.comments;
     return this.state.comments.filter((c) => c.chapterId === chapterId);
   }
-  addComment(comment) {
+  addComment(comment, userId) {
     this.state.comments.unshift(comment);
     this.persistSnapshot();
+    if (userId) {
+      this.mirrorToPostgres(async (pool) => {
+        await pool.query(
+          `INSERT INTO chapter_comments (id, story_id, chapter_id, user_id, author_name, tag, body)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [comment.id, comment.storyId, comment.chapterId, userId, comment.authorName, comment.tag, comment.body]
+        );
+      });
+    }
     return comment;
   }
   deleteComment(commentId, authorName, isOwner) {
@@ -863,11 +1623,29 @@ var LorethosRepository = class {
     if (!isOwner && target.authorName !== authorName) return false;
     this.state.comments = this.state.comments.filter((c) => c.id !== commentId);
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query("DELETE FROM chapter_comments WHERE id = $1", [commentId]);
+    });
     return true;
   }
   addInquiry(inquiry) {
     this.state.inquiries.unshift(inquiry);
     this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO contacts (id, reference_id, name, email, inquiry_type, subject, message)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          inquiry.id,
+          inquiry.referenceId,
+          inquiry.name,
+          inquiry.email,
+          inquiry.inquiryType,
+          inquiry.subject,
+          inquiry.message
+        ]
+      );
+    });
     return inquiry;
   }
 };
@@ -945,35 +1723,60 @@ function verifySessionToken(token) {
     return null;
   }
 }
+function isHttpsRequest(req) {
+  if (req.secure) return true;
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  if (proto === "https") return true;
+  const origin = String(req.headers.origin || req.headers.referer || "");
+  return origin.startsWith("https://");
+}
 function setSessionCookie(req, res, userId) {
   const token = signSessionToken(userId);
-  const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
+  const isHttps = isHttpsRequest(req);
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     "HttpOnly",
-    "SameSite=Lax",
+    isHttps ? "SameSite=None" : "SameSite=Lax",
     "Path=/",
     `Max-Age=${Math.floor(SESSION_TTL_MS / 1e3)}`
   ];
-  if (isHttps && process.env.NODE_ENV === "production") {
-    parts.push("Secure");
+  if (isHttps) {
+    parts.push("Secure", "Partitioned");
+  }
+  res.setHeader("Set-Cookie", parts.join("; "));
+  return token;
+}
+function clearSessionCookie(req, res) {
+  const isHttps = isHttpsRequest(req);
+  const parts = [
+    `${SESSION_COOKIE_NAME}=`,
+    "HttpOnly",
+    isHttps ? "SameSite=None" : "SameSite=Lax",
+    "Path=/",
+    "Max-Age=0"
+  ];
+  if (isHttps) {
+    parts.push("Secure", "Partitioned");
   }
   res.setHeader("Set-Cookie", parts.join("; "));
 }
-function clearSessionCookie(res) {
-  res.setHeader(
-    "Set-Cookie",
-    `${SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
-  );
-}
-function getAuthenticatedUser(req) {
+function extractSessionUserId(req) {
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+    const bearerToken = authHeader.slice(7).trim();
+    const uid = verifySessionToken(bearerToken);
+    if (uid) return uid;
+  }
   const cookies = parseCookies(req.headers.cookie);
-  const userId = verifySessionToken(cookies[SESSION_COOKIE_NAME]);
-  if (!userId) return void 0;
-  return repo.getUserById(userId);
+  return verifySessionToken(cookies[SESSION_COOKIE_NAME]);
 }
-function requireAuth(req, res, next) {
-  const user = getAuthenticatedUser(req);
+async function getAuthenticatedUserAsync(req) {
+  const userId = extractSessionUserId(req);
+  if (!userId) return void 0;
+  return repo.findUserById(userId);
+}
+async function requireAuth(req, res, next) {
+  const user = await getAuthenticatedUserAsync(req);
   if (!user) {
     res.status(401).json({ error: "Authentication required. Please sign in to continue." });
     return;
@@ -981,8 +1784,8 @@ function requireAuth(req, res, next) {
   req.currentUser = user;
   next();
 }
-function requireOwner(req, res, next) {
-  const user = req.currentUser || getAuthenticatedUser(req);
+async function requireOwner(req, res, next) {
+  const user = req.currentUser || await getAuthenticatedUserAsync(req);
   if (!user) {
     res.status(401).json({ error: "Authentication required." });
     return;
@@ -1001,6 +1804,7 @@ function getGeminiClient() {
   }
   return new GoogleGenAI({
     apiKey,
+    apiVersion: "v1beta",
     httpOptions: {
       headers: {
         "User-Agent": "aistudio-build"
@@ -1018,28 +1822,40 @@ async function withTimeout(promise, timeoutMs = 25e3) {
 }
 function formatGeminiError(err) {
   const rawMessage = err instanceof Error ? err.message : String(err);
+  console.error("[Gemini API error]", rawMessage);
+  let extractedReason = "";
+  try {
+    const jsonMatch = rawMessage.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed?.error?.message) {
+        extractedReason = parsed.error.message.replace(/AIza[0-9A-Za-z_-]+/g, "[redacted]");
+      }
+    }
+  } catch {
+  }
   if (rawMessage.includes("GEMINI_API_KEY is not configured")) {
     return {
       status: 503,
-      message: "AI features are unavailable because the server Gemini key is not configured."
+      message: "AI features require a valid API key in Settings > Secrets."
     };
   }
   if (rawMessage.includes("403") || rawMessage.includes("PERMISSION_DENIED")) {
     return {
-      status: 502,
-      message: "AI provider denied the request. Please try again later."
+      status: 403,
+      message: extractedReason || "AI provider denied this request. Check that your GEMINI_API_KEY in Settings > Secrets is valid and enabled for this model."
     };
   }
-  if (rawMessage.includes("400") || rawMessage.includes("API_KEY_INVALID")) {
+  if (rawMessage.includes("400") || rawMessage.includes("API_KEY_INVALID") || rawMessage.includes("INVALID_ARGUMENT")) {
     return {
-      status: 502,
-      message: "AI service configuration rejected the request."
+      status: 400,
+      message: extractedReason || "The AI service rejected the API key or request parameters. Please verify Settings > Secrets."
     };
   }
   if (rawMessage.includes("429") || rawMessage.includes("RESOURCE_EXHAUSTED")) {
     return {
       status: 429,
-      message: "AI rate limit reached. Please wait a moment and try again."
+      message: "AI quota reached or paid billing tier required for this model. Check Settings > Secrets for a billing-enabled key."
     };
   }
   if (rawMessage.includes("timed out")) {
@@ -1050,7 +1866,7 @@ function formatGeminiError(err) {
   }
   return {
     status: 500,
-    message: "Failed to generate AI response. Please try again."
+    message: extractedReason || rawMessage.replace(/AIza[0-9A-Za-z_-]+/g, "[redacted]").slice(0, 240) || "Failed to generate AI response. Please try again."
   };
 }
 function mapPaystackChannel(channel) {
@@ -1059,7 +1875,8 @@ function mapPaystackChannel(channel) {
   if (c === "ussd") return "ussd";
   return "card";
 }
-async function startServer() {
+async function createApp(options) {
+  await repo.initDatabase();
   const app = express();
   app.set("trust proxy", 1);
   const aiLimiter = createRateLimiter(20, 6e4);
@@ -1105,7 +1922,7 @@ async function startServer() {
       }
     }
   );
-  app.use(express.json({ limit: "2mb" }));
+  app.use(express.json({ limit: "12mb" }));
   app.get("/api/health", async (_req, res) => {
     const db = await repo.checkDatabaseHealth();
     res.json({
@@ -1116,8 +1933,8 @@ async function startServer() {
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
     });
   });
-  app.get("/api/auth/session", (req, res) => {
-    const user = getAuthenticatedUser(req);
+  app.get("/api/auth/session", async (req, res) => {
+    const user = await getAuthenticatedUserAsync(req);
     if (!user) {
       res.json({ authenticated: false, user: null });
       return;
@@ -1125,57 +1942,69 @@ async function startServer() {
     res.json({ authenticated: true, user: repo.toPublicProfile(user) });
   });
   app.post("/api/auth/register", authLimiter, async (req, res) => {
-    const { name, email, password } = req.body;
-    const trimmedName = (name || "").trim();
-    const trimmedEmail = (email || "").trim().toLowerCase();
-    const rawPassword = String(password || "");
-    if (trimmedName.length < 2 || trimmedName.length > 80) {
-      res.status(400).json({ error: "Name must be between 2 and 80 characters." });
-      return;
+    try {
+      const { name, email, password } = req.body;
+      const trimmedName = String(name || "").trim();
+      const trimmedEmail = String(email || "").trim().toLowerCase();
+      const rawPassword = String(password || "");
+      if (trimmedName.length < 2 || trimmedName.length > 80) {
+        res.status(400).json({ error: "Name must be between 2 and 80 characters." });
+        return;
+      }
+      if (!EMAIL_REGEX.test(trimmedEmail)) {
+        res.status(400).json({ error: "Please enter a valid email address." });
+        return;
+      }
+      if (rawPassword.length < 8 || rawPassword.length > 128) {
+        res.status(400).json({ error: "Password must be at least 8 characters long." });
+        return;
+      }
+      if (await repo.findUserByEmail(trimmedEmail)) {
+        res.status(409).json({ error: "An account with this email already exists. Please sign in." });
+        return;
+      }
+      const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword);
+      const token = setSessionCookie(req, res, user.id);
+      res.status(201).json({ user: repo.toPublicProfile(user), token });
+    } catch (err) {
+      console.error("Register error:", err);
+      res.status(500).json({ error: "Failed to create account. Please try again." });
     }
-    if (!EMAIL_REGEX.test(trimmedEmail)) {
-      res.status(400).json({ error: "Please enter a valid email address." });
-      return;
-    }
-    if (rawPassword.length < 8 || rawPassword.length > 128) {
-      res.status(400).json({ error: "Password must be at least 8 characters long." });
-      return;
-    }
-    if (repo.getUserByEmail(trimmedEmail)) {
-      res.status(409).json({ error: "An account with this email already exists. Please sign in." });
-      return;
-    }
-    const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword);
-    setSessionCookie(req, res, user.id);
-    res.status(201).json({ user: repo.toPublicProfile(user) });
   });
-  app.post("/api/auth/login", authLimiter, (req, res) => {
-    const { email, password } = req.body;
-    const trimmedEmail = (email || "").trim().toLowerCase();
-    const rawPassword = String(password || "");
-    if (!EMAIL_REGEX.test(trimmedEmail) || !rawPassword) {
-      res.status(400).json({ error: "Email and password are required." });
-      return;
+  app.post("/api/auth/login", authLimiter, async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const trimmedEmail = String(email || "").trim().toLowerCase();
+      const rawPassword = String(password || "");
+      if (!EMAIL_REGEX.test(trimmedEmail) || !rawPassword) {
+        res.status(400).json({ error: "Email and password are required." });
+        return;
+      }
+      const user = await repo.findUserByEmail(trimmedEmail);
+      if (!user || !verifyPassword(rawPassword, user.passwordHash)) {
+        res.status(401).json({ error: "Invalid email or password." });
+        return;
+      }
+      const token = setSessionCookie(req, res, user.id);
+      res.json({ user: repo.toPublicProfile(user), token });
+    } catch (err) {
+      console.error("Login error:", err);
+      res.status(500).json({ error: "Failed to sign in. Please try again." });
     }
-    const user = repo.getUserByEmail(trimmedEmail);
-    if (!user || !verifyPassword(rawPassword, user.passwordHash)) {
-      res.status(401).json({ error: "Invalid email or password." });
-      return;
-    }
-    setSessionCookie(req, res, user.id);
-    res.json({ user: repo.toPublicProfile(user) });
   });
-  app.post("/api/auth/logout", (_req, res) => {
-    clearSessionCookie(res);
+  app.post("/api/auth/logout", (req, res) => {
+    clearSessionCookie(req, res);
     res.json({ ok: true });
   });
-  app.get("/api/stories", (req, res) => {
+  app.get("/api/stories", async (req, res) => {
     const q = String(req.query.q || "").trim().toLowerCase();
     const genre = String(req.query.genre || "All").trim();
     const status = String(req.query.status || "All").trim();
     const tier = String(req.query.tier || "All").trim();
     const sort = String(req.query.sort || "popular").trim();
-    let stories = repo.getStories().map(sanitizeStoryForPublic);
+    const user = await getAuthenticatedUserAsync(req);
+    const isOwner = user?.role === "owner";
+    let stories = repo.getStories({ includeUnpublished: isOwner }).map(sanitizeStoryForPublic);
     stories = stories.filter((story) => {
       const matchesSearch = !q || story.title.toLowerCase().includes(q) || story.subtitle.toLowerCase().includes(q) || story.author.toLowerCase().includes(q) || story.synopsis.toLowerCase().includes(q) || story.tags.some((t) => t.toLowerCase().includes(q));
       const matchesGenre = genre === "All" || story.genre === genre;
@@ -1190,16 +2019,22 @@ async function startServer() {
     });
     res.json({ stories });
   });
-  app.get("/api/stories/:slug", (req, res) => {
-    const story = repo.getStoryBySlug(req.params.slug);
+  app.get("/api/stories/:slug", async (req, res) => {
+    const user = await getAuthenticatedUserAsync(req);
+    const story = repo.getStoryBySlug(req.params.slug, {
+      includeUnpublished: user?.role === "owner"
+    });
     if (!story) {
       res.status(404).json({ error: "Story not found." });
       return;
     }
     res.json({ story: sanitizeStoryForPublic(story) });
   });
-  app.get("/api/stories/:slug/chapters/:chapterNumber", (req, res) => {
-    const story = repo.getStoryBySlug(req.params.slug);
+  app.get("/api/stories/:slug/chapters/:chapterNumber", async (req, res) => {
+    const user = await getAuthenticatedUserAsync(req);
+    const story = repo.getStoryBySlug(req.params.slug, {
+      includeUnpublished: user?.role === "owner"
+    });
     if (!story) {
       res.status(404).json({ error: "Story not found." });
       return;
@@ -1210,7 +2045,6 @@ async function startServer() {
       res.status(404).json({ error: "Chapter not found." });
       return;
     }
-    const user = getAuthenticatedUser(req);
     const allowed = repo.hasAccessToChapter(user, story, chapter);
     if (!allowed) {
       res.status(403).json({
@@ -1311,15 +2145,18 @@ async function startServer() {
       return;
     }
     const safeTag = ["Reaction", "Lore", "Theory"].includes(String(tag)) ? tag : "Reaction";
-    const comment = repo.addComment({
-      id: `cmt_${crypto2.randomUUID()}`,
-      storyId,
-      chapterId,
-      authorName: req.currentUser.name,
-      tag: safeTag,
-      body: cleanedBody,
-      createdAt: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-    });
+    const comment = repo.addComment(
+      {
+        id: `cmt_${crypto2.randomUUID()}`,
+        storyId,
+        chapterId,
+        authorName: req.currentUser.name,
+        tag: safeTag,
+        body: cleanedBody,
+        createdAt: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      },
+      req.currentUser.id
+    );
     res.status(201).json({ comment });
   });
   app.delete("/api/comments/:id", requireAuth, (req, res) => {
@@ -1501,6 +2338,7 @@ async function startServer() {
       res.status(400).json({ error: "Story title and synopsis are required." });
       return;
     }
+    const pubStatus = ["draft", "review", "published"].includes(String(body.publicationStatus)) ? body.publicationStatus : "draft";
     const story = repo.addStory({
       slug: title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""),
       title,
@@ -1511,8 +2349,9 @@ async function startServer() {
       tags: [String(body.genre || "Fiction").trim(), "Serialized"],
       coverImage: String(body.coverImage || "/assets/images/book_cover_obsidian_throne_1794465561565.jpg"),
       synopsis,
-      prologueLore: "Published directly from the Lorethos Publishing Desk.",
+      prologueLore: "Authored in the Lorethos Publishing Desk.",
       status: "Ongoing",
+      publicationStatus: pubStatus,
       accessTier: ["free", "subscription", "purchase"].includes(String(body.accessTier)) ? body.accessTier : "subscription",
       priceNgn: Math.max(0, Number(body.priceNgn || 2500)),
       rating: 0,
@@ -1524,6 +2363,19 @@ async function startServer() {
       updatedAt: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", year: "numeric" })
     });
     res.status(201).json({ story: sanitizeStoryForPublic(story) });
+  });
+  app.patch("/api/admin/stories/:storyId/workflow", requireAuth, requireOwner, (req, res) => {
+    const { publicationStatus } = req.body;
+    if (!["draft", "review", "published"].includes(String(publicationStatus))) {
+      res.status(400).json({ error: "publicationStatus must be draft, review, or published." });
+      return;
+    }
+    const updated = repo.updateStoryWorkflow(req.params.storyId, publicationStatus);
+    if (!updated) {
+      res.status(404).json({ error: "Story not found." });
+      return;
+    }
+    res.json({ story: sanitizeStoryForPublic(updated) });
   });
   app.post("/api/admin/stories/:storyId/chapters", requireAuth, requireOwner, (req, res) => {
     const body = req.body;
@@ -1573,14 +2425,14 @@ async function startServer() {
   app.post("/api/ai/companion", aiLimiter, async (req, res) => {
     try {
       const { mode, question, storySlug, chapterNumber } = req.body;
-      const story = storySlug ? repo.getStoryBySlug(storySlug) : void 0;
+      const user = await getAuthenticatedUserAsync(req);
+      const story = storySlug ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === "owner" }) : void 0;
       const chNum = Number(chapterNumber);
       const chapter = story?.chapters.find((c) => c.chapterNumber === chNum);
       if (!story || !chapter) {
         res.status(404).json({ error: "Story or chapter could not be found." });
         return;
       }
-      const user = getAuthenticatedUser(req);
       if (!repo.hasAccessToChapter(user, story, chapter)) {
         res.status(403).json({
           error: "Unlock this chapter before querying the companion on its full contents."
@@ -1747,14 +2599,14 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
   app.post("/api/ai/tts", aiLimiter, async (req, res) => {
     try {
       const { storySlug, chapterNumber, voiceName } = req.body;
-      const story = storySlug ? repo.getStoryBySlug(storySlug) : void 0;
+      const user = await getAuthenticatedUserAsync(req);
+      const story = storySlug ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === "owner" }) : void 0;
       const chNum = Number(chapterNumber);
       const chapter = story?.chapters.find((c) => c.chapterNumber === chNum);
       if (!story || !chapter) {
         res.status(404).json({ error: "Story or chapter could not be found." });
         return;
       }
-      const user = getAuthenticatedUser(req);
       if (!repo.hasAccessToChapter(user, story, chapter)) {
         res.status(403).json({
           error: "Unlock this chapter before generating full chapter audio narration."
@@ -1766,41 +2618,155 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
         res.status(400).json({ error: "Chapter narration text is empty." });
         return;
       }
-      const allowedVoices = /* @__PURE__ */ new Set(["Kore", "Charon", "Puck", "Zephyr"]);
+      const allowedVoices = /* @__PURE__ */ new Set(["Kore", "Charon", "Puck", "Zephyr", "Fenrir"]);
       const selectedVoice = voiceName && allowedVoices.has(voiceName) ? voiceName : "Kore";
-      const cappedText = cleaned.slice(0, 3200);
+      const cappedText = cleaned.slice(0, 2400);
       const intro = `${story.title}. Chapter ${chapter.chapterNumber}: ${chapter.title}.
 
 `;
       const ai = getGeminiClient();
-      const response = await withTimeout(
-        ai.models.generateContent({
+      const interaction = await withTimeout(
+        ai.interactions.create({
           model: "gemini-3.8-flash-lite-tts",
-          contents: `Read in a warm, clear literary audiobook narration style:
-
-${intro}${cappedText}`,
-          config: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: selectedVoice
+          input: [
+            {
+              type: "text",
+              text: `${intro}${cappedText}`,
+              annotations: [
+                {
+                  type: "speech_metadata",
+                  style: "Warm, clear, expressive literary audiobook narrator"
                 }
-              }
+              ]
             }
+          ],
+          response_format: { type: "audio" },
+          generation_config: {
+            speech_config: [
+              {
+                language: "en-US",
+                voice: selectedVoice
+              }
+            ]
           }
         }),
-        3e4
+        45e3
       );
-      const audioPart = response.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+      const audioPart = interaction.output_audio;
       if (!audioPart?.data) {
         res.status(502).json({ error: "Audio narration was not returned by the model." });
         return;
       }
       res.json({
         audioBase64: audioPart.data,
-        mimeType: audioPart.mimeType || "audio/wav",
+        mimeType: audioPart.mime_type || "audio/wav",
         voiceName: selectedVoice
+      });
+    } catch (err) {
+      const formatted = formatGeminiError(err);
+      res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+  app.post("/api/ai/transcribe", aiLimiter, async (req, res) => {
+    try {
+      const { audioBase64, mimeType, contextHint } = req.body;
+      const cleanedBase64 = String(audioBase64 || "").replace(/^data:audio\/[a-zA-Z0-9.+-]+;base64,/, "").trim();
+      if (!cleanedBase64 || cleanedBase64.length < 32) {
+        res.status(400).json({ error: "Valid recorded audio is required for transcription." });
+        return;
+      }
+      const rawMime = String(mimeType || "audio/webm").split(";")[0].trim().toLowerCase();
+      const allowedAudioMimes = /* @__PURE__ */ new Set([
+        "audio/webm",
+        "audio/wav",
+        "audio/mp3",
+        "audio/mpeg",
+        "audio/mp4",
+        "audio/ogg",
+        "audio/aac",
+        "audio/flac"
+      ]);
+      const safeMimeType = allowedAudioMimes.has(rawMime) ? rawMime : "audio/webm";
+      const safeContext = String(contextHint || "").trim().slice(0, 200);
+      const instruction = safeContext ? `Transcribe this spoken literary note clearly and accurately without adding commentary. Context: ${safeContext}` : "Transcribe this spoken audio clearly and accurately without adding commentary.";
+      const ai = getGeminiClient();
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: "gemini-3.5-transcribe",
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: safeMimeType,
+                  data: cleanedBase64
+                }
+              },
+              { text: instruction }
+            ]
+          }
+        }),
+        45e3
+      );
+      res.json({
+        transcript: (response.text ?? "").trim()
+      });
+    } catch (err) {
+      const formatted = formatGeminiError(err);
+      res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+  app.post("/api/ai/video", aiLimiter, async (req, res) => {
+    try {
+      const { prompt, aspectRatio, duration, storySlug } = req.body;
+      const cleanPrompt = String(prompt || "").trim().slice(0, 600);
+      if (cleanPrompt.length < 6) {
+        res.status(400).json({ error: "Please describe the video scene in at least 6 characters." });
+        return;
+      }
+      if (aspectRatio && aspectRatio !== "16:9" && aspectRatio !== "9:16") {
+        res.status(400).json({ error: "Aspect ratio must be either 16:9 or 9:16." });
+        return;
+      }
+      const safeAspectRatio = aspectRatio === "9:16" ? "9:16" : "16:9";
+      const safeDuration = duration === "6s" ? "6s" : "10s";
+      const user = await getAuthenticatedUserAsync(req);
+      const story = storySlug ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === "owner" }) : void 0;
+      if (storySlug && !story) {
+        res.status(404).json({ error: "Referenced story was not found." });
+        return;
+      }
+      const cinematicInput = story ? `Atmospheric literary book trailer inspired by "${story.title}" (${story.genre}): ${cleanPrompt}` : cleanPrompt;
+      const ai = getGeminiClient();
+      const interaction = await withTimeout(
+        ai.interactions.create(
+          {
+            model: "gemini-omni-1.2-flash",
+            input: cinematicInput,
+            background: false,
+            store: false,
+            stream: false,
+            response_format: {
+              type: "video",
+              aspect_ratio: safeAspectRatio,
+              duration: safeDuration,
+              resolution: "720p"
+            }
+          },
+          { timeout: 3e5 }
+        ),
+        3e5
+      );
+      const videoPart = interaction.output_video;
+      if (!videoPart || !videoPart.data && !videoPart.uri) {
+        res.status(502).json({ error: "The model completed without returning a video clip." });
+        return;
+      }
+      res.json({
+        videoBase64: videoPart.data || null,
+        videoUri: videoPart.uri || null,
+        mimeType: videoPart.mime_type || "video/mp4",
+        aspectRatio: safeAspectRatio,
+        duration: safeDuration
       });
     } catch (err) {
       const formatted = formatGeminiError(err);
@@ -1899,10 +2865,31 @@ ${intro}${cappedText}`,
       res.status(500).json({ error: "Failed to build ZIP archive." });
     }
   });
-  if (process.env.NODE_ENV !== "production") {
+  if ((options?.withVite ?? true) && process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
+    const hmrDisabled = process.env.DISABLE_HMR === "true" || Boolean(process.env.K_SERVICE && process.env.APPLET_ID);
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      plugins: hmrDisabled ? [
+        {
+          name: "lorethos-disable-hmr-ws",
+          transform(code, id) {
+            const cleanId = id.split("?", 1)[0];
+            if (cleanId.endsWith("/vite/dist/client/client.mjs") || cleanId.endsWith("/@vite/client")) {
+              return code.replace(
+                "transport.connect(createHMRHandler(handleMessage));",
+                "/* HMR WebSocket disabled */"
+              );
+            }
+            return null;
+          }
+        }
+      ] : [],
+      server: {
+        middlewareMode: true,
+        port: PORT,
+        allowedHosts: true,
+        ...hmrDisabled ? { hmr: false, ws: false, watch: null } : { ws: options?.httpServer ? { server: options.httpServer } : false }
+      },
       appType: "spa"
     });
     app.use(vite.middlewares);
@@ -1920,11 +2907,21 @@ ${intro}${cappedText}`,
       });
     }
   }
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Lorethos server listening on http://0.0.0.0:${PORT}`);
+  return app;
+}
+var isDirectExecution = !process.env.LORETHOS_NO_LISTEN;
+if (isDirectExecution) {
+  const httpServer = http.createServer();
+  createApp({ withVite: process.env.NODE_ENV !== "production", httpServer }).then((app) => {
+    httpServer.on("request", app);
+    httpServer.listen(PORT, "0.0.0.0", () => {
+      console.log(`Lorethos server listening on http://0.0.0.0:${PORT}`);
+    });
+  }).catch((err) => {
+    console.error("Failed to start server:", err);
+    process.exit(1);
   });
 }
-startServer().catch((err) => {
-  console.error("Failed to start server:", err);
-  process.exit(1);
-});
+export {
+  createApp
+};

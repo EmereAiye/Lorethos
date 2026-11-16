@@ -15,7 +15,16 @@ class AmbientSoundEngine {
       this.ctx = new AudioCtx();
     }
     if (this.ctx.state === 'suspended') {
-      void this.ctx.resume();
+      void this.ctx.resume().catch(() => {});
+      const resumeOnGesture = () => {
+        if (this.ctx && this.ctx.state === 'suspended') {
+          void this.ctx.resume().catch(() => {});
+        }
+        window.removeEventListener('pointerdown', resumeOnGesture);
+        window.removeEventListener('keydown', resumeOnGesture);
+      };
+      window.addEventListener('pointerdown', resumeOnGesture, { once: true, passive: true });
+      window.addEventListener('keydown', resumeOnGesture, { once: true, passive: true });
     }
     return this.ctx;
   }

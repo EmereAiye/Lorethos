@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
+import { apiFetch } from '../lib/apiClient';
 import {
   ArrowLeft,
   ChevronLeft,
@@ -27,6 +28,7 @@ import {
 } from 'lucide-react';
 import { Chapter, HighlightColor, CommentTag } from '../types';
 import { ambientAudio, AmbientTrackId } from '../utils/ambientAudio';
+import { VoiceDictationButton } from '../components/VoiceDictationButton';
 
 const TRACK_LABELS: Record<AmbientTrackId, string> = {
   fireplace: 'Hearth Fire',
@@ -102,6 +104,8 @@ export const ReaderView: React.FC = () => {
   const [ttsPlaying, setTtsPlaying] = useState(false);
   const [ttsError, setTtsError] = useState<string | null>(null);
   const [ttsAudioSrc, setTtsAudioSrc] = useState<string | null>(null);
+  const [ttsCurrentTime, setTtsCurrentTime] = useState(0);
+  const [ttsDuration, setTtsDuration] = useState(0);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Highlight & Margin Note popover state
@@ -223,15 +227,27 @@ export const ReaderView: React.FC = () => {
     setEditingParagraphIdx(null);
     setAutoCompletedToast(false);
     setTtsError(null);
-    setTtsAudioSrc(null);
+    setTtsAudioSrc((prev) => {
+      if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+      return null;
+    });
     setTtsPlaying(false);
     setScrollProgress(0);
     window.scrollTo({ top: 0 });
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
-      ttsAudioRef.current.currentTime = 0;
+      ttsAudioRef.current.removeAttribute('src');
+      ttsAudioRef.current.load();
     }
   }, [chapterId]);
+
+  useEffect(() => {
+    return () => {
+      if (ttsAudioSrc && ttsAudioSrc.startsWith('blob:')) {
+        URL.revokeObjectURL(ttsAudioSrc);
+      }
+    };
+  }, [ttsAudioSrc]);
 
   const askLorekeeper = async (mode: 'recap' | 'ask', customQuestion?: string) => {
     if (!chapterData) return;
@@ -243,10 +259,9 @@ export const ReaderView: React.FC = () => {
     setCompanionError(null);
 
     try {
-      const res = await fetch('/api/ai/companion', {
+      const res = await apiFetch('/api/ai/companion', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           mode,
           question: q,
@@ -267,6 +282,17 @@ export const ReaderView: React.FC = () => {
     }
   };
 
+  const decodeBase64ToBlobUrl = (base64: string, mimeType: string): string => {
+    const clean = base64.replace(/\s+/g, '');
+    const binary = atob(clean);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: mimeType });
+    return URL.createObjectURL(blob);
+  };
+
   const handleNarrateChapter = async () => {
     if (!chapterData) return;
     const { story, chapter } = chapterData;
@@ -276,8 +302,12 @@ export const ReaderView: React.FC = () => {
         ttsAudioRef.current.pause();
         setTtsPlaying(false);
       } else {
-        await ttsAudioRef.current.play();
-        setTtsPlaying(true);
+        try {
+          await ttsAudioRef.current.play();
+          setTtsPlaying(true);
+        } catch {
+          setTtsError('Tap Play Audio again to start browser playback.');
+        }
       }
       return;
     }
@@ -286,10 +316,9 @@ export const ReaderView: React.FC = () => {
     setTtsError(null);
 
     try {
-      const res = await fetch('/api/ai/tts', {
+      const res = await apiFetch('/api/ai/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           storySlug: story.slug,
           chapterNumber: chapter.chapterNumber,
@@ -300,14 +329,27 @@ export const ReaderView: React.FC = () => {
       if (!res.ok) {
         throw new Error(data.error || 'Unable to generate chapter narration.');
       }
+      if (!data.audioBase64) {
+        throw new Error('No audio stream returned for this chapter.');
+      }
 
-      const dataUrl = `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`;
-      setTtsAudioSrc(dataUrl);
+      const blobUrl = decodeBase64ToBlobUrl(data.audioBase64, data.mimeType || 'audio/wav');
+      setTtsAudioSrc((prev) => {
+        if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+        return blobUrl;
+      });
 
       if (ttsAudioRef.current) {
-        ttsAudioRef.current.src = dataUrl;
-        await ttsAudioRef.current.play();
-        setTtsPlaying(true);
+        ttsAudioRef.current.src = blobUrl;
+        ttsAudioRef.current.load();
+        try {
+          await ttsAudioRef.current.play();
+          setTtsPlaying(true);
+        } catch {
+          // If mobile browser blocks autoplay after async fetch, audio is loaded and user can tap Play Audio immediately
+          setTtsPlaying(false);
+          setTtsError('Audio ready. Press Play Audio to listen.');
+        }
       }
     } catch (err) {
       setTtsError(err instanceof Error ? err.message : 'Narration playback failed.');
@@ -405,9 +447,21 @@ export const ReaderView: React.FC = () => {
     <div className={`min-h-screen ${themeStyles.canvas} transition-colors duration-200 selection:bg-[#C85A32]/25`}>
       <audio
         ref={ttsAudioRef}
+        preload="auto"
         onEnded={() => setTtsPlaying(false)}
         onPause={() => setTtsPlaying(false)}
-        onPlay={() => setTtsPlaying(true)}
+        onPlay={() => {
+          setTtsPlaying(true);
+          setTtsError(null);
+        }}
+        onLoadedMetadata={(e) => setTtsDuration(e.currentTarget.duration || 0)}
+        onTimeUpdate={(e) => setTtsCurrentTime(e.currentTarget.currentTime || 0)}
+        onError={() => {
+          if (ttsAudioSrc) {
+            setTtsPlaying(false);
+            setTtsError('Browser audio playback failed. Try another voice or click Play Audio again.');
+          }
+        }}
       />
 
       {/* Top Reading Progress Bar */}
@@ -429,20 +483,20 @@ export const ReaderView: React.FC = () => {
       )}
 
       {/* Reader Floating Header Toolbar */}
-      <header className={`sticky top-1 z-40 w-full backdrop-blur-md border-b ${themeStyles.bar} transition-colors px-4 py-2.5`}>
-        <div className="max-w-5xl mx-auto flex items-center justify-between gap-3 text-xs font-sans-ui">
+      <header className={`sticky top-1 z-40 w-full backdrop-blur-md border-b ${themeStyles.bar} transition-colors px-2.5 sm:px-4 py-2 sm:py-2.5`}>
+        <div className="max-w-5xl mx-auto flex items-center justify-between gap-1.5 sm:gap-3 text-xs font-sans-ui">
           <a
             href={buildHref('story-detail', { slug: story.slug })}
             onClick={(e) => handleLink(e, 'story-detail', { slug: story.slug })}
-            className="flex items-center gap-1.5 hover:text-[#C85A32] transition-colors shrink-0"
+            className="flex items-center gap-1 hover:text-[#C85A32] transition-colors shrink-0"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Overview</span>
             <span className="sm:hidden">Exit</span>
           </a>
 
-          <div className="flex items-center gap-2 text-center truncate px-2 min-w-0">
-            <span className="font-semibold truncate max-w-[120px] sm:max-w-xs">{story.title}</span>
+          <div className="flex items-center gap-1.5 sm:gap-2 text-center truncate px-1 sm:px-2 min-w-0">
+            <span className="font-semibold truncate max-w-[82px] sm:max-w-xs">{story.title}</span>
             <span className="opacity-40">&middot;</span>
             <span className="opacity-80 whitespace-nowrap">Ch. {chapter.chapterNumber}</span>
             <div className="hidden md:flex items-center gap-2 ml-1">
@@ -458,14 +512,14 @@ export const ReaderView: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <div role="group" aria-label="Reader color theme" className="flex items-center bg-current/5 p-0.5 rounded-lg border border-current/15 text-[11px]">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+            <div role="group" aria-label="Reader color theme" className="flex items-center bg-current/5 p-0.5 rounded-lg border border-current/15 text-[10px] sm:text-[11px]">
               <button
                 type="button"
                 onClick={() => updateReaderSettings({ theme: 'day' })}
                 aria-label="Day theme"
                 aria-pressed={readerSettings.theme === 'day'}
-                className={`px-2 py-1 rounded transition-all cursor-pointer flex items-center gap-1 ${
+                className={`px-1.5 sm:px-2 py-1 rounded transition-all cursor-pointer flex items-center gap-1 ${
                   readerSettings.theme === 'day' ? 'bg-white text-[#2D142C] shadow-xs font-semibold' : 'opacity-65 hover:opacity-100'
                 }`}
               >
@@ -477,7 +531,7 @@ export const ReaderView: React.FC = () => {
                 onClick={() => updateReaderSettings({ theme: 'sepia' })}
                 aria-label="Sepia theme"
                 aria-pressed={readerSettings.theme === 'sepia'}
-                className={`px-2 py-1 rounded transition-all cursor-pointer flex items-center gap-1 ${
+                className={`px-1.5 sm:px-2 py-1 rounded transition-all cursor-pointer flex items-center gap-1 ${
                   readerSettings.theme === 'sepia' ? 'bg-[#EDE3D5] text-[#2C1E18] shadow-xs font-semibold' : 'opacity-65 hover:opacity-100'
                 }`}
               >
@@ -488,7 +542,7 @@ export const ReaderView: React.FC = () => {
                 onClick={() => updateReaderSettings({ theme: 'night' })}
                 aria-label="Night theme"
                 aria-pressed={readerSettings.theme === 'night'}
-                className={`px-2 py-1 rounded transition-all cursor-pointer flex items-center gap-1 ${
+                className={`px-1.5 sm:px-2 py-1 rounded transition-all cursor-pointer flex items-center gap-1 ${
                   readerSettings.theme === 'night' ? 'bg-[#231323] text-white shadow-xs font-semibold' : 'opacity-65 hover:opacity-100'
                 }`}
               >
@@ -808,7 +862,7 @@ export const ReaderView: React.FC = () => {
                     ) : (
                       <>
                         <Play className="w-3.5 h-3.5" />
-                        <span>{ttsAudioSrc ? 'Resume Audio' : 'Listen to Chapter'}</span>
+                        <span>{ttsAudioSrc ? 'Play Audio' : 'Listen to Chapter'}</span>
                       </>
                     )}
                   </button>
@@ -825,6 +879,33 @@ export const ReaderView: React.FC = () => {
                   )}
                 </div>
               </div>
+
+              {ttsAudioSrc && ttsDuration > 0 && (
+                <div className="flex items-center gap-2.5 pt-1 text-[11px] font-mono">
+                  <span className="tabular-nums opacity-75 w-10">
+                    {Math.floor(ttsCurrentTime / 60)}:{String(Math.floor(ttsCurrentTime % 60)).padStart(2, '0')}
+                  </span>
+                  <input
+                    type="range"
+                    aria-label="Narration playback position"
+                    min={0}
+                    max={ttsDuration}
+                    step={0.25}
+                    value={Math.min(ttsCurrentTime, ttsDuration)}
+                    onChange={(e) => {
+                      const nextTime = Number(e.target.value);
+                      setTtsCurrentTime(nextTime);
+                      if (ttsAudioRef.current) {
+                        ttsAudioRef.current.currentTime = nextTime;
+                      }
+                    }}
+                    className="flex-1 accent-[#C85A32] cursor-pointer"
+                  />
+                  <span className="tabular-nums opacity-75 w-10 text-right">
+                    {Math.floor(ttsDuration / 60)}:{String(Math.floor(ttsDuration % 60)).padStart(2, '0')}
+                  </span>
+                </div>
+              )}
 
               {ttsError && (
                 <div role="alert" className="p-2.5 rounded bg-red-500/10 border border-red-500/25 text-red-600 dark:text-red-400 text-[11px]">
@@ -893,6 +974,13 @@ export const ReaderView: React.FC = () => {
                 onChange={(e) => setLoreQuestion(e.target.value)}
                 placeholder="Ask a question about this chapter..."
                 className="flex-1 px-3 py-2 rounded-lg border border-current/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
+              />
+              <VoiceDictationButton
+                compact
+                label="Speak"
+                disabled={!isAccessible || companionLoading}
+                contextHint={`Question about ${story.title}, Chapter ${chapter.chapterNumber}: ${chapter.title}`}
+                onTranscript={(text) => setLoreQuestion((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))}
               />
               <button
                 type="submit"
@@ -1020,9 +1108,17 @@ export const ReaderView: React.FC = () => {
                           </div>
                         </div>
 
-                        <label htmlFor={`note-draft-${index}`} className="sr-only">
-                          Margin note
-                        </label>
+                        <div className="flex items-center justify-between gap-2">
+                          <label htmlFor={`note-draft-${index}`} className="font-semibold text-[11px] opacity-75">
+                            Margin Note
+                          </label>
+                          <VoiceDictationButton
+                            compact
+                            label="Dictate Note"
+                            contextHint={`Margin note for ${story.title}, Chapter ${chapter.chapterNumber}`}
+                            onTranscript={(text) => setNoteDraft((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))}
+                          />
+                        </div>
                         <textarea
                           id={`note-draft-${index}`}
                           rows={2}
@@ -1236,7 +1332,13 @@ export const ReaderView: React.FC = () => {
                       </p>
                     )}
 
-                    <div className="flex justify-end">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <VoiceDictationButton
+                        compact
+                        label="Dictate Comment"
+                        contextHint={`Reader comment on ${story.title}, Chapter ${chapter.chapterNumber}`}
+                        onTranscript={(text) => setCommentDraft((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))}
+                      />
                       <button
                         type="submit"
                         disabled={!commentDraft.trim()}

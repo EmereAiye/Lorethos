@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { X, Lock, Loader2, ArrowRight, AlertCircle, UserCheck } from 'lucide-react';
+import { apiFetch } from '../lib/apiClient';
 
 export const PaystackModal: React.FC = () => {
   const { paystackModal, closePaystackCheckout, user, isAuthenticated, navigate, buildHref } = useApp();
   const [isInitializing, setIsInitializing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     setErrorMessage(null);
@@ -14,13 +17,22 @@ export const PaystackModal: React.FC = () => {
 
   useEffect(() => {
     if (!paystackModal.isOpen) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    const focusTimer = window.setTimeout(() => {
+      dialogRef.current?.focus();
+    }, 10);
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !isInitializing) {
         closePaystackCheckout();
       }
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener('keydown', onKeyDown);
+      previousFocusRef.current?.focus?.();
+    };
   }, [paystackModal.isOpen, isInitializing, closePaystackCheckout]);
 
   if (!paystackModal.isOpen || !paystackModal.data) {
@@ -34,10 +46,9 @@ export const PaystackModal: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      const res = await fetch('/api/payments/initialize', {
+      const res = await apiFetch('/api/payments/initialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           itemType: type,
           planId,
@@ -75,10 +86,12 @@ export const PaystackModal: React.FC = () => {
       }}
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="paystack-modal-title"
-        className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-white rounded-xl shadow-2xl border border-slate-200 text-slate-800"
+        className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-white rounded-xl shadow-2xl border border-slate-200 text-slate-800 focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { Request, Response, NextFunction } from 'express';
@@ -8,7 +9,7 @@ import JSZip from 'jszip';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import { repo, verifyPassword, PLAN_PRICES_NGN, StoredUserRecord } from './server/db';
 import { sanitizeStoryForPublic } from './server/catalog';
-import { AccessTier, CommentTag, HighlightColor } from './src/types';
+import { AccessTier, CommentTag, HighlightColor, PublicationStatus } from './src/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -100,42 +101,69 @@ function verifySessionToken(token: string | undefined): string | null {
   }
 }
 
-function setSessionCookie(req: Request, res: Response, userId: string): void {
+function isHttpsRequest(req: Request): boolean {
+  if (req.secure) return true;
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  if (proto === 'https') return true;
+  const origin = String(req.headers.origin || req.headers.referer || '');
+  return origin.startsWith('https://');
+}
+
+function setSessionCookie(req: Request, res: Response, userId: string): string {
   const token = signSessionToken(userId);
-  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  const isHttps = isHttpsRequest(req);
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     'HttpOnly',
-    'SameSite=Lax',
+    isHttps ? 'SameSite=None' : 'SameSite=Lax',
     'Path=/',
     `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
   ];
-  if (isHttps && process.env.NODE_ENV === 'production') {
-    parts.push('Secure');
+  if (isHttps) {
+    parts.push('Secure', 'Partitioned');
+  }
+  res.setHeader('Set-Cookie', parts.join('; '));
+  return token;
+}
+
+function clearSessionCookie(req: Request, res: Response): void {
+  const isHttps = isHttpsRequest(req);
+  const parts = [
+    `${SESSION_COOKIE_NAME}=`,
+    'HttpOnly',
+    isHttps ? 'SameSite=None' : 'SameSite=Lax',
+    'Path=/',
+    'Max-Age=0'
+  ];
+  if (isHttps) {
+    parts.push('Secure', 'Partitioned');
   }
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
-function clearSessionCookie(res: Response): void {
-  res.setHeader(
-    'Set-Cookie',
-    `${SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
-  );
+function extractSessionUserId(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    const bearerToken = authHeader.slice(7).trim();
+    const uid = verifySessionToken(bearerToken);
+    if (uid) return uid;
+  }
+  const cookies = parseCookies(req.headers.cookie);
+  return verifySessionToken(cookies[SESSION_COOKIE_NAME]);
 }
 
-function getAuthenticatedUser(req: Request): StoredUserRecord | undefined {
-  const cookies = parseCookies(req.headers.cookie);
-  const userId = verifySessionToken(cookies[SESSION_COOKIE_NAME]);
+async function getAuthenticatedUserAsync(req: Request): Promise<StoredUserRecord | undefined> {
+  const userId = extractSessionUserId(req);
   if (!userId) return undefined;
-  return repo.getUserById(userId);
+  return repo.findUserById(userId);
 }
 
 interface AuthedRequest extends Request {
   currentUser?: StoredUserRecord;
 }
 
-function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
-  const user = getAuthenticatedUser(req);
+async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
+  const user = await getAuthenticatedUserAsync(req);
   if (!user) {
     res.status(401).json({ error: 'Authentication required. Please sign in to continue.' });
     return;
@@ -144,8 +172,8 @@ function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
   next();
 }
 
-function requireOwner(req: AuthedRequest, res: Response, next: NextFunction) {
-  const user = req.currentUser || getAuthenticatedUser(req);
+async function requireOwner(req: AuthedRequest, res: Response, next: NextFunction) {
+  const user = req.currentUser || (await getAuthenticatedUserAsync(req));
   if (!user) {
     res.status(401).json({ error: 'Authentication required.' });
     return;
@@ -165,6 +193,7 @@ function getGeminiClient(): GoogleGenAI {
   }
   return new GoogleGenAI({
     apiKey,
+    apiVersion: 'v1beta',
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -184,28 +213,41 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs = 25000): Promise<T
 
 function formatGeminiError(err: unknown): { status: number; message: string } {
   const rawMessage = err instanceof Error ? err.message : String(err);
+  console.error('[Gemini API error]', rawMessage);
+  let extractedReason = '';
+  try {
+    const jsonMatch = rawMessage.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as { error?: { message?: string } };
+      if (parsed?.error?.message) {
+        extractedReason = parsed.error.message.replace(/AIza[0-9A-Za-z_-]+/g, '[redacted]');
+      }
+    }
+  } catch {
+    // ignore parse failure
+  }
   if (rawMessage.includes('GEMINI_API_KEY is not configured')) {
     return {
       status: 503,
-      message: 'AI features are unavailable because the server Gemini key is not configured.',
+      message: 'AI features require a valid API key in Settings > Secrets.',
     };
   }
   if (rawMessage.includes('403') || rawMessage.includes('PERMISSION_DENIED')) {
     return {
-      status: 502,
-      message: 'AI provider denied the request. Please try again later.',
+      status: 403,
+      message: extractedReason || 'AI provider denied this request. Check that your GEMINI_API_KEY in Settings > Secrets is valid and enabled for this model.',
     };
   }
-  if (rawMessage.includes('400') || rawMessage.includes('API_KEY_INVALID')) {
+  if (rawMessage.includes('400') || rawMessage.includes('API_KEY_INVALID') || rawMessage.includes('INVALID_ARGUMENT')) {
     return {
-      status: 502,
-      message: 'AI service configuration rejected the request.',
+      status: 400,
+      message: extractedReason || 'The AI service rejected the API key or request parameters. Please verify Settings > Secrets.',
     };
   }
   if (rawMessage.includes('429') || rawMessage.includes('RESOURCE_EXHAUSTED')) {
     return {
       status: 429,
-      message: 'AI rate limit reached. Please wait a moment and try again.',
+      message: 'AI quota reached or paid billing tier required for this model. Check Settings > Secrets for a billing-enabled key.',
     };
   }
   if (rawMessage.includes('timed out')) {
@@ -216,7 +258,7 @@ function formatGeminiError(err: unknown): { status: number; message: string } {
   }
   return {
     status: 500,
-    message: 'Failed to generate AI response. Please try again.',
+    message: extractedReason || rawMessage.replace(/AIza[0-9A-Za-z_-]+/g, '[redacted]').slice(0, 240) || 'Failed to generate AI response. Please try again.',
   };
 }
 
@@ -227,7 +269,8 @@ function mapPaystackChannel(channel: unknown): 'card' | 'bank_transfer' | 'ussd'
   return 'card';
 }
 
-async function startServer() {
+export async function createApp(options?: { withVite?: boolean; httpServer?: http.Server }) {
+  await repo.initDatabase();
   const app = express();
   app.set('trust proxy', 1);
 
@@ -302,7 +345,7 @@ async function startServer() {
     }
   );
 
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '12mb' }));
 
   // =========================================================================
   // HEALTH & READINESS
@@ -321,8 +364,8 @@ async function startServer() {
   // =========================================================================
   // AUTHENTICATION & SESSIONS
   // =========================================================================
-  app.get('/api/auth/session', (req, res) => {
-    const user = getAuthenticatedUser(req);
+  app.get('/api/auth/session', async (req, res) => {
+    const user = await getAuthenticatedUserAsync(req);
     if (!user) {
       res.json({ authenticated: false, user: null });
       return;
@@ -331,75 +374,87 @@ async function startServer() {
   });
 
   app.post('/api/auth/register', authLimiter, async (req, res) => {
-    const { name, email, password } = req.body as {
-      name?: string;
-      email?: string;
-      password?: string;
-    };
+    try {
+      const { name, email, password } = req.body as {
+        name?: string;
+        email?: string;
+        password?: string;
+      };
 
-    const trimmedName = (name || '').trim();
-    const trimmedEmail = (email || '').trim().toLowerCase();
-    const rawPassword = String(password || '');
+      const trimmedName = String(name || '').trim();
+      const trimmedEmail = String(email || '').trim().toLowerCase();
+      const rawPassword = String(password || '');
 
-    if (trimmedName.length < 2 || trimmedName.length > 80) {
-      res.status(400).json({ error: 'Name must be between 2 and 80 characters.' });
-      return;
-    }
-    if (!EMAIL_REGEX.test(trimmedEmail)) {
-      res.status(400).json({ error: 'Please enter a valid email address.' });
-      return;
-    }
-    if (rawPassword.length < 8 || rawPassword.length > 128) {
-      res.status(400).json({ error: 'Password must be at least 8 characters long.' });
-      return;
-    }
+      if (trimmedName.length < 2 || trimmedName.length > 80) {
+        res.status(400).json({ error: 'Name must be between 2 and 80 characters.' });
+        return;
+      }
+      if (!EMAIL_REGEX.test(trimmedEmail)) {
+        res.status(400).json({ error: 'Please enter a valid email address.' });
+        return;
+      }
+      if (rawPassword.length < 8 || rawPassword.length > 128) {
+        res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+        return;
+      }
 
-    if (repo.getUserByEmail(trimmedEmail)) {
-      res.status(409).json({ error: 'An account with this email already exists. Please sign in.' });
-      return;
-    }
+      if (await repo.findUserByEmail(trimmedEmail)) {
+        res.status(409).json({ error: 'An account with this email already exists. Please sign in.' });
+        return;
+      }
 
-    const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword);
-    setSessionCookie(req, res, user.id);
-    res.status(201).json({ user: repo.toPublicProfile(user) });
+      const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword);
+      const token = setSessionCookie(req, res, user.id);
+      res.status(201).json({ user: repo.toPublicProfile(user), token });
+    } catch (err) {
+      console.error('Register error:', err);
+      res.status(500).json({ error: 'Failed to create account. Please try again.' });
+    }
   });
 
-  app.post('/api/auth/login', authLimiter, (req, res) => {
-    const { email, password } = req.body as { email?: string; password?: string };
-    const trimmedEmail = (email || '').trim().toLowerCase();
-    const rawPassword = String(password || '');
+  app.post('/api/auth/login', authLimiter, async (req, res) => {
+    try {
+      const { email, password } = req.body as { email?: string; password?: string };
+      const trimmedEmail = String(email || '').trim().toLowerCase();
+      const rawPassword = String(password || '');
 
-    if (!EMAIL_REGEX.test(trimmedEmail) || !rawPassword) {
-      res.status(400).json({ error: 'Email and password are required.' });
-      return;
+      if (!EMAIL_REGEX.test(trimmedEmail) || !rawPassword) {
+        res.status(400).json({ error: 'Email and password are required.' });
+        return;
+      }
+
+      const user = await repo.findUserByEmail(trimmedEmail);
+      if (!user || !verifyPassword(rawPassword, user.passwordHash)) {
+        res.status(401).json({ error: 'Invalid email or password.' });
+        return;
+      }
+
+      const token = setSessionCookie(req, res, user.id);
+      res.json({ user: repo.toPublicProfile(user), token });
+    } catch (err) {
+      console.error('Login error:', err);
+      res.status(500).json({ error: 'Failed to sign in. Please try again.' });
     }
-
-    const user = repo.getUserByEmail(trimmedEmail);
-    if (!user || !verifyPassword(rawPassword, user.passwordHash)) {
-      res.status(401).json({ error: 'Invalid email or password.' });
-      return;
-    }
-
-    setSessionCookie(req, res, user.id);
-    res.json({ user: repo.toPublicProfile(user) });
   });
 
-  app.post('/api/auth/logout', (_req, res) => {
-    clearSessionCookie(res);
+  app.post('/api/auth/logout', (req, res) => {
+    clearSessionCookie(req, res);
     res.json({ ok: true });
   });
 
   // =========================================================================
   // PUBLIC CATALOG & SERVER-GATED CHAPTER DELIVERY
   // =========================================================================
-  app.get('/api/stories', (req, res) => {
+  app.get('/api/stories', async (req, res) => {
     const q = String(req.query.q || '').trim().toLowerCase();
     const genre = String(req.query.genre || 'All').trim();
     const status = String(req.query.status || 'All').trim();
     const tier = String(req.query.tier || 'All').trim();
     const sort = String(req.query.sort || 'popular').trim();
 
-    let stories = repo.getStories().map(sanitizeStoryForPublic);
+    const user = await getAuthenticatedUserAsync(req);
+    const isOwner = user?.role === 'owner';
+    let stories = repo.getStories({ includeUnpublished: isOwner }).map(sanitizeStoryForPublic);
 
     stories = stories.filter((story) => {
       const matchesSearch =
@@ -430,8 +485,11 @@ async function startServer() {
     res.json({ stories });
   });
 
-  app.get('/api/stories/:slug', (req, res) => {
-    const story = repo.getStoryBySlug(req.params.slug);
+  app.get('/api/stories/:slug', async (req, res) => {
+    const user = await getAuthenticatedUserAsync(req);
+    const story = repo.getStoryBySlug(req.params.slug, {
+      includeUnpublished: user?.role === 'owner'
+    });
     if (!story) {
       res.status(404).json({ error: 'Story not found.' });
       return;
@@ -439,8 +497,11 @@ async function startServer() {
     res.json({ story: sanitizeStoryForPublic(story) });
   });
 
-  app.get('/api/stories/:slug/chapters/:chapterNumber', (req, res) => {
-    const story = repo.getStoryBySlug(req.params.slug);
+  app.get('/api/stories/:slug/chapters/:chapterNumber', async (req, res) => {
+    const user = await getAuthenticatedUserAsync(req);
+    const story = repo.getStoryBySlug(req.params.slug, {
+      includeUnpublished: user?.role === 'owner'
+    });
     if (!story) {
       res.status(404).json({ error: 'Story not found.' });
       return;
@@ -452,7 +513,6 @@ async function startServer() {
       return;
     }
 
-    const user = getAuthenticatedUser(req);
     const allowed = repo.hasAccessToChapter(user, story, chapter);
     if (!allowed) {
       res.status(403).json({
@@ -589,15 +649,18 @@ async function startServer() {
       return;
     }
     const safeTag: CommentTag = (['Reaction', 'Lore', 'Theory'].includes(String(tag)) ? tag : 'Reaction') as CommentTag;
-    const comment = repo.addComment({
-      id: `cmt_${crypto.randomUUID()}`,
-      storyId,
-      chapterId,
-      authorName: req.currentUser!.name,
-      tag: safeTag,
-      body: cleanedBody,
-      createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    });
+    const comment = repo.addComment(
+      {
+        id: `cmt_${crypto.randomUUID()}`,
+        storyId,
+        chapterId,
+        authorName: req.currentUser!.name,
+        tag: safeTag,
+        body: cleanedBody,
+        createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      },
+      req.currentUser!.id
+    );
     res.status(201).json({ comment });
   });
 
@@ -828,6 +891,7 @@ async function startServer() {
       coverImage?: string;
       accessTier?: AccessTier;
       priceNgn?: number;
+      publicationStatus?: PublicationStatus;
     };
 
     const title = String(body.title || '').trim();
@@ -836,6 +900,10 @@ async function startServer() {
       res.status(400).json({ error: 'Story title and synopsis are required.' });
       return;
     }
+
+    const pubStatus: PublicationStatus = (['draft', 'review', 'published'].includes(String(body.publicationStatus))
+      ? body.publicationStatus
+      : 'draft') as PublicationStatus;
 
     const story = repo.addStory({
       slug: title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
@@ -847,8 +915,9 @@ async function startServer() {
       tags: [String(body.genre || 'Fiction').trim(), 'Serialized'],
       coverImage: String(body.coverImage || '/assets/images/book_cover_obsidian_throne_1794465561565.jpg'),
       synopsis,
-      prologueLore: 'Published directly from the Lorethos Publishing Desk.',
+      prologueLore: 'Authored in the Lorethos Publishing Desk.',
       status: 'Ongoing',
+      publicationStatus: pubStatus,
       accessTier: (['free', 'subscription', 'purchase'].includes(String(body.accessTier))
         ? body.accessTier
         : 'subscription') as AccessTier,
@@ -863,6 +932,20 @@ async function startServer() {
     });
 
     res.status(201).json({ story: sanitizeStoryForPublic(story) });
+  });
+
+  app.patch('/api/admin/stories/:storyId/workflow', requireAuth, requireOwner, (req, res) => {
+    const { publicationStatus } = req.body as { publicationStatus?: PublicationStatus };
+    if (!['draft', 'review', 'published'].includes(String(publicationStatus))) {
+      res.status(400).json({ error: 'publicationStatus must be draft, review, or published.' });
+      return;
+    }
+    const updated = repo.updateStoryWorkflow(req.params.storyId, publicationStatus as PublicationStatus);
+    if (!updated) {
+      res.status(404).json({ error: 'Story not found.' });
+      return;
+    }
+    res.json({ story: sanitizeStoryForPublic(updated) });
   });
 
   app.post('/api/admin/stories/:storyId/chapters', requireAuth, requireOwner, (req, res) => {
@@ -948,7 +1031,10 @@ async function startServer() {
         chapterNumber?: number;
       };
 
-      const story = storySlug ? repo.getStoryBySlug(storySlug) : undefined;
+      const user = await getAuthenticatedUserAsync(req);
+      const story = storySlug
+        ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === 'owner' })
+        : undefined;
       const chNum = Number(chapterNumber);
       const chapter = story?.chapters.find((c) => c.chapterNumber === chNum);
 
@@ -957,7 +1043,6 @@ async function startServer() {
         return;
       }
 
-      const user = getAuthenticatedUser(req);
       if (!repo.hasAccessToChapter(user, story, chapter)) {
         res.status(403).json({
           error: 'Unlock this chapter before querying the companion on its full contents.',
@@ -1150,7 +1235,10 @@ async function startServer() {
         voiceName?: string;
       };
 
-      const story = storySlug ? repo.getStoryBySlug(storySlug) : undefined;
+      const user = await getAuthenticatedUserAsync(req);
+      const story = storySlug
+        ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === 'owner' })
+        : undefined;
       const chNum = Number(chapterNumber);
       const chapter = story?.chapters.find((c) => c.chapterNumber === chNum);
 
@@ -1159,7 +1247,6 @@ async function startServer() {
         return;
       }
 
-      const user = getAuthenticatedUser(req);
       if (!repo.hasAccessToChapter(user, story, chapter)) {
         res.status(403).json({
           error: 'Unlock this chapter before generating full chapter audio narration.',
@@ -1173,31 +1260,41 @@ async function startServer() {
         return;
       }
 
-      const allowedVoices = new Set(['Kore', 'Charon', 'Puck', 'Zephyr']);
+      const allowedVoices = new Set(['Kore', 'Charon', 'Puck', 'Zephyr', 'Fenrir']);
       const selectedVoice = voiceName && allowedVoices.has(voiceName) ? voiceName : 'Kore';
-      const cappedText = cleaned.slice(0, 3200);
+      const cappedText = cleaned.slice(0, 2400);
       const intro = `${story.title}. Chapter ${chapter.chapterNumber}: ${chapter.title}.\n\n`;
 
       const ai = getGeminiClient();
-      const response = await withTimeout(
-        ai.models.generateContent({
+      const interaction = await withTimeout(
+        ai.interactions.create({
           model: 'gemini-3.8-flash-lite-tts',
-          contents: `Read in a warm, clear literary audiobook narration style:\n\n${intro}${cappedText}`,
-          config: {
-            responseModalities: ['AUDIO'],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: selectedVoice,
+          input: [
+            {
+              type: 'text',
+              text: `${intro}${cappedText}`,
+              annotations: [
+                {
+                  type: 'speech_metadata',
+                  style: 'Warm, clear, expressive literary audiobook narrator',
                 },
-              },
+              ],
             },
+          ],
+          response_format: { type: 'audio' },
+          generation_config: {
+            speech_config: [
+              {
+                language: 'en-US',
+                voice: selectedVoice,
+              },
+            ],
           },
         }),
-        30000
+        45000
       );
 
-      const audioPart = response.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+      const audioPart = interaction.output_audio;
       if (!audioPart?.data) {
         res.status(502).json({ error: 'Audio narration was not returned by the model.' });
         return;
@@ -1205,8 +1302,148 @@ async function startServer() {
 
       res.json({
         audioBase64: audioPart.data,
-        mimeType: audioPart.mimeType || 'audio/wav',
+        mimeType: audioPart.mime_type || 'audio/wav',
         voiceName: selectedVoice,
+      });
+    } catch (err) {
+      const formatted = formatGeminiError(err);
+      res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+
+  // 5. Audio Transcription via Microphone / Recorded Audio (gemini-3.5-transcribe)
+  app.post('/api/ai/transcribe', aiLimiter, async (req, res) => {
+    try {
+      const { audioBase64, mimeType, contextHint } = req.body as {
+        audioBase64?: string;
+        mimeType?: string;
+        contextHint?: string;
+      };
+
+      const cleanedBase64 = String(audioBase64 || '')
+        .replace(/^data:audio\/[a-zA-Z0-9.+-]+;base64,/, '')
+        .trim();
+
+      if (!cleanedBase64 || cleanedBase64.length < 32) {
+        res.status(400).json({ error: 'Valid recorded audio is required for transcription.' });
+        return;
+      }
+
+      const rawMime = String(mimeType || 'audio/webm').split(';')[0].trim().toLowerCase();
+      const allowedAudioMimes = new Set([
+        'audio/webm',
+        'audio/wav',
+        'audio/mp3',
+        'audio/mpeg',
+        'audio/mp4',
+        'audio/ogg',
+        'audio/aac',
+        'audio/flac',
+      ]);
+      const safeMimeType = allowedAudioMimes.has(rawMime) ? rawMime : 'audio/webm';
+      const safeContext = String(contextHint || '').trim().slice(0, 200);
+      const instruction = safeContext
+        ? `Transcribe this spoken literary note clearly and accurately without adding commentary. Context: ${safeContext}`
+        : 'Transcribe this spoken audio clearly and accurately without adding commentary.';
+
+      const ai = getGeminiClient();
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-3.5-transcribe',
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: safeMimeType,
+                  data: cleanedBase64,
+                },
+              },
+              { text: instruction },
+            ],
+          },
+        }),
+        45000
+      );
+
+      res.json({
+        transcript: (response.text ?? '').trim(),
+      });
+    } catch (err) {
+      const formatted = formatGeminiError(err);
+      res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+
+  // 6. Text-to-Video Story Trailer / Scene Visualizer via Interactions API (gemini-omni-1.2-flash)
+  app.post('/api/ai/video', aiLimiter, async (req, res) => {
+    try {
+      const { prompt, aspectRatio, duration, storySlug } = req.body as {
+        prompt?: string;
+        aspectRatio?: '16:9' | '9:16';
+        duration?: '6s' | '10s';
+        storySlug?: string;
+      };
+
+      const cleanPrompt = String(prompt || '').trim().slice(0, 600);
+      if (cleanPrompt.length < 6) {
+        res.status(400).json({ error: 'Please describe the video scene in at least 6 characters.' });
+        return;
+      }
+
+      if (aspectRatio && aspectRatio !== '16:9' && aspectRatio !== '9:16') {
+        res.status(400).json({ error: 'Aspect ratio must be either 16:9 or 9:16.' });
+        return;
+      }
+
+      const safeAspectRatio: '16:9' | '9:16' = aspectRatio === '9:16' ? '9:16' : '16:9';
+      const safeDuration: '6s' | '10s' = duration === '6s' ? '6s' : '10s';
+
+      const user = await getAuthenticatedUserAsync(req);
+      const story = storySlug
+        ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === 'owner' })
+        : undefined;
+      if (storySlug && !story) {
+        res.status(404).json({ error: 'Referenced story was not found.' });
+        return;
+      }
+
+      const cinematicInput = story
+        ? `Atmospheric literary book trailer inspired by "${story.title}" (${story.genre}): ${cleanPrompt}`
+        : cleanPrompt;
+
+      const ai = getGeminiClient();
+      const interaction = await withTimeout(
+        ai.interactions.create(
+          {
+            model: 'gemini-omni-1.2-flash',
+            input: cinematicInput,
+            background: false,
+            store: false,
+            stream: false,
+            response_format: {
+              type: 'video',
+              aspect_ratio: safeAspectRatio,
+              duration: safeDuration,
+              resolution: '720p',
+            },
+          },
+          { timeout: 300000 }
+        ),
+        300000
+      );
+
+      const videoPart = interaction.output_video;
+      if (!videoPart || (!videoPart.data && !videoPart.uri)) {
+        res.status(502).json({ error: 'The model completed without returning a video clip.' });
+        return;
+      }
+
+      res.json({
+        videoBase64: videoPart.data || null,
+        videoUri: videoPart.uri || null,
+        mimeType: videoPart.mime_type || 'video/mp4',
+        aspectRatio: safeAspectRatio,
+        duration: safeDuration,
       });
     } catch (err) {
       const formatted = formatGeminiError(err);
@@ -1330,10 +1567,40 @@ async function startServer() {
     }
   });
 
-  if (process.env.NODE_ENV !== 'production') {
+  if ((options?.withVite ?? true) && process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
+    const hmrDisabled =
+      process.env.DISABLE_HMR === 'true' ||
+      Boolean(process.env.K_SERVICE && process.env.APPLET_ID);
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      plugins: hmrDisabled
+        ? [
+            {
+              name: 'lorethos-disable-hmr-ws',
+              transform(code, id) {
+                const cleanId = id.split('?', 1)[0];
+                if (
+                  cleanId.endsWith('/vite/dist/client/client.mjs') ||
+                  cleanId.endsWith('/@vite/client')
+                ) {
+                  return code.replace(
+                    'transport.connect(createHMRHandler(handleMessage));',
+                    '/* HMR WebSocket disabled */'
+                  );
+                }
+                return null;
+              },
+            },
+          ]
+        : [],
+      server: {
+        middlewareMode: true,
+        port: PORT,
+        allowedHosts: true,
+        ...(hmrDisabled
+          ? { hmr: false, ws: false, watch: null }
+          : { ws: options?.httpServer ? { server: options.httpServer } : false }),
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -1353,12 +1620,22 @@ async function startServer() {
     }
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Lorethos server listening on http://0.0.0.0:${PORT}`);
-  });
+  return app;
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+const isDirectExecution = !process.env.LORETHOS_NO_LISTEN;
+if (isDirectExecution) {
+  const httpServer = http.createServer();
+  createApp({ withVite: process.env.NODE_ENV !== 'production', httpServer })
+    .then((app) => {
+      httpServer.on('request', app);
+      httpServer.listen(PORT, '0.0.0.0', () => {
+        console.log(`Lorethos server listening on http://0.0.0.0:${PORT}`);
+      });
+    })
+    .catch((err) => {
+      console.error('Failed to start server:', err);
+      process.exit(1);
+    });
+}
+

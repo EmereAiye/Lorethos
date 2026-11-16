@@ -6,6 +6,7 @@ import {
   PaymentTransaction,
   ReaderSettings,
   AccessTier,
+  PublicationStatus,
   ReaderTheme,
   ReadingGoal,
   DayGoalHistory,
@@ -16,6 +17,7 @@ import {
   CommunityInquiry
 } from '../types';
 import { INITIAL_STORIES } from '../data/initialStories';
+import { apiFetch, parseJsonSafe, setStoredSessionToken } from '../lib/apiClient';
 
 export interface RouteParams {
   slug?: string;
@@ -120,6 +122,7 @@ interface AppContextType {
     coverImage: string;
     accessTier: AccessTier;
     priceNgn: number;
+    publicationStatus?: PublicationStatus;
   }) => Promise<{ ok: boolean; error?: string }>;
   addChapterToStory: (
     storyId: string,
@@ -136,6 +139,10 @@ interface AppContextType {
     tier: AccessTier,
     priceNgn: number,
     freeChaptersCount: number
+  ) => Promise<{ ok: boolean; error?: string }>;
+  updateStoryWorkflow: (
+    storyId: string,
+    publicationStatus: PublicationStatus
   ) => Promise<{ ok: boolean; error?: string }>;
 
   // Helper getters & gated chapter loader
@@ -537,11 +544,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
+  const refreshStories = useCallback(async () => {
+    try {
+      const catalogRes = await apiFetch('/api/stories');
+      if (catalogRes.ok) {
+        const catalogJson = await catalogRes.json();
+        if (Array.isArray(catalogJson.stories) && catalogJson.stories.length > 0) {
+          setStories(catalogJson.stories);
+        }
+      }
+    } catch {
+      // Safe fallback
+    }
+  }, []);
+
   const loadAccountExtras = useCallback(async () => {
     try {
       const [txRes, hlRes] = await Promise.all([
-        fetch('/api/account/transactions', { credentials: 'include' }),
-        fetch('/api/account/highlights', { credentials: 'include' })
+        apiFetch('/api/account/transactions'),
+        apiFetch('/api/account/highlights')
       ]);
       if (txRes.ok) {
         const txData = await txRes.json();
@@ -563,8 +584,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const bootstrap = async () => {
       try {
         const [catalogRes, sessionRes] = await Promise.all([
-          fetch('/api/stories'),
-          fetch('/api/auth/session', { credentials: 'include' })
+          apiFetch('/api/stories'),
+          apiFetch('/api/auth/session')
         ]);
 
         if (catalogRes.ok && mounted) {
@@ -592,10 +613,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const reference = urlParams.get('reference') || urlParams.get('trxref');
             if (reference) {
               try {
-                const verifyRes = await fetch('/api/payments/verify', {
+                const verifyRes = await apiFetch('/api/payments/verify', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  credentials: 'include',
                   body: JSON.stringify({ reference })
                 });
                 const verifyJson = await verifyRes.json();
@@ -617,6 +637,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 // Ignore verification error cleanly
               }
             }
+          } else {
+            setStoredSessionToken(null);
           }
         }
       } catch {
@@ -683,15 +705,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const login = async (email: string, password: string): Promise<{ error?: string }> => {
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email: email.trim(), password })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        return { error: data.error || 'Sign-in failed.' };
+      const data = await parseJsonSafe<{ user?: UserProfile; token?: string; error?: string }>(res);
+      if (!res.ok || !data?.user) {
+        return { error: data?.error || `Sign-in failed (${res.status}).` };
+      }
+      if (data.token) {
+        setStoredSessionToken(data.token);
       }
       setUser({
         ...data.user,
@@ -700,7 +724,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         )
       });
       setIsAuthenticated(true);
-      await loadAccountExtras();
+      await Promise.all([loadAccountExtras(), refreshStories()]);
       return {};
     } catch {
       return { error: 'Network error while signing in.' };
@@ -709,15 +733,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const register = async (name: string, email: string, password: string): Promise<{ error?: string }> => {
     try {
-      const res = await fetch('/api/auth/register', {
+      const res = await apiFetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ name, email, password })
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), password })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        return { error: data.error || 'Registration failed.' };
+      const data = await parseJsonSafe<{ user?: UserProfile; token?: string; error?: string }>(res);
+      if (!res.ok || !data?.user) {
+        return { error: data?.error || `Registration failed (${res.status}).` };
+      }
+      if (data.token) {
+        setStoredSessionToken(data.token);
       }
       setUser({
         ...data.user,
@@ -726,7 +752,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         )
       });
       setIsAuthenticated(true);
-      await loadAccountExtras();
+      await Promise.all([loadAccountExtras(), refreshStories()]);
       return {};
     } catch {
       return { error: 'Network error while creating account.' };
@@ -734,8 +760,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = async () => {
+    setStoredSessionToken(null);
     try {
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+      await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch {
       // Ignore network errors
     }
@@ -744,6 +771,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setHighlights([]);
     setAdminOverview(null);
     setUser(createGuestUser());
+    await refreshStories();
   };
 
   const openPaystackCheckout = (request: PaystackCheckoutRequest) => {
@@ -757,9 +785,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const cancelSubscription = async (): Promise<{ ok: boolean; error?: string }> => {
     if (!isAuthenticated) return { ok: false, error: 'Sign in required.' };
     try {
-      const res = await fetch('/api/account/subscription/cancel', {
+      const res = await apiFetch('/api/account/subscription/cancel', {
         method: 'POST',
-        credentials: 'include'
       });
       const data = await res.json();
       if (!res.ok) {
@@ -787,10 +814,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (isAuthenticated) {
-      void fetch('/api/account/bookmarks/toggle', {
+      void apiFetch('/api/account/bookmarks/toggle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ chapterId })
       });
     }
@@ -829,10 +855,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           window.clearTimeout(progressSaveTimerRef.current);
         }
         progressSaveTimerRef.current = window.setTimeout(() => {
-          void fetch('/api/account/progress', {
+          void apiFetch('/api/account/progress', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
             body: JSON.stringify({ storyId, chapterId, chapterNumber, progressPercent: rounded })
           });
         }, 2500);
@@ -844,10 +869,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const syncGoalToServer = useCallback(
     (goal: ReadingGoal) => {
       if (!isAuthenticated) return;
-      void fetch('/api/account/goal', {
+      void apiFetch('/api/account/goal', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ readingGoal: goal })
       });
     },
@@ -966,10 +990,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (isAuthenticated) {
-      void fetch('/api/account/highlights', {
+      void apiFetch('/api/account/highlights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify(record)
       }).then(async (res) => {
         if (res.ok) {
@@ -983,16 +1006,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const removeHighlight = (highlightId: string) => {
     setHighlights(prev => prev.filter(h => h.id !== highlightId));
     if (isAuthenticated) {
-      void fetch(`/api/account/highlights/${encodeURIComponent(highlightId)}`, {
+      void apiFetch(`/api/account/highlights/${encodeURIComponent(highlightId)}`, {
         method: 'DELETE',
-        credentials: 'include'
       });
     }
   };
 
   const loadChapterComments = useCallback(async (chapterId: string) => {
     try {
-      const res = await fetch(`/api/comments?chapterId=${encodeURIComponent(chapterId)}`);
+      const res = await apiFetch(`/api/comments?chapterId=${encodeURIComponent(chapterId)}`);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.comments)) {
@@ -1009,10 +1031,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { error: 'Please sign in on the Account page before posting comments.' };
     }
     try {
-      const res = await fetch('/api/comments', {
+      const res = await apiFetch('/api/comments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify(input)
       });
       const data = await res.json();
@@ -1029,15 +1050,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteChapterComment = async (commentId: string) => {
     setChapterComments(prev => prev.filter(c => c.id !== commentId));
     if (isAuthenticated) {
-      await fetch(`/api/comments/${encodeURIComponent(commentId)}`, {
+      await apiFetch(`/api/comments/${encodeURIComponent(commentId)}`, {
         method: 'DELETE',
-        credentials: 'include'
       });
     }
   };
 
   const submitInquiry = async (input: InquiryInput): Promise<CommunityInquiry> => {
-    const res = await fetch('/api/inquiries', {
+    const res = await apiFetch('/api/inquiries', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input)
@@ -1053,7 +1073,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const refreshAdminOverview = useCallback(async () => {
     try {
-      const res = await fetch('/api/admin/overview', { credentials: 'include' });
+      const res = await apiFetch('/api/admin/overview');
       if (res.ok) {
         const data: AdminOverviewData = await res.json();
         setAdminOverview(data);
@@ -1073,12 +1093,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     coverImage: string;
     accessTier: AccessTier;
     priceNgn: number;
+    publicationStatus?: PublicationStatus;
   }): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const res = await fetch('/api/admin/stories', {
+      const res = await apiFetch('/api/admin/stories', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify(input)
       });
       const data = await res.json();
@@ -1101,10 +1121,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   ): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const res = await fetch(`/api/admin/stories/${encodeURIComponent(storyId)}/chapters`, {
+      const res = await apiFetch(`/api/admin/stories/${encodeURIComponent(storyId)}/chapters`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify(chapterData)
       });
       const data = await res.json();
@@ -1125,14 +1144,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     freeChaptersCount: number
   ): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const res = await fetch(`/api/admin/stories/${encodeURIComponent(storyId)}/pricing`, {
+      const res = await apiFetch(`/api/admin/stories/${encodeURIComponent(storyId)}/pricing`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ accessTier, priceNgn, freeChaptersCount })
       });
       const data = await res.json();
       if (!res.ok) return { ok: false, error: data.error || 'Failed to update pricing.' };
+      if (data.story) {
+        setStories(prev => prev.map(s => (s.id === storyId ? data.story : s)));
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Network error.' };
+    }
+  };
+
+  const updateStoryWorkflow = async (
+    storyId: string,
+    publicationStatus: PublicationStatus
+  ): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await apiFetch(`/api/admin/stories/${encodeURIComponent(storyId)}/workflow`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publicationStatus })
+      });
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data.error || 'Failed to update workflow status.' };
       if (data.story) {
         setStories(prev => prev.map(s => (s.id === storyId ? data.story : s)));
       }
@@ -1160,9 +1199,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const fetchChapterContent = useCallback(async (storySlug: string, chapterNumber: number) => {
     try {
-      const res = await fetch(
-        `/api/stories/${encodeURIComponent(storySlug)}/chapters/${chapterNumber}`,
-        { credentials: 'include' }
+      const res = await apiFetch(
+        `/api/stories/${encodeURIComponent(storySlug)}/chapters/${chapterNumber}`
       );
       const data = await res.json();
       if (res.status === 403 || data.locked) {
@@ -1243,6 +1281,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addStory,
         addChapterToStory,
         updateStoryPricing,
+        updateStoryWorkflow,
         getStoryBySlug,
         getChapter,
         fetchChapterContent,

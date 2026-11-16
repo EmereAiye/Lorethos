@@ -1,17 +1,18 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { PaystackModal } from './components/PaystackModal';
-import { HomeView } from './views/HomeView';
-import { LibraryView } from './views/LibraryView';
-import { StoryOverviewView } from './views/StoryOverviewView';
-import { ReaderView } from './views/ReaderView';
-import { PricingView } from './views/PricingView';
-import { AccountView } from './views/AccountView';
-import { ContactView } from './views/ContactView';
-import { AdminView } from './views/AdminView';
-import { CheckCircle2, X } from 'lucide-react';
+import { CheckCircle2, X, Loader2 } from 'lucide-react';
+
+const HomeView = lazy(() => import('./views/HomeView').then((m) => ({ default: m.HomeView })));
+const LibraryView = lazy(() => import('./views/LibraryView').then((m) => ({ default: m.LibraryView })));
+const StoryOverviewView = lazy(() => import('./views/StoryOverviewView').then((m) => ({ default: m.StoryOverviewView })));
+const ReaderView = lazy(() => import('./views/ReaderView').then((m) => ({ default: m.ReaderView })));
+const PricingView = lazy(() => import('./views/PricingView').then((m) => ({ default: m.PricingView })));
+const AccountView = lazy(() => import('./views/AccountView').then((m) => ({ default: m.AccountView })));
+const ContactView = lazy(() => import('./views/ContactView').then((m) => ({ default: m.ContactView })));
+const AdminView = lazy(() => import('./views/AdminView').then((m) => ({ default: m.AdminView })));
 
 const MainContent: React.FC = () => {
   const {
@@ -76,7 +77,16 @@ const MainContent: React.FC = () => {
       )}
 
       <main className="flex-1">
-        {renderCurrentView()}
+        <Suspense
+          fallback={
+            <div className="py-24 flex flex-col items-center justify-center gap-3 text-xs font-sans-ui opacity-70">
+              <Loader2 className="w-6 h-6 animate-spin text-[#C85A32]" />
+              <span>Loading view...</span>
+            </div>
+          }
+        >
+          {renderCurrentView()}
+        </Suspense>
       </main>
       <Footer />
       <PaystackModal />

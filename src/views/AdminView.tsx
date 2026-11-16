@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   BookOpen,
@@ -16,7 +16,10 @@ import {
   Download,
   Lock
 } from 'lucide-react';
-import { AccessTier } from '../types';
+import { AccessTier, PublicationStatus } from '../types';
+import { VoiceDictationButton } from '../components/VoiceDictationButton';
+import { VideoTrailerStudio } from '../components/VideoTrailerStudio';
+import { apiFetch } from '../lib/apiClient';
 
 export const AdminView: React.FC = () => {
   const {
@@ -28,6 +31,7 @@ export const AdminView: React.FC = () => {
     addStory,
     addChapterToStory,
     updateStoryPricing,
+    updateStoryWorkflow,
     navigate,
     buildHref
   } = useApp();
@@ -47,7 +51,10 @@ export const AdminView: React.FC = () => {
   const [newStorySynopsis, setNewStorySynopsis] = useState('');
   const [newStoryPrice, setNewStoryPrice] = useState(2500);
   const [newStoryTier, setNewStoryTier] = useState<AccessTier>('subscription');
+  const [newStoryPubStatus, setNewStoryPubStatus] = useState<PublicationStatus>('draft');
   const [newStoryCover, setNewStoryCover] = useState('/assets/images/book_cover_obsidian_throne_1794465561565.jpg');
+  const createDialogRef = useRef<HTMLDivElement | null>(null);
+  const createTriggerRef = useRef<HTMLElement | null>(null);
 
   // New Chapter Form
   const [newChapterTitle, setNewChapterTitle] = useState('');
@@ -70,11 +77,17 @@ export const AdminView: React.FC = () => {
 
   useEffect(() => {
     if (!isCreatingStory) return;
+    createTriggerRef.current = document.activeElement as HTMLElement | null;
+    const t = window.setTimeout(() => createDialogRef.current?.focus(), 10);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setIsCreatingStory(false);
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKey);
+      createTriggerRef.current?.focus?.();
+    };
   }, [isCreatingStory]);
 
   if (!isOwner) {
@@ -127,7 +140,8 @@ export const AdminView: React.FC = () => {
       synopsis: newStorySynopsis,
       coverImage: newStoryCover,
       accessTier: newStoryTier,
-      priceNgn: Number(newStoryPrice)
+      priceNgn: Number(newStoryPrice),
+      publicationStatus: newStoryPubStatus
     });
 
     if (!res.ok) {
@@ -139,7 +153,7 @@ export const AdminView: React.FC = () => {
     setNewStoryTitle('');
     setNewStorySynopsis('');
     void refreshAdminOverview();
-    showToast('Story published to server catalog.');
+    showToast(`Story saved as ${newStoryPubStatus}.`);
   };
 
   const handleAddChapter = async (e: React.FormEvent) => {
@@ -171,7 +185,7 @@ export const AdminView: React.FC = () => {
   const handleDownloadZip = async () => {
     setExportingZip(true);
     try {
-      const res = await fetch('/api/export-zip', { credentials: 'include' });
+      const res = await apiFetch('/api/export-zip');
       if (!res.ok) throw new Error('Failed to generate ZIP');
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -195,10 +209,9 @@ export const AdminView: React.FC = () => {
     setAiDraftingChapter(true);
     setAiAdminError(null);
     try {
-      const res = await fetch('/api/ai/scriptorium', {
+      const res = await apiFetch('/api/ai/scriptorium', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           task: 'draft_chapter',
           storyTitle: selectedStory.title,
@@ -227,10 +240,9 @@ export const AdminView: React.FC = () => {
     setAiCraftingSynopsis(true);
     setAiAdminError(null);
     try {
-      const res = await fetch('/api/ai/scriptorium', {
+      const res = await apiFetch('/api/ai/scriptorium', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           task: 'craft_synopsis',
           storyTitle: newStoryTitle || 'Untitled Chronicle',
@@ -438,11 +450,15 @@ export const AdminView: React.FC = () => {
                     <img
                       src={story.coverImage}
                       alt=""
+                      loading="lazy"
                       className="w-10 h-14 object-cover rounded shrink-0 shadow-2xs"
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="text-[10px] text-[#C85A32] font-semibold uppercase font-sans-ui">
-                        {story.genre}
+                      <div className="flex items-center justify-between gap-1 text-[10px] text-[#C85A32] font-semibold uppercase font-sans-ui">
+                        <span className="truncate">{story.genre}</span>
+                        <span className="px-1.5 py-0.5 rounded bg-current/10 uppercase">
+                          {story.publicationStatus || 'published'}
+                        </span>
                       </div>
                       <div className="font-display text-sm font-bold truncate">
                         {story.title}
@@ -464,11 +480,34 @@ export const AdminView: React.FC = () => {
                   </div>
                   <h2 className="font-display text-2xl font-bold">{selectedStory.title}</h2>
                   <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
-                    Author: {selectedStory.author} &middot; Status: {selectedStory.status}
+                    Author: {selectedStory.author} &middot; Serialization: {selectedStory.status}
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label htmlFor="admin-story-workflow" className="sr-only">
+                    Publication workflow status
+                  </label>
+                  <select
+                    id="admin-story-workflow"
+                    value={selectedStory.publicationStatus || 'published'}
+                    onChange={async (e) => {
+                      const nextStatus = e.target.value as PublicationStatus;
+                      const res = await updateStoryWorkflow(selectedStory.id, nextStatus);
+                      if (res.ok) {
+                        void refreshAdminOverview();
+                        showToast(`Workflow status updated to ${nextStatus}.`);
+                      } else {
+                        showToast(res.error || 'Could not update workflow.');
+                      }
+                    }}
+                    className="px-2.5 py-2 border border-[#2D142C]/20 dark:border-white/20 rounded-lg text-xs font-semibold bg-white dark:bg-[#1E111E]"
+                  >
+                    <option value="draft">Workflow: Draft</option>
+                    <option value="review">Workflow: In Review</option>
+                    <option value="published">Workflow: Published</option>
+                  </select>
+
                   <button
                     type="button"
                     onClick={() => {
@@ -559,6 +598,12 @@ export const AdminView: React.FC = () => {
                         placeholder="Describe scene beats..."
                         className="flex-1 px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-transparent"
                       />
+                      <VoiceDictationButton
+                        compact
+                        label="Dictate Beats"
+                        contextHint={`Scene beats for ${selectedStory.title}`}
+                        onTranscript={(text) => setAiScenePrompt((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))}
+                      />
                       <button
                         type="button"
                         disabled={aiDraftingChapter}
@@ -600,9 +645,19 @@ export const AdminView: React.FC = () => {
                   </div>
 
                   <div>
-                    <label htmlFor="admin-chapter-content" className="block font-semibold mb-1">
-                      Chapter Prose (separate paragraphs with blank lines)
-                    </label>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <label htmlFor="admin-chapter-content" className="block font-semibold">
+                        Chapter Prose (separate paragraphs with blank lines)
+                      </label>
+                      <VoiceDictationButton
+                        compact
+                        label="Dictate Prose"
+                        contextHint={`Narrative prose for ${selectedStory.title}, Chapter ${newChapterNumber}`}
+                        onTranscript={(text) =>
+                          setNewChapterContent((prev) => (prev.trim() ? `${prev.trim()}\n\n${text}` : text))
+                        }
+                      />
+                    </div>
                     <textarea
                       id="admin-chapter-content"
                       rows={8}
@@ -665,6 +720,17 @@ export const AdminView: React.FC = () => {
                   ))}
                 </div>
               </div>
+
+              <div className="pt-2">
+                <VideoTrailerStudio
+                  key={selectedStory.id}
+                  storySlug={selectedStory.slug}
+                  storyTitle={selectedStory.title}
+                  heading="Promotional Video Trailer Studio"
+                  description="Produce a 16:9 widescreen launch trailer or 9:16 vertical reel for this series."
+                  defaultPrompt={`${selectedStory.synopsis.slice(0, 180)} Dramatic book teaser with rich golden-hour atmosphere.`}
+                />
+              </div>
             </div>
           </div>
         )}
@@ -676,10 +742,12 @@ export const AdminView: React.FC = () => {
             onClick={() => setIsCreatingStory(false)}
           >
             <div
+              ref={createDialogRef}
+              tabIndex={-1}
               role="dialog"
               aria-modal="true"
               aria-labelledby="create-story-dialog-title"
-              className="bg-white dark:bg-[#1E111E] rounded-2xl max-w-xl w-full p-6 space-y-4 border border-[#2D142C]/15 dark:border-white/15 max-h-[90vh] overflow-y-auto"
+              className="bg-white dark:bg-[#1E111E] rounded-2xl max-w-xl w-full p-6 space-y-4 border border-[#2D142C]/15 dark:border-white/15 max-h-[90vh] overflow-y-auto focus:outline-none"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between border-b pb-3 border-current/10">
@@ -762,7 +830,7 @@ export const AdminView: React.FC = () => {
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label htmlFor="new-story-tier" className="block font-semibold mb-1">
                       Access Tier
@@ -789,6 +857,21 @@ export const AdminView: React.FC = () => {
                       onChange={(e) => setNewStoryPrice(Number(e.target.value))}
                       className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-transparent font-mono"
                     />
+                  </div>
+                  <div>
+                    <label htmlFor="new-story-pub-status" className="block font-semibold mb-1">
+                      Workflow Status
+                    </label>
+                    <select
+                      id="new-story-pub-status"
+                      value={newStoryPubStatus}
+                      onChange={(e) => setNewStoryPubStatus(e.target.value as PublicationStatus)}
+                      className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-white dark:bg-[#1E111E]"
+                    >
+                      <option value="draft">Draft (Private)</option>
+                      <option value="review">In Review (Private)</option>
+                      <option value="published">Published (Live)</option>
+                    </select>
                   </div>
                 </div>
 

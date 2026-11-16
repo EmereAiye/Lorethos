@@ -34,6 +34,7 @@ export const AccountView: React.FC = () => {
     navigate,
     buildHref,
     openPaystackCheckout,
+    toggleBookmark,
     highlights,
     removeHighlight
   } = useApp();
@@ -91,13 +92,34 @@ export const AccountView: React.FC = () => {
     e.preventDefault();
     setAuthError(null);
     setAuthMessage(null);
+
+    const trimmedEmail = authEmail.trim();
+    const trimmedName = authName.trim();
+
+    if (authMode === 'signup' && trimmedName.length < 2) {
+      setAuthError('Full name must be at least 2 characters.');
+      return;
+    }
+    if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setAuthError('Please enter a valid email address.');
+      return;
+    }
+    if (!authPassword) {
+      setAuthError('Please enter your password.');
+      return;
+    }
+    if (authMode === 'signup' && authPassword.length < 8) {
+      setAuthError('Password must be at least 8 characters long.');
+      return;
+    }
+
     setAuthSubmitting(true);
 
     try {
       const res =
         authMode === 'signin'
-          ? await login(authEmail, authPassword)
-          : await register(authName, authEmail, authPassword);
+          ? await login(trimmedEmail, authPassword)
+          : await register(trimmedName, trimmedEmail, authPassword);
 
       if (res.error) {
         setAuthError(res.error);
@@ -134,13 +156,14 @@ export const AccountView: React.FC = () => {
               )}
             </div>
 
-            <form onSubmit={handleAuthSubmit} className="lg:col-span-6 space-y-3 text-xs font-sans-ui">
+            <form onSubmit={handleAuthSubmit} noValidate className="lg:col-span-6 space-y-3 text-xs font-sans-ui">
               <div className="flex gap-2 border-b border-current/10 pb-2">
                 <button
                   type="button"
                   onClick={() => {
                     setAuthMode('signin');
                     setAuthError(null);
+                    setAuthMessage(null);
                   }}
                   className={`px-3 py-1.5 rounded font-semibold cursor-pointer ${
                     authMode === 'signin' ? 'bg-[#C85A32] text-white' : 'opacity-70 hover:opacity-100'
@@ -153,6 +176,7 @@ export const AccountView: React.FC = () => {
                   onClick={() => {
                     setAuthMode('signup');
                     setAuthError(null);
+                    setAuthMessage(null);
                   }}
                   className={`px-3 py-1.5 rounded font-semibold cursor-pointer ${
                     authMode === 'signup' ? 'bg-[#C85A32] text-white' : 'opacity-70 hover:opacity-100'
@@ -171,6 +195,7 @@ export const AccountView: React.FC = () => {
                     id="auth-name"
                     type="text"
                     required
+                    autoComplete="name"
                     value={authName}
                     onChange={(e) => setAuthName(e.target.value)}
                     placeholder="Your full name"
@@ -187,6 +212,7 @@ export const AccountView: React.FC = () => {
                   id="auth-email"
                   type="email"
                   required
+                  autoComplete="email"
                   value={authEmail}
                   onChange={(e) => setAuthEmail(e.target.value)}
                   placeholder="you@example.com"
@@ -196,13 +222,14 @@ export const AccountView: React.FC = () => {
 
               <div>
                 <label htmlFor="auth-password" className="block font-semibold mb-1">
-                  Password (min. 8 characters)
+                  {authMode === 'signup' ? 'Password (min. 8 characters)' : 'Password'}
                 </label>
                 <input
                   id="auth-password"
                   type="password"
                   required
-                  minLength={8}
+                  minLength={authMode === 'signup' ? 8 : undefined}
+                  autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'}
                   value={authPassword}
                   onChange={(e) => setAuthPassword(e.target.value)}
                   placeholder="Enter password"
@@ -442,6 +469,7 @@ export const AccountView: React.FC = () => {
                         <img
                           src={story.coverImage}
                           alt={story.title}
+                          loading="lazy"
                           className="w-16 h-22 object-cover rounded shadow-xs shrink-0"
                         />
                         <div className="space-y-1 min-w-0">
@@ -589,7 +617,7 @@ export const AccountView: React.FC = () => {
                     className="p-4 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 flex items-center justify-between gap-4"
                   >
                     <div className="flex items-center gap-4 min-w-0">
-                      <img src={ch.storyCover} alt="" className="w-10 h-14 object-cover rounded shrink-0" />
+                      <img src={ch.storyCover} alt="" loading="lazy" className="w-10 h-14 object-cover rounded shrink-0" />
                       <div className="min-w-0">
                         <div className="text-[11px] text-[#C85A32] font-semibold font-sans-ui">
                           {ch.storyTitle} &middot; Chapter {ch.chapterNumber}
@@ -601,13 +629,23 @@ export const AccountView: React.FC = () => {
                       </div>
                     </div>
 
-                    <a
-                      href={buildHref('reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
-                      onClick={(e) => handleLink(e, 'reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
-                      className="text-xs font-semibold text-[#C85A32] hover:underline shrink-0"
-                    >
-                      Open Chapter &rarr;
-                    </a>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <a
+                        href={buildHref('reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
+                        onClick={(e) => handleLink(e, 'reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
+                        className="text-xs font-semibold text-[#C85A32] hover:underline"
+                      >
+                        Open Chapter &rarr;
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => toggleBookmark(ch.id)}
+                        aria-label={`Remove bookmark for ${ch.title}`}
+                        className="p-1.5 text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

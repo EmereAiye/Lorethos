@@ -1,6 +1,6 @@
 {
   "name": "Lorethos",
   "description": "Original digital storytelling, serialized publishing, and distraction-free reader platform.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,7 +1,17 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    networks:
+      - internal
+    mem_limit: 512m
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-lorethos}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lorethos_dev_password}
@@ -15,14 +25,37 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: "no"
+    networks:
+      - internal
+    mem_limit: 256m
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lorethos}:${POSTGRES_PASSWORD:-lorethos_dev_password}@postgres:5432/${POSTGRES_DB:-lorethos}
+    command: ["node", "dist-server/migrate.js"]
+
   api:
     build:
       context: .
       dockerfile: Dockerfile.api
     restart: unless-stopped
+    networks:
+      - internal
+    mem_limit: 512m
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -44,6 +77,11 @@ services:
       context: .
       dockerfile: Dockerfile.web
     restart: unless-stopped
+    networks:
+      - public
+      - internal
+    mem_limit: 256m
+    logging: *default-logging
     depends_on:
       api:
         condition: service_healthy
@@ -52,6 +90,13 @@ services:
     ports:
       - "8080:80"
       - "8443:443"
+
+networks:
+  public:
+    driver: bridge
+  internal:
+    driver: bridge
+    internal: true
 
 volumes:
   pgdata:

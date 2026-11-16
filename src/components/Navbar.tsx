@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { BookOpen, User, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck } from 'lucide-react';
 
@@ -15,16 +15,24 @@ export const Navbar: React.FC = () => {
   } = useApp();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileToggleRef = useRef<HTMLButtonElement | null>(null);
+  const firstMobileLinkRef = useRef<HTMLAnchorElement | null>(null);
 
   useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const t = window.setTimeout(() => firstMobileLinkRef.current?.focus(), 10);
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setMobileMenuOpen(false);
+        mobileToggleRef.current?.focus();
       }
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [mobileMenuOpen]);
 
   if (currentRoute === 'reader') {
     return null;
@@ -235,6 +243,7 @@ export const Navbar: React.FC = () => {
 
           {/* Mobile Drawer Trigger */}
           <button
+            ref={mobileToggleRef}
             type="button"
             onClick={() => setMobileMenuOpen((prev) => !prev)}
             aria-expanded={mobileMenuOpen}
@@ -255,6 +264,7 @@ export const Navbar: React.FC = () => {
         >
           <nav aria-label="Mobile navigation" className="flex flex-col space-y-2">
             <a
+              ref={firstMobileLinkRef}
               href={buildHref('stories')}
               onClick={(e) => handleNavClick(e, 'stories')}
               className={`px-3 py-2.5 rounded-lg font-medium ${

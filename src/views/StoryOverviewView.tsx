@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   CheckCircle2
 } from 'lucide-react';
+import { VideoTrailerStudio } from '../components/VideoTrailerStudio';
 
 export const StoryOverviewView: React.FC = () => {
   const {
@@ -280,6 +281,12 @@ export const StoryOverviewView: React.FC = () => {
 
           </div>
         </div>
+
+        <VideoTrailerStudio
+          storySlug={story.slug}
+          storyTitle={story.title}
+          defaultPrompt={`${story.synopsis.slice(0, 180)} Atmospheric book trailer, painterly lighting, slow camera push.`}
+        />
 
         {/* Chapter Directory */}
         <section className="space-y-6 pt-6 border-t border-[#2D142C]/10 dark:border-white/10">

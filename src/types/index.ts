@@ -2,6 +2,8 @@ export type AccessTier = 'free' | 'subscription' | 'purchase';
 
 export type StoryStatus = 'Ongoing' | 'Completed' | 'Hiatus';
 
+export type PublicationStatus = 'draft' | 'review' | 'published';
+
 export type ReaderTheme = 'day' | 'sepia' | 'night';
 
 export type ReaderFont = 'literata' | 'garamond' | 'sans';
@@ -36,6 +38,7 @@ export interface Story {
   synopsis: string;
   prologueLore: string;
   status: StoryStatus;
+  publicationStatus?: PublicationStatus;
   accessTier: AccessTier;
   priceNgn: number;
   rating: number;

@@ -181,6 +181,7 @@ export const HomeView: React.FC = () => {
                   <img
                     src={story.coverImage}
                     alt={`${story.title} cover`}
+                    loading="lazy"
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   />
                   <div className="absolute top-3 right-3">
@@ -270,6 +271,7 @@ export const HomeView: React.FC = () => {
                       <img
                         src={ch.storyCover}
                         alt=""
+                        loading="lazy"
                         className="w-12 h-16 rounded object-cover shrink-0 border border-[#2D142C]/10"
                       />
                       <div className="min-w-0">
