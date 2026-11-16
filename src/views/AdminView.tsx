@@ -1,55 +1,55 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { 
-  ShieldCheck, 
-  BookOpen, 
-  Plus, 
-  DollarSign, 
-  Users, 
-  TrendingUp, 
-  Edit3, 
-  Save, 
-  Trash2, 
-  CheckCircle2, 
-  Image as ImageIcon,
+import {
+  BookOpen,
+  Plus,
+  DollarSign,
+  Users,
+  TrendingUp,
+  Edit3,
+  Save,
+  CheckCircle2,
   Key,
   Layers,
-  ArrowRight,
   Sparkles,
-  Loader2
+  Loader2,
+  Download,
+  Lock
 } from 'lucide-react';
-import { Story, Chapter, AccessTier, StoryStatus } from '../types';
+import { AccessTier } from '../types';
 
 export const AdminView: React.FC = () => {
-  const { 
-    stories, 
-    transactions, 
-    user, 
-    toggleRole, 
-    updateStory, 
-    addStory, 
-    addChapterToStory, 
+  const {
+    stories,
+    user,
+    isAuthenticated,
+    adminOverview,
+    refreshAdminOverview,
+    addStory,
+    addChapterToStory,
     updateStoryPricing,
-    navigate
+    navigate,
+    buildHref
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'studio' | 'pricing' | 'ledger' | 'assets'>('studio');
+  const [activeTab, setActiveTab] = useState<'studio' | 'pricing' | 'ledger' | 'inquiries'>('studio');
   const [selectedStoryId, setSelectedStoryId] = useState<string>(stories[0]?.id || '');
   const [isCreatingStory, setIsCreatingStory] = useState(false);
   const [isAddingChapter, setIsAddingChapter] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [exportingZip, setExportingZip] = useState(false);
 
-  // New Story Form State
+  // New Story Form
   const [newStoryTitle, setNewStoryTitle] = useState('');
   const [newStorySubtitle, setNewStorySubtitle] = useState('');
-  const [newStoryAuthor, setNewStoryAuthor] = useState('Lorethos Scriptorium');
+  const [newStoryAuthor, setNewStoryAuthor] = useState('Lorethos Editorial');
   const [newStoryGenre, setNewStoryGenre] = useState('Epic Fantasy');
   const [newStorySynopsis, setNewStorySynopsis] = useState('');
   const [newStoryPrice, setNewStoryPrice] = useState(2500);
   const [newStoryTier, setNewStoryTier] = useState<AccessTier>('subscription');
   const [newStoryCover, setNewStoryCover] = useState('/assets/images/book_cover_obsidian_throne_1794465561565.jpg');
 
-  // New Chapter Form State
+  // New Chapter Form
   const [newChapterTitle, setNewChapterTitle] = useState('');
   const [newChapterNumber, setNewChapterNumber] = useState(1);
   const [newChapterExcerpt, setNewChapterExcerpt] = useState('');
@@ -60,72 +60,134 @@ export const AdminView: React.FC = () => {
   const [aiCraftingSynopsis, setAiCraftingSynopsis] = useState(false);
   const [aiAdminError, setAiAdminError] = useState<string | null>(null);
 
+  const isOwner = isAuthenticated && user.role === 'owner';
+
+  useEffect(() => {
+    if (isOwner) {
+      void refreshAdminOverview();
+    }
+  }, [isOwner, refreshAdminOverview]);
+
+  useEffect(() => {
+    if (!isCreatingStory) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsCreatingStory(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isCreatingStory]);
+
+  if (!isOwner) {
+    return (
+      <div className="min-h-screen bg-[#F9F6F0] dark:bg-[#160C16] text-[#2D142C] dark:text-[#F9F6F0] py-20 px-4">
+        <div className="max-w-lg mx-auto p-8 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center space-y-4">
+          <div className="w-12 h-12 rounded-full bg-[#C85A32]/15 text-[#C85A32] flex items-center justify-center mx-auto">
+            <Lock className="w-6 h-6" />
+          </div>
+          <h1 className="font-display text-2xl font-bold">Owner Authorization Required</h1>
+          <p className="text-xs text-[#2D142C]/70 dark:text-white/70 font-sans-ui leading-relaxed">
+            Publishing Desk is restricted to authenticated owner accounts authorized by the server. Client-side role switching is disabled.
+          </p>
+          <a
+            href={buildHref('account')}
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('account');
+            }}
+            className="inline-block px-5 py-2.5 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg"
+          >
+            Sign In on Account Page
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   const selectedStory = stories.find(s => s.id === selectedStoryId) || stories[0];
+  const grossRevenueNgn = adminOverview?.grossRevenueNgn ?? 0;
+  const activeSubscribers = adminOverview?.activeSubscribers ?? 0;
+  const totalUsers = adminOverview?.totalRegisteredUsers ?? 0;
+  const adminTransactions = adminOverview?.transactions ?? [];
+  const adminInquiries = adminOverview?.inquiries ?? [];
 
-  const totalRevenueNgn = transactions.reduce((acc, curr) => acc + curr.amountNgn, 2450000);
-  const totalReads = stories.reduce((acc, curr) => acc + curr.totalReads, 0);
+  const showToast = (msg: string) => {
+    setStatusMessage(msg);
+    setTimeout(() => setStatusMessage(null), 3500);
+  };
 
-  const handleCreateStory = (e: React.FormEvent) => {
+  const handleCreateStory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStoryTitle.trim()) return;
 
-    addStory({
-      slug: newStoryTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+    const res = await addStory({
       title: newStoryTitle,
-      subtitle: newStorySubtitle || 'An Original Lorethos Saga',
+      subtitle: newStorySubtitle || 'An Original Lorethos Release',
       author: newStoryAuthor,
-      authorBio: 'Prolific writer under the Lorethos independent imprint.',
       genre: newStoryGenre,
-      tags: [newStoryGenre, 'Serialized', 'New Release'],
-      coverImage: newStoryCover,
       synopsis: newStorySynopsis,
-      prologueLore: 'Transcribed from the foundational manuscripts of the Scriptorium.',
-      status: 'Ongoing',
+      coverImage: newStoryCover,
       accessTier: newStoryTier,
-      priceNgn: Number(newStoryPrice),
-      rating: 5.0,
-      ratingsCount: 1,
-      totalChapters: 1,
-      totalReads: 120,
-      freeChaptersCount: 3,
-      featured: false,
-      updatedAt: 'Just now'
+      priceNgn: Number(newStoryPrice)
     });
+
+    if (!res.ok) {
+      showToast(res.error || 'Could not publish story.');
+      return;
+    }
 
     setIsCreatingStory(false);
     setNewStoryTitle('');
     setNewStorySynopsis('');
-    showToast('New story published to catalog successfully!');
+    void refreshAdminOverview();
+    showToast('Story published to server catalog.');
   };
 
-  const handleAddChapter = (e: React.FormEvent) => {
+  const handleAddChapter = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newChapterTitle.trim() || !selectedStory) return;
 
-    const paragraphs = newChapterContent.split('\n\n').filter(p => p.trim().length > 0);
-
-    addChapterToStory(selectedStory.id, {
+    const paragraphs = newChapterContent.split('\n\n').map(p => p.trim()).filter(Boolean);
+    const res = await addChapterToStory(selectedStory.id, {
       chapterNumber: Number(newChapterNumber),
       title: newChapterTitle,
-      slug: newChapterTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-      releaseDate: 'Today',
-      wordCount: Math.round(newChapterContent.split(' ').length) || 1500,
-      readTimeMinutes: Math.max(3, Math.round(newChapterContent.split(' ').length / 250)),
-      isFree: newChapterIsFree,
-      excerpt: newChapterExcerpt || paragraphs[0] || 'A new chapter begins in the annals of Lorethos.',
-      content: paragraphs.length > 0 ? paragraphs : ['The ink settles upon the page.']
+      excerpt: newChapterExcerpt || paragraphs[0] || 'New chapter published.',
+      content: paragraphs.length > 0 ? paragraphs : ['Chapter text coming soon.'],
+      isFree: newChapterIsFree
     });
+
+    if (!res.ok) {
+      showToast(res.error || 'Failed to add chapter.');
+      return;
+    }
 
     setIsAddingChapter(false);
     setNewChapterTitle('');
     setNewChapterContent('');
     setNewChapterExcerpt('');
-    showToast(`Chapter ${newChapterNumber} published to "${selectedStory.title}"!`);
+    void refreshAdminOverview();
+    showToast(`Chapter ${newChapterNumber} published to "${selectedStory.title}".`);
   };
 
-  const showToast = (msg: string) => {
-    setStatusMessage(msg);
-    setTimeout(() => setStatusMessage(null), 3000);
+  const handleDownloadZip = async () => {
+    setExportingZip(true);
+    try {
+      const res = await fetch('/api/export-zip', { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to generate ZIP');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'lorethos-source.zip';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast('Source archive downloaded.');
+    } catch {
+      showToast('Could not download ZIP archive.');
+    } finally {
+      setExportingZip(false);
+    }
   };
 
   const handleAIDraftChapter = async () => {
@@ -136,27 +198,24 @@ export const AdminView: React.FC = () => {
       const res = await fetch('/api/ai/scriptorium', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           task: 'draft_chapter',
           storyTitle: selectedStory.title,
           genre: selectedStory.genre,
           chapterTitle: newChapterTitle || `Chapter ${newChapterNumber}`,
-          outline: aiScenePrompt || `Continue the serialized narrative of ${selectedStory.title}.`
+          outline: aiScenePrompt || `Continue ${selectedStory.title}.`
         })
       });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Failed to draft chapter.');
       }
-      if (data.excerpt && !newChapterExcerpt.trim()) {
-        setNewChapterExcerpt(data.excerpt);
-      } else if (data.excerpt) {
-        setNewChapterExcerpt(data.excerpt);
-      }
+      if (data.excerpt) setNewChapterExcerpt(data.excerpt);
       if (Array.isArray(data.paragraphs) && data.paragraphs.length > 0) {
         setNewChapterContent(data.paragraphs.join('\n\n'));
       }
-      showToast('Scriptorium AI generated a chapter draft!');
+      showToast('Chapter draft generated.');
     } catch (err) {
       setAiAdminError(err instanceof Error ? err.message : 'Unable to draft chapter.');
     } finally {
@@ -171,6 +230,7 @@ export const AdminView: React.FC = () => {
       const res = await fetch('/api/ai/scriptorium', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           task: 'craft_synopsis',
           storyTitle: newStoryTitle || 'Untitled Chronicle',
@@ -184,7 +244,7 @@ export const AdminView: React.FC = () => {
       }
       if (data.synopsis) {
         setNewStorySynopsis(data.synopsis);
-        showToast('Synopsis crafted with Scriptorium AI!');
+        showToast('Synopsis generated.');
       }
     } catch (err) {
       setAiAdminError(err instanceof Error ? err.message : 'Unable to craft synopsis.');
@@ -196,153 +256,168 @@ export const AdminView: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#F9F6F0] dark:bg-[#160C16] text-[#2D142C] dark:text-[#F9F6F0] py-12 transition-colors">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
-        
-        {/* Toast */}
+
         {statusMessage && (
-          <div className="fixed bottom-6 right-6 z-50 bg-[#2D142C] text-white px-5 py-3 rounded-lg shadow-2xl border border-[#C85A32] flex items-center gap-2 text-xs font-sans-ui animate-in fade-in">
+          <div
+            role="status"
+            className="fixed bottom-6 right-6 z-50 bg-[#2D142C] text-white px-5 py-3 rounded-lg shadow-2xl border border-[#C85A32] flex items-center gap-2 text-xs font-sans-ui"
+          >
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             <span>{statusMessage}</span>
           </div>
         )}
 
-        {/* Admin Header */}
+        {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-8 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs">
           <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-bold tracking-widest uppercase bg-[#C85A32]/10 text-[#C85A32] px-2 py-0.5 rounded font-sans-ui">
-                OWNER COMMAND CENTER
-              </span>
-              <span className="text-xs text-[#2D142C]/60 dark:text-white/60">
-                Independent Publishing Platform
-              </span>
-            </div>
+            <span className="text-[11px] font-bold tracking-widest uppercase bg-[#C85A32]/10 text-[#C85A32] px-2 py-0.5 rounded font-sans-ui">
+              PUBLISHER ADMIN DESK
+            </span>
             <h1 className="font-display text-3xl sm:text-4xl font-bold">
               Lorethos Publishing Desk
             </h1>
             <p className="text-xs text-[#2D142C]/70 dark:text-white/70 font-sans-ui">
-              Manage stories, write serialized chapters, configure Naira pricing rules, and monitor Paystack reader revenue.
+              Manage published works, add serialized chapters, configure pricing rules, and inspect verified orders.
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={toggleRole}
-              className="px-3.5 py-2 text-xs rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] transition-colors cursor-pointer font-sans-ui"
+              type="button"
+              onClick={handleDownloadZip}
+              disabled={exportingZip}
+              className="px-3.5 py-2 text-xs rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] hover:text-[#C85A32] transition-colors cursor-pointer font-sans-ui flex items-center gap-1.5 disabled:opacity-60"
             >
-              Mode: {user.role === 'owner' ? 'Owner (Active)' : 'Reader'} (Click to toggle)
+              {exportingZip ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+              <span>{exportingZip ? 'Zipping...' : 'Export Code (.zip)'}</span>
             </button>
             <button
+              type="button"
               onClick={() => setIsCreatingStory(true)}
               className="px-4 py-2.5 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg flex items-center gap-2 transition-colors cursor-pointer shadow-xs"
             >
               <Plus className="w-4 h-4" />
-              <span>Create New Story</span>
+              <span>Publish New Story</span>
             </button>
           </div>
         </div>
 
-        {/* KPI Summary Cards */}
+        {/* Verified Server KPI Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
           <div className="p-6 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-2">
-            <div className="flex items-center justify-between text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
-              <span>Gross Revenue (Paystack)</span>
+            <div className="flex items-center justify-between text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+              <span>Verified Gross Revenue</span>
               <DollarSign className="w-4 h-4 text-[#C85A32]" />
             </div>
-            <div className="font-sans-ui text-2xl sm:text-3xl font-bold tabular-nums text-[#2D142C] dark:text-white">
-              ₦{totalRevenueNgn.toLocaleString('en-NG')}
+            <div className="font-sans-ui text-2xl sm:text-3xl font-bold tabular-nums">
+              ₦{grossRevenueNgn.toLocaleString('en-NG')}
             </div>
-            <p className="text-[11px] text-emerald-600 font-medium">
-              +18.4% from last month &middot; Nigerian Cards & USSD
+            <p className="text-[11px] text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
+              Settled Paystack orders
             </p>
           </div>
 
           <div className="p-6 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-2">
-            <div className="flex items-center justify-between text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
-              <span>Active Patron Subscribers</span>
+            <div className="flex items-center justify-between text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+              <span>Active Subscribers</span>
               <Users className="w-4 h-4 text-[#C85A32]" />
             </div>
-            <div className="font-sans-ui text-2xl sm:text-3xl font-bold tabular-nums text-[#2D142C] dark:text-white">
-              842
+            <div className="font-sans-ui text-2xl sm:text-3xl font-bold tabular-nums">
+              {activeSubscribers}
             </div>
             <p className="text-[11px] text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
-              ₦3,500/mo &middot; 92.4% renewal retention
+              {totalUsers} registered account{totalUsers === 1 ? '' : 's'}
             </p>
           </div>
 
           <div className="p-6 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-2">
-            <div className="flex items-center justify-between text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
-              <span>Total Chapter Reads</span>
+            <div className="flex items-center justify-between text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+              <span>Published Chapters</span>
               <BookOpen className="w-4 h-4 text-[#C85A32]" />
             </div>
-            <div className="font-sans-ui text-2xl sm:text-3xl font-bold tabular-nums text-[#2D142C] dark:text-white">
-              {totalReads.toLocaleString()}
+            <div className="font-sans-ui text-2xl sm:text-3xl font-bold tabular-nums">
+              {stories.reduce((acc, s) => acc + s.chapters.length, 0)}
             </div>
             <p className="text-[11px] text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
-              Across {stories.length} catalog novels
+              Across catalog stories
             </p>
           </div>
 
           <div className="p-6 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-2">
-            <div className="flex items-center justify-between text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
-              <span>Published Titles</span>
+            <div className="flex items-center justify-between text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+              <span>Published Stories</span>
               <Layers className="w-4 h-4 text-[#C85A32]" />
             </div>
-            <div className="font-sans-ui text-2xl sm:text-3xl font-bold tabular-nums text-[#2D142C] dark:text-white">
+            <div className="font-sans-ui text-2xl sm:text-3xl font-bold tabular-nums">
               {stories.length}
             </div>
             <p className="text-[11px] text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
-              All series have 3-chapter freemium hooks
+              Live in catalog
             </p>
           </div>
         </div>
 
         {/* Section Tabs */}
-        <div className="flex border-b border-[#2D142C]/10 dark:border-white/10 gap-2 font-sans-ui text-xs font-semibold">
+        <div className="flex border-b border-[#2D142C]/10 dark:border-white/10 gap-2 font-sans-ui text-xs font-semibold overflow-x-auto">
           <button
+            type="button"
             onClick={() => setActiveTab('studio')}
-            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'studio'
                 ? 'border-[#C85A32] text-[#C85A32]'
-                : 'border-transparent text-[#2D142C]/60 dark:text-white/60 hover:text-[#C85A32]'
+                : 'border-transparent text-[#2D142C]/65 dark:text-white/65 hover:text-[#C85A32]'
             }`}
           >
             <Edit3 className="w-3.5 h-3.5" />
-            <span>Story & Chapter Studio</span>
+            <span>Story &amp; Chapter Studio</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('pricing')}
-            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'pricing'
                 ? 'border-[#C85A32] text-[#C85A32]'
-                : 'border-transparent text-[#2D142C]/60 dark:text-white/60 hover:text-[#C85A32]'
+                : 'border-transparent text-[#2D142C]/65 dark:text-white/65 hover:text-[#C85A32]'
             }`}
           >
             <Key className="w-3.5 h-3.5" />
-            <span>Access & Pricing Rules</span>
+            <span>Access &amp; Pricing Rules</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('ledger')}
-            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
+            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'ledger'
                 ? 'border-[#C85A32] text-[#C85A32]'
-                : 'border-transparent text-[#2D142C]/60 dark:text-white/60 hover:text-[#C85A32]'
+                : 'border-transparent text-[#2D142C]/65 dark:text-white/65 hover:text-[#C85A32]'
             }`}
           >
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>Subscriber & Revenue Ledger</span>
+            <span>Order Ledger ({adminTransactions.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('inquiries')}
+            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'inquiries'
+                ? 'border-[#C85A32] text-[#C85A32]'
+                : 'border-transparent text-[#2D142C]/65 dark:text-white/65 hover:text-[#C85A32]'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>Contact Messages ({adminInquiries.length})</span>
           </button>
         </div>
 
-        {/* Tab 1: Story & Chapter Studio */}
-        {activeTab === 'studio' && (
+        {/* Tab 1: Studio */}
+        {activeTab === 'studio' && selectedStory && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-            
-            {/* Story Selector List */}
             <div className="lg:col-span-4 bg-white dark:bg-[#1E111E] p-5 rounded-xl border border-[#2D142C]/10 dark:border-white/10 space-y-3">
               <div className="flex items-center justify-between">
-                <h3 className="font-display text-lg font-bold">Catalog Stories</h3>
+                <h2 className="font-display text-lg font-bold">Catalog Stories</h2>
                 <span className="text-[11px] font-mono text-[#2D142C]/60 dark:text-white/60">
                   {stories.length} Works
                 </span>
@@ -350,10 +425,11 @@ export const AdminView: React.FC = () => {
 
               <div className="space-y-2">
                 {stories.map(story => (
-                  <div
+                  <button
                     key={story.id}
+                    type="button"
                     onClick={() => setSelectedStoryId(story.id)}
-                    className={`p-3 rounded-lg border transition-all cursor-pointer flex items-center gap-3 ${
+                    className={`w-full text-left p-3 rounded-lg border transition-all cursor-pointer flex items-center gap-3 ${
                       selectedStory.id === story.id
                         ? 'border-[#C85A32] bg-[#C85A32]/5 ring-1 ring-[#C85A32]'
                         : 'border-[#2D142C]/10 dark:border-white/10 hover:border-[#C85A32]/40'
@@ -368,34 +444,33 @@ export const AdminView: React.FC = () => {
                       <div className="text-[10px] text-[#C85A32] font-semibold uppercase font-sans-ui">
                         {story.genre}
                       </div>
-                      <h4 className="font-display text-sm font-bold truncate">
+                      <div className="font-display text-sm font-bold truncate">
                         {story.title}
-                      </h4>
-                      <div className="text-[11px] text-[#2D142C]/50 dark:text-white/50 font-sans-ui">
+                      </div>
+                      <div className="text-[11px] text-[#2D142C]/55 dark:text-white/55 font-sans-ui">
                         {story.chapters.length} Chapters &middot; ₦{story.priceNgn}
                       </div>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
 
-            {/* Chapter Management & Editor */}
             <div className="lg:col-span-8 bg-white dark:bg-[#1E111E] p-6 rounded-xl border border-[#2D142C]/10 dark:border-white/10 space-y-6">
-              
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-[#2D142C]/10 dark:border-white/10 gap-3">
                 <div>
                   <div className="text-xs text-[#C85A32] font-semibold uppercase font-sans-ui">
-                    Editing Series
+                    Selected Series
                   </div>
-                  <h3 className="font-display text-2xl font-bold">{selectedStory.title}</h3>
-                  <p className="text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
+                  <h2 className="font-display text-2xl font-bold">{selectedStory.title}</h2>
+                  <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
                     Author: {selectedStory.author} &middot; Status: {selectedStory.status}
                   </p>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <button
+                    type="button"
                     onClick={() => {
                       setNewChapterNumber(selectedStory.chapters.length + 1);
                       setIsAddingChapter(true);
@@ -406,22 +481,25 @@ export const AdminView: React.FC = () => {
                     <span>Add Chapter {selectedStory.chapters.length + 1}</span>
                   </button>
 
-                  <button
-                    onClick={() => navigate('story-detail', { slug: selectedStory.slug })}
-                    className="px-3 py-2 border border-[#2D142C]/20 dark:border-white/20 text-xs font-medium rounded-lg hover:border-[#C85A32] transition-colors cursor-pointer"
+                  <a
+                    href={buildHref('story-detail', { slug: selectedStory.slug })}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      navigate('story-detail', { slug: selectedStory.slug });
+                    }}
+                    className="px-3 py-2 border border-[#2D142C]/20 dark:border-white/20 text-xs font-medium rounded-lg hover:border-[#C85A32] transition-colors"
                   >
-                    View Live
-                  </button>
+                    View Page
+                  </a>
                 </div>
               </div>
 
-              {/* Add Chapter Inline Modal/Form */}
-              {isAddingChapter ? (
+              {isAddingChapter && (
                 <form onSubmit={handleAddChapter} className="p-6 rounded-xl bg-[#F9F6F0] dark:bg-[#160C16] border border-[#C85A32]/40 space-y-4 text-xs font-sans-ui">
                   <div className="flex items-center justify-between">
-                    <h4 className="font-display text-lg font-bold">
-                      Add Chapter {newChapterNumber} to "{selectedStory.title}"
-                    </h4>
+                    <h3 className="font-display text-lg font-bold">
+                      Add Chapter {newChapterNumber} to &ldquo;{selectedStory.title}&rdquo;
+                    </h3>
                     <button
                       type="button"
                       onClick={() => setIsAddingChapter(false)}
@@ -433,46 +511,52 @@ export const AdminView: React.FC = () => {
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block font-semibold mb-1">Chapter Title</label>
+                      <label htmlFor="admin-chapter-title" className="block font-semibold mb-1">
+                        Chapter Title
+                      </label>
                       <input
+                        id="admin-chapter-title"
                         type="text"
                         required
                         value={newChapterTitle}
                         onChange={(e) => setNewChapterTitle(e.target.value)}
-                        placeholder="e.g. The Glass Tower of Ostraka"
+                        placeholder="Chapter title"
                         className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-white dark:bg-[#1E111E]"
                       />
                     </div>
                     <div>
-                      <label className="block font-semibold mb-1">Access Rule</label>
+                      <span className="block font-semibold mb-1">Access Rule</span>
                       <div className="flex items-center gap-4 pt-1">
-                        <label className="flex items-center gap-1.5 cursor-pointer">
+                        <label htmlFor="admin-chapter-free" className="flex items-center gap-1.5 cursor-pointer">
                           <input
+                            id="admin-chapter-free"
                             type="checkbox"
                             checked={newChapterIsFree}
                             onChange={(e) => setNewChapterIsFree(e.target.checked)}
                           />
-                          <span>Make this Chapter Free to all readers</span>
+                          <span>Free for all readers</span>
                         </label>
                       </div>
                     </div>
                   </div>
 
-                  {/* Scriptorium AI Chapter Copilot */}
                   <div className="p-4 rounded-xl bg-white dark:bg-[#1E111E] border border-[#C85A32]/30 space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-semibold text-[#C85A32] flex items-center gap-1.5">
                         <Sparkles className="w-3.5 h-3.5" />
-                        <span>Scriptorium AI Co-Writer</span>
+                        <span>AI Drafting Assistant</span>
                       </span>
-                      <span className="text-[11px] opacity-60">Generates teaser excerpt &amp; 3-4 prose paragraphs</span>
                     </div>
                     <div className="flex flex-col sm:flex-row gap-2">
+                      <label htmlFor="ai-scene-prompt" className="sr-only">
+                        Scene outline prompt
+                      </label>
                       <input
+                        id="ai-scene-prompt"
                         type="text"
                         value={aiScenePrompt}
                         onChange={(e) => setAiScenePrompt(e.target.value)}
-                        placeholder="Describe scene beats (e.g. 'Boma confronts the desert oracle under the eclipse')..."
+                        placeholder="Describe scene beats..."
                         className="flex-1 px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-transparent"
                       />
                       <button
@@ -489,37 +573,43 @@ export const AdminView: React.FC = () => {
                         ) : (
                           <>
                             <Sparkles className="w-3.5 h-3.5 text-[#C85A32]" />
-                            <span>Draft Chapter with AI</span>
+                            <span>Draft Chapter</span>
                           </>
                         )}
                       </button>
                     </div>
                     {aiAdminError && (
-                      <div className="text-[11px] text-red-600 dark:text-red-400">
+                      <div role="alert" className="text-[11px] text-red-600 dark:text-red-400">
                         {aiAdminError}
                       </div>
                     )}
                   </div>
 
                   <div>
-                    <label className="block font-semibold mb-1">Excerpt Teaser (shown in previews & paywalls)</label>
+                    <label htmlFor="admin-chapter-excerpt" className="block font-semibold mb-1">
+                      Excerpt Preview
+                    </label>
                     <input
+                      id="admin-chapter-excerpt"
                       type="text"
                       value={newChapterExcerpt}
                       onChange={(e) => setNewChapterExcerpt(e.target.value)}
-                      placeholder="One-sentence teaser hook..."
+                      placeholder="Short preview hook..."
                       className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-white dark:bg-[#1E111E]"
                     />
                   </div>
 
                   <div>
-                    <label className="block font-semibold mb-1">Chapter Body (separate paragraphs with blank lines)</label>
+                    <label htmlFor="admin-chapter-content" className="block font-semibold mb-1">
+                      Chapter Prose (separate paragraphs with blank lines)
+                    </label>
                     <textarea
+                      id="admin-chapter-content"
                       rows={8}
                       required
                       value={newChapterContent}
                       onChange={(e) => setNewChapterContent(e.target.value)}
-                      placeholder="Write or paste your literary chapter prose here..."
+                      placeholder="Write chapter paragraphs..."
                       className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-white dark:bg-[#1E111E] font-reader text-sm"
                     />
                   </div>
@@ -532,16 +622,15 @@ export const AdminView: React.FC = () => {
                     <span>Publish Chapter</span>
                   </button>
                 </form>
-              ) : null}
+              )}
 
-              {/* Chapters List */}
               <div className="space-y-3">
-                <h4 className="font-display text-base font-bold">
-                  Existing Chapters ({selectedStory.chapters.length})
-                </h4>
+                <h3 className="font-display text-base font-bold">
+                  Published Chapters ({selectedStory.chapters.length})
+                </h3>
                 <div className="divide-y divide-[#2D142C]/10 dark:divide-white/10 rounded-lg border border-[#2D142C]/10 dark:border-white/10 overflow-hidden">
                   {selectedStory.chapters.map(ch => (
-                    <div key={ch.id} className="p-3.5 flex items-center justify-between text-xs font-sans-ui hover:bg-[#2D142C]/[0.02]">
+                    <div key={ch.id} className="p-3.5 flex items-center justify-between text-xs font-sans-ui">
                       <div className="min-w-0 pr-4">
                         <div className="font-semibold text-sm truncate">
                           Ch. {ch.chapterNumber}: {ch.title}
@@ -552,39 +641,56 @@ export const AdminView: React.FC = () => {
                       </div>
 
                       <div className="flex items-center gap-3 shrink-0">
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
-                          ch.isFree
-                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                            : 'bg-[#C85A32]/10 text-[#C85A32]'
-                        }`}>
-                          {ch.isFree ? 'Free Chapter' : 'Patron Locked'}
-                        </span>
-                        <button
-                          onClick={() => navigate('reader', { slug: selectedStory.slug, chapterNumber: ch.chapterNumber })}
-                          className="text-[#C85A32] hover:underline cursor-pointer"
+                        <span
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
+                            ch.isFree
+                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                              : 'bg-[#C85A32]/10 text-[#C85A32]'
+                          }`}
                         >
-                          Read &rarr;
-                        </button>
+                          {ch.isFree ? 'Free' : 'Locked'}
+                        </span>
+                        <a
+                          href={buildHref('reader', { slug: selectedStory.slug, chapterNumber: ch.chapterNumber })}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            navigate('reader', { slug: selectedStory.slug, chapterNumber: ch.chapterNumber });
+                          }}
+                          className="text-[#C85A32] hover:underline"
+                        >
+                          Open &rarr;
+                        </a>
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
-
             </div>
-
           </div>
         )}
 
-        {/* Create Story Modal */}
+        {/* Create Story Dialog */}
         {isCreatingStory && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-            <div className="bg-white dark:bg-[#1E111E] rounded-2xl max-w-xl w-full p-6 space-y-4 border border-[#2D142C]/15 dark:border-white/15 max-h-[90vh] overflow-y-auto">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+            onClick={() => setIsCreatingStory(false)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="create-story-dialog-title"
+              className="bg-white dark:bg-[#1E111E] rounded-2xl max-w-xl w-full p-6 space-y-4 border border-[#2D142C]/15 dark:border-white/15 max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="flex items-center justify-between border-b pb-3 border-current/10">
-                <h3 className="font-display text-2xl font-bold">Publish New Story</h3>
+                <h2 id="create-story-dialog-title" className="font-display text-2xl font-bold">
+                  Publish New Story
+                </h2>
                 <button
+                  type="button"
                   onClick={() => setIsCreatingStory(false)}
-                  className="text-xs text-slate-500 hover:text-black cursor-pointer"
+                  aria-label="Close modal"
+                  className="text-xs text-slate-500 hover:text-black dark:hover:text-white cursor-pointer"
                 >
                   &times; Close
                 </button>
@@ -592,21 +698,27 @@ export const AdminView: React.FC = () => {
 
               <form onSubmit={handleCreateStory} className="space-y-4 text-xs font-sans-ui">
                 <div>
-                  <label className="block font-semibold mb-1">Story Title</label>
+                  <label htmlFor="new-story-title" className="block font-semibold mb-1">
+                    Story Title
+                  </label>
                   <input
+                    id="new-story-title"
                     type="text"
                     required
                     value={newStoryTitle}
                     onChange={(e) => setNewStoryTitle(e.target.value)}
-                    placeholder="e.g. Chronicles of the Silver Citadel"
+                    placeholder="Story title"
                     className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-transparent text-sm"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-semibold mb-1">Author Name</label>
+                    <label htmlFor="new-story-author" className="block font-semibold mb-1">
+                      Author Name
+                    </label>
                     <input
+                      id="new-story-author"
                       type="text"
                       required
                       value={newStoryAuthor}
@@ -615,8 +727,11 @@ export const AdminView: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <label className="block font-semibold mb-1">Genre</label>
+                    <label htmlFor="new-story-genre" className="block font-semibold mb-1">
+                      Genre
+                    </label>
                     <select
+                      id="new-story-genre"
                       value={newStoryGenre}
                       onChange={(e) => setNewStoryGenre(e.target.value)}
                       className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-white dark:bg-[#1E111E]"
@@ -625,41 +740,50 @@ export const AdminView: React.FC = () => {
                       <option value="Mythological Realism">Mythological Realism</option>
                       <option value="Afrofuturism">Afrofuturism</option>
                       <option value="Historical Mystery">Historical Mystery</option>
-                      <option value="Lost Epoch & Sci-Fi">Lost Epoch & Sci-Fi</option>
+                      <option value="Lost Epoch & Sci-Fi">Lost Epoch &amp; Sci-Fi</option>
                     </select>
                   </div>
                 </div>
 
                 <div>
-                  <label className="block font-semibold mb-1">Book Cover Artwork</label>
+                  <label htmlFor="new-story-cover" className="block font-semibold mb-1">
+                    Cover Artwork
+                  </label>
                   <select
+                    id="new-story-cover"
                     value={newStoryCover}
                     onChange={(e) => setNewStoryCover(e.target.value)}
                     className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-white dark:bg-[#1E111E]"
                   >
-                    <option value="/assets/images/book_cover_obsidian_throne_1794465561565.jpg">Obsidian Throne Art</option>
-                    <option value="/assets/images/book_cover_whispering_savanna_1794465562207.jpg">Whisper of the Baobab Art</option>
-                    <option value="/assets/images/book_cover_sunken_epoch_1794465563519.jpg">Sunken Epoch Art</option>
-                    <option value="/assets/images/book_cover_crimson_dynasty_1794465562273.jpg">Crimson Scribe Art</option>
+                    <option value="/assets/images/book_cover_obsidian_throne_1794465561565.jpg">Obsidian Throne Cover</option>
+                    <option value="/assets/images/book_cover_whispering_savanna_1794465562207.jpg">Whisper of the Baobab Cover</option>
+                    <option value="/assets/images/book_cover_sunken_epoch_1794465563519.jpg">Sunken Epoch Cover</option>
+                    <option value="/assets/images/book_cover_crimson_dynasty_1794465562273.jpg">Crimson Scribe Cover</option>
                   </select>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-semibold mb-1">Access Tier</label>
+                    <label htmlFor="new-story-tier" className="block font-semibold mb-1">
+                      Access Tier
+                    </label>
                     <select
+                      id="new-story-tier"
                       value={newStoryTier}
-                      onChange={(e) => setNewStoryTier(e.target.value as any)}
+                      onChange={(e) => setNewStoryTier(e.target.value as AccessTier)}
                       className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-white dark:bg-[#1E111E]"
                     >
-                      <option value="subscription">Patron Subscription Only</option>
-                      <option value="purchase">Single Purchase Unlocks</option>
-                      <option value="free">100% Free Access</option>
+                      <option value="subscription">Subscription</option>
+                      <option value="purchase">Single Purchase</option>
+                      <option value="free">Free</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block font-semibold mb-1">One-Time Price (₦ NGN)</label>
+                    <label htmlFor="new-story-price" className="block font-semibold mb-1">
+                      Price (₦ NGN)
+                    </label>
                     <input
+                      id="new-story-price"
                       type="number"
                       value={newStoryPrice}
                       onChange={(e) => setNewStoryPrice(Number(e.target.value))}
@@ -670,44 +794,35 @@ export const AdminView: React.FC = () => {
 
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="block font-semibold">Synopsis</label>
+                    <label htmlFor="new-story-synopsis" className="block font-semibold">
+                      Synopsis
+                    </label>
                     <button
                       type="button"
                       disabled={aiCraftingSynopsis}
                       onClick={handleAICraftSynopsis}
                       className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#C85A32] hover:underline disabled:opacity-55 cursor-pointer"
                     >
-                      {aiCraftingSynopsis ? (
-                        <>
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          <span>Crafting...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-3 h-3" />
-                          <span>Craft Synopsis with AI</span>
-                        </>
-                      )}
+                      <Sparkles className="w-3 h-3" />
+                      <span>{aiCraftingSynopsis ? 'Generating...' : 'Generate Synopsis'}</span>
                     </button>
                   </div>
                   <textarea
+                    id="new-story-synopsis"
                     rows={4}
                     required
                     value={newStorySynopsis}
                     onChange={(e) => setNewStorySynopsis(e.target.value)}
-                    placeholder="Enter an evocative synopsis for the readers..."
+                    placeholder="Enter story synopsis..."
                     className="w-full px-3 py-2 rounded border border-slate-300 dark:border-white/20 bg-transparent font-reader text-sm"
                   />
-                  {aiAdminError && (
-                    <p className="text-[11px] text-red-600 dark:text-red-400 mt-1">{aiAdminError}</p>
-                  )}
                 </div>
 
                 <button
                   type="submit"
                   className="w-full py-3 bg-[#C85A32] text-white font-semibold rounded-lg hover:bg-[#b04d28] cursor-pointer"
                 >
-                  Confirm & Publish Story
+                  Publish Story
                 </button>
               </form>
             </div>
@@ -718,9 +833,9 @@ export const AdminView: React.FC = () => {
         {activeTab === 'pricing' && (
           <div className="bg-white dark:bg-[#1E111E] p-6 rounded-xl border border-[#2D142C]/10 dark:border-white/10 space-y-6">
             <div>
-              <h3 className="font-display text-2xl font-bold">Access Tier & Pricing Configuration</h3>
-              <p className="text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui mt-0.5">
-                Toggle paywall rules, set individual Naira pricing for Paystack checkout, and choose the number of free chapters per series.
+              <h2 className="font-display text-2xl font-bold">Access Tier &amp; Pricing Rules</h2>
+              <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui mt-0.5">
+                Server-authoritative pricing and free chapter threshold per title.
               </p>
             </div>
 
@@ -730,56 +845,81 @@ export const AdminView: React.FC = () => {
                   <tr>
                     <th className="py-3 px-4">Story Title</th>
                     <th className="py-3 px-4">Access Tier</th>
-                    <th className="py-3 px-4">Naira Price (₦)</th>
-                    <th className="py-3 px-4">Free Chapters Hook</th>
-                    <th className="py-3 px-4">Action</th>
+                    <th className="py-3 px-4">One-Time Price (₦)</th>
+                    <th className="py-3 px-4">Free Chapters</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#2D142C]/10 dark:divide-white/10">
                   {stories.map(story => (
-                    <tr key={story.id} className="hover:bg-[#2D142C]/[0.02]">
+                    <tr key={story.id}>
                       <td className="py-3 px-4 font-bold">{story.title}</td>
                       <td className="py-3 px-4">
                         <select
+                          aria-label={`Access tier for ${story.title}`}
                           value={story.accessTier}
-                          onChange={(e) => updateStoryPricing(story.id, e.target.value as any, story.priceNgn, story.freeChaptersCount)}
+                          onChange={(e) =>
+                            void updateStoryPricing(
+                              story.id,
+                              e.target.value as AccessTier,
+                              story.priceNgn,
+                              story.freeChaptersCount
+                            )
+                          }
                           className="bg-transparent border border-slate-300 dark:border-white/20 rounded px-2 py-1 text-xs"
                         >
-                          <option value="subscription" className="bg-white dark:bg-[#1E111E]">Patron Subscription</option>
+                          <option value="subscription" className="bg-white dark:bg-[#1E111E]">Subscription</option>
                           <option value="purchase" className="bg-white dark:bg-[#1E111E]">Single Purchase</option>
-                          <option value="free" className="bg-white dark:bg-[#1E111E]">Completely Free</option>
+                          <option value="free" className="bg-white dark:bg-[#1E111E]">Free</option>
                         </select>
                       </td>
                       <td className="py-3 px-4">
                         <input
                           type="number"
+                          aria-label={`Price in NGN for ${story.title}`}
                           value={story.priceNgn}
-                          onChange={(e) => updateStoryPricing(story.id, story.accessTier, Number(e.target.value), story.freeChaptersCount)}
+                          onChange={(e) =>
+                            void updateStoryPricing(
+                              story.id,
+                              story.accessTier,
+                              Number(e.target.value),
+                              story.freeChaptersCount
+                            )
+                          }
                           className="w-24 px-2 py-1 border border-slate-300 dark:border-white/20 rounded font-mono text-xs"
                         />
                       </td>
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => updateStoryPricing(story.id, story.accessTier, story.priceNgn, Math.max(1, story.freeChaptersCount - 1))}
+                            type="button"
+                            onClick={() =>
+                              void updateStoryPricing(
+                                story.id,
+                                story.accessTier,
+                                story.priceNgn,
+                                Math.max(0, story.freeChaptersCount - 1)
+                              )
+                            }
                             className="px-2 py-0.5 border rounded cursor-pointer"
                           >
                             -
                           </button>
-                          <span className="font-semibold">{story.freeChaptersCount} Free Chs</span>
+                          <span className="font-semibold">{story.freeChaptersCount} Free</span>
                           <button
-                            onClick={() => updateStoryPricing(story.id, story.accessTier, story.priceNgn, story.freeChaptersCount + 1)}
+                            type="button"
+                            onClick={() =>
+                              void updateStoryPricing(
+                                story.id,
+                                story.accessTier,
+                                story.priceNgn,
+                                story.freeChaptersCount + 1
+                              )
+                            }
                             className="px-2 py-0.5 border rounded cursor-pointer"
                           >
                             +
                           </button>
                         </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="text-emerald-600 font-semibold text-[11px] flex items-center gap-1">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Active in Paystack</span>
-                        </span>
                       </td>
                     </tr>
                   ))}
@@ -789,56 +929,91 @@ export const AdminView: React.FC = () => {
           </div>
         )}
 
-        {/* Tab 3: Subscriber & Revenue Ledger */}
+        {/* Tab 3: Verified Order Ledger */}
         {activeTab === 'ledger' && (
-          <div className="space-y-6">
-            <div className="bg-white dark:bg-[#1E111E] p-6 rounded-xl border border-[#2D142C]/10 dark:border-white/10 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-display text-2xl font-bold">Paystack Webhooks & Transaction Ledger</h3>
-                  <p className="text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui mt-0.5">
-                    Real-time transaction settlement log from the Paystack payment gateway.
-                  </p>
-                </div>
-                <div className="text-xs bg-[#0BA4DB]/10 text-[#0BA4DB] px-3 py-1 rounded font-mono font-bold">
-                  NIBSS Direct Settlement: LIVE
-                </div>
-              </div>
+          <div className="bg-white dark:bg-[#1E111E] p-6 rounded-xl border border-[#2D142C]/10 dark:border-white/10 space-y-4">
+            <div>
+              <h2 className="font-display text-2xl font-bold">Server Order &amp; Webhook Ledger</h2>
+              <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui mt-0.5">
+                Recorded orders and settled Paystack transactions.
+              </p>
+            </div>
 
+            {adminTransactions.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[#2D142C]/60 dark:text-white/60 border border-dashed border-current/15 rounded-xl">
+                No orders have been initialized yet.
+              </div>
+            ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs font-sans-ui">
-                  <thead className="bg-[#2D142C]/5 dark:bg-white/5 border-b border-[#2D142C]/10 dark:border-white/10 text-[#2D142C]/70 dark:text-white/70">
+                  <thead className="bg-[#2D142C]/5 dark:bg-white/5 border-b border-[#2D142C]/10 dark:border-white/10">
                     <tr>
-                      <th className="py-3 px-4">Transaction Ref</th>
+                      <th className="py-3 px-4">Reference</th>
                       <th className="py-3 px-4">Customer Email</th>
-                      <th className="py-3 px-4">Item Transacted</th>
+                      <th className="py-3 px-4">Item</th>
                       <th className="py-3 px-4">Amount (NGN)</th>
-                      <th className="py-3 px-4">Channel</th>
-                      <th className="py-3 px-4">Settlement</th>
-                      <th className="py-3 px-4">Timestamp</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4">Date</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#2D142C]/10 dark:divide-white/10">
-                    {transactions.map(tx => (
-                      <tr key={tx.id} className="hover:bg-[#2D142C]/[0.02]">
+                    {adminTransactions.map(tx => (
+                      <tr key={tx.id}>
                         <td className="py-3 px-4 font-mono text-[11px] text-[#C85A32]">{tx.reference}</td>
                         <td className="py-3 px-4">{tx.customerEmail}</td>
                         <td className="py-3 px-4 font-medium">{tx.itemName}</td>
                         <td className="py-3 px-4 font-bold tabular-nums">₦{tx.amountNgn.toLocaleString('en-NG')}</td>
-                        <td className="py-3 px-4 uppercase text-[10px] font-semibold">{tx.channel}</td>
-                        <td className="py-3 px-4">
-                          <span className="inline-flex items-center gap-1 text-emerald-600 font-semibold text-[11px]">
-                            <CheckCircle2 className="w-3 h-3" />
-                            <span>Paid</span>
-                          </span>
+                        <td className="py-3 px-4 capitalize">{tx.status}</td>
+                        <td className="py-3 px-4 text-[#2D142C]/65 dark:text-white/65">
+                          {new Date(tx.date).toLocaleDateString()}
                         </td>
-                        <td className="py-3 px-4 text-[#2D142C]/60 dark:text-white/60">{tx.date}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 4: Contact Messages */}
+        {activeTab === 'inquiries' && (
+          <div className="bg-white dark:bg-[#1E111E] p-6 rounded-xl border border-[#2D142C]/10 dark:border-white/10 space-y-4">
+            <div>
+              <h2 className="font-display text-2xl font-bold">Contact Messages</h2>
+              <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui mt-0.5">
+                Messages submitted via the Contact page.
+              </p>
             </div>
+
+            {adminInquiries.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[#2D142C]/60 dark:text-white/60 border border-dashed border-current/15 rounded-xl">
+                No contact messages submitted yet.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {adminInquiries.map(inq => (
+                  <div
+                    key={inq.id}
+                    className="p-4 rounded-xl border border-[#2D142C]/10 dark:border-white/10 bg-[#F9F6F0]/50 dark:bg-[#160C16]/50 space-y-2 text-xs font-sans-ui"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-[#C85A32]/15 text-[#C85A32]">
+                          {inq.referenceId}
+                        </span>
+                        <span className="font-bold text-sm">{inq.subject}</span>
+                      </div>
+                      <span className="opacity-60">{inq.submittedAt}</span>
+                    </div>
+                    <div className="text-[11px] opacity-75">
+                      From <strong>{inq.name}</strong> ({inq.email}) &middot; {inq.inquiryType}
+                    </div>
+                    <p className="font-reader text-sm opacity-90 pt-1">{inq.message}</p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

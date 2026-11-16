@@ -1,26 +1,58 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { BookOpen, User, ShieldCheck, Sun, Moon, BookMarked, BookmarkCheck } from 'lucide-react';
-import { ReaderTheme } from '../types';
+import { BookOpen, User, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
-  const { currentRoute, navigate, user, toggleRole, readerSettings, setTheme, activeProgress } = useApp();
+  const {
+    currentRoute,
+    navigate,
+    buildHref,
+    user,
+    isAuthenticated,
+    readerSettings,
+    setTheme,
+    activeProgress
+  } = useApp();
+
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMobileMenuOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   if (currentRoute === 'reader') {
     return null;
   }
 
-  const isPatron = user.subscription.status === 'active';
-  const isOwner = user.role === 'owner';
+  const isPatron = isAuthenticated && user.subscription.status === 'active';
+  const isOwner = isAuthenticated && user.role === 'owner';
+
+  const handleNavClick = (
+    e: React.MouseEvent<HTMLAnchorElement>,
+    route: string,
+    params?: Parameters<typeof navigate>[1]
+  ) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    setMobileMenuOpen(false);
+    navigate(route, params);
+  };
 
   return (
     <header className="sticky top-0 z-40 w-full bg-[#F9F6F0]/95 dark:bg-[#160C16]/95 sepia:bg-[#F4ECE1]/95 backdrop-blur-md border-b border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/15 transition-colors">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-6">
-        
-        {/* Zone 1: Single Brand Lockup with Attached Logo */}
-        <button
-          onClick={() => navigate('home')}
-          className="flex items-center gap-3 text-left group whitespace-nowrap shrink-0 cursor-pointer focus:outline-none"
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-4">
+
+        {/* Zone 1: Brand Lockup */}
+        <a
+          href={buildHref('home')}
+          onClick={(e) => handleNavClick(e, 'home')}
+          className="flex items-center gap-3 text-left group whitespace-nowrap shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C85A32] rounded-lg"
         >
           <img
             src="/assets/aistudio/1A2959EF-E3CD-42F2-B9E5-21E771900F65_0f8daa7f.png"
@@ -35,97 +67,109 @@ export const Navbar: React.FC = () => {
               Digital Storytelling
             </span>
           </div>
-        </button>
+        </a>
 
-        {/* Zone 2: 4-5 Concise Single-line Nav Links */}
-        <nav className="hidden lg:flex items-center gap-7 text-sm font-medium">
-          <button
-            onClick={() => navigate('stories')}
-            className={`cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
+        {/* Zone 2: Primary Nav Links */}
+        <nav aria-label="Primary navigation" className="hidden lg:flex items-center gap-7 text-sm font-medium">
+          <a
+            href={buildHref('stories')}
+            onClick={(e) => handleNavClick(e, 'stories')}
+            aria-current={currentRoute === 'stories' ? 'page' : undefined}
+            className={`transition-colors whitespace-nowrap shrink-0 ${
               currentRoute === 'stories'
                 ? 'text-[#C85A32] font-semibold'
                 : 'text-[#2D142C]/80 dark:text-[#F9F6F0]/80 sepia:text-[#2C1E18]/80 hover:text-[#C85A32]'
             }`}
           >
             Library
-          </button>
-          
-          <button
-            onClick={() => navigate('pricing')}
-            className={`cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
+          </a>
+
+          <a
+            href={buildHref('pricing')}
+            onClick={(e) => handleNavClick(e, 'pricing')}
+            aria-current={currentRoute === 'pricing' ? 'page' : undefined}
+            className={`transition-colors whitespace-nowrap shrink-0 ${
               currentRoute === 'pricing'
                 ? 'text-[#C85A32] font-semibold'
                 : 'text-[#2D142C]/80 dark:text-[#F9F6F0]/80 sepia:text-[#2C1E18]/80 hover:text-[#C85A32]'
             }`}
           >
-            Patron Circle
-          </button>
+            Membership
+          </a>
 
-          <button
-            onClick={() => navigate('contact')}
-            className={`cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
+          <a
+            href={buildHref('contact')}
+            onClick={(e) => handleNavClick(e, 'contact')}
+            aria-current={currentRoute === 'contact' ? 'page' : undefined}
+            className={`transition-colors whitespace-nowrap shrink-0 ${
               currentRoute === 'contact'
                 ? 'text-[#C85A32] font-semibold'
                 : 'text-[#2D142C]/80 dark:text-[#F9F6F0]/80 sepia:text-[#2C1E18]/80 hover:text-[#C85A32]'
             }`}
           >
-            Community
-          </button>
+            Contact
+          </a>
 
-          <button
-            onClick={() => navigate('admin')}
-            className={`cursor-pointer transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
-              currentRoute === 'admin'
-                ? 'text-[#C85A32] font-semibold'
-                : 'text-[#2D142C]/70 dark:text-[#F9F6F0]/70 sepia:text-[#2C1E18]/70 hover:text-[#C85A32]'
-            }`}
-          >
-            <span>Publishing Desk</span>
-            {isOwner && (
-              <span className="text-[10px] bg-[#C85A32]/15 text-[#C85A32] px-1.5 py-0.5 rounded font-mono">
-                OWNER
-              </span>
-            )}
-          </button>
+          {isOwner && (
+            <a
+              href={buildHref('admin')}
+              onClick={(e) => handleNavClick(e, 'admin')}
+              aria-current={currentRoute === 'admin' ? 'page' : undefined}
+              className={`transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                currentRoute === 'admin'
+                  ? 'text-[#C85A32] font-semibold'
+                  : 'text-[#2D142C]/75 dark:text-[#F9F6F0]/75 sepia:text-[#2C1E18]/75 hover:text-[#C85A32]'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-[#C85A32]" />
+              <span>Publishing Desk</span>
+            </a>
+          )}
         </nav>
 
-        {/* Zone 3: Reading Progress, Theme Toggles & Action Area */}
-        <div className="flex items-center gap-3 shrink-0">
-          
-          {/* Active Reading Progress Quick Resume Pill */}
+        {/* Zone 3: Reading Progress, Theme Toggles & Actions */}
+        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
           {activeProgress && (
-            <button
-              onClick={() => navigate('reader', { slug: activeProgress.story.slug, chapterNumber: activeProgress.chapterNumber })}
-              className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#C85A32]/30 bg-[#C85A32]/5 hover:bg-[#C85A32]/10 transition-colors text-xs cursor-pointer group"
+            <a
+              href={buildHref('reader', {
+                slug: activeProgress.story.slug,
+                chapterNumber: activeProgress.chapterNumber
+              })}
+              onClick={(e) =>
+                handleNavClick(e, 'reader', {
+                  slug: activeProgress.story.slug,
+                  chapterNumber: activeProgress.chapterNumber
+                })
+              }
+              className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#C85A32]/30 bg-[#C85A32]/5 hover:bg-[#C85A32]/10 transition-colors text-xs group"
               title={`Resume reading: ${activeProgress.story.title}`}
             >
               <BookmarkCheck className="w-3.5 h-3.5 text-[#C85A32]" />
               <div className="flex flex-col text-left">
                 <span className="text-[10px] text-[#C85A32] font-semibold uppercase tracking-wider">
-                  Reading Progress
+                  Resume
                 </span>
-                <span className="text-xs font-medium text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] truncate max-w-[140px]">
+                <span className="text-xs font-medium text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] truncate max-w-[130px]">
                   {activeProgress.story.title} &middot; Ch {activeProgress.chapterNumber}
                 </span>
-              </div>
-              <div className="w-12 bg-[#2D142C]/10 dark:bg-white/15 h-1.5 rounded-full overflow-hidden ml-1">
-                <div 
-                  className="bg-[#C85A32] h-full rounded-full transition-all"
-                  style={{ width: `${activeProgress.progressPercent}%` }}
-                />
               </div>
               <span className="text-[11px] font-mono text-[#C85A32] font-bold tabular-nums">
                 {activeProgress.progressPercent}%
               </span>
-            </button>
+            </a>
           )}
 
-          {/* Theme Toggles (Day ☀️ / Sepia 📜 / Night 🌙) */}
-          <div className="flex items-center bg-[#2D142C]/5 dark:bg-white/5 sepia:bg-[#2C1E18]/10 p-0.5 rounded-lg border border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/15 text-xs font-sans-ui">
+          {/* Theme Toggles */}
+          <div
+            role="group"
+            aria-label="Color theme"
+            className="hidden sm:flex items-center bg-[#2D142C]/5 dark:bg-white/5 sepia:bg-[#2C1E18]/10 p-0.5 rounded-lg border border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/15 text-xs font-sans-ui"
+          >
             <button
               type="button"
               onClick={() => setTheme('day')}
-              title="Day Mode (Alabaster Cream)"
+              aria-label="Day theme"
+              aria-pressed={readerSettings.theme === 'day'}
               className={`p-1.5 rounded-md flex items-center justify-center transition-all cursor-pointer ${
                 readerSettings.theme === 'day'
                   ? 'bg-white text-[#2D142C] shadow-xs font-semibold'
@@ -137,7 +181,8 @@ export const Navbar: React.FC = () => {
             <button
               type="button"
               onClick={() => setTheme('sepia')}
-              title="Sepia Mode (Warm Sand Parchment)"
+              aria-label="Sepia theme"
+              aria-pressed={readerSettings.theme === 'sepia'}
               className={`p-1.5 rounded-md flex items-center justify-center transition-all cursor-pointer ${
                 readerSettings.theme === 'sepia'
                   ? 'bg-[#EDE3D5] text-[#2C1E18] shadow-xs font-semibold'
@@ -149,7 +194,8 @@ export const Navbar: React.FC = () => {
             <button
               type="button"
               onClick={() => setTheme('night')}
-              title="Night Mode (Smoked Plum)"
+              aria-label="Night theme"
+              aria-pressed={readerSettings.theme === 'night'}
               className={`p-1.5 rounded-md flex items-center justify-center transition-all cursor-pointer ${
                 readerSettings.theme === 'night'
                   ? 'bg-[#231323] text-white shadow-xs font-semibold'
@@ -160,35 +206,12 @@ export const Navbar: React.FC = () => {
             </button>
           </div>
 
-          {/* Role Mode Quick Toggle */}
-          <button
-            onClick={toggleRole}
-            title={`Current View: ${isOwner ? 'Owner Admin' : 'Reader'}. Click to toggle.`}
-            className="hidden md:flex items-center gap-1 text-xs px-2.5 py-1.5 rounded border border-[#2D142C]/15 dark:border-white/15 sepia:border-[#2C1E18]/20 text-[#2D142C]/70 dark:text-[#F9F6F0]/70 sepia:text-[#2C1E18]/70 hover:border-[#C85A32] hover:text-[#C85A32] transition-colors whitespace-nowrap cursor-pointer"
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>{isOwner ? 'Owner' : 'Reader'}</span>
-          </button>
-
-          {/* Reading Goal Streak Pill */}
-          {user.readingGoal && (
-            <button
-              onClick={() => navigate('account')}
-              title={`Reading Streak: ${user.readingGoal.streakDays} Days (${user.readingGoal.currentProgress}/${user.readingGoal.targetChapters} chapters ${user.readingGoal.frequency})`}
-              className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[#C85A32]/30 bg-[#C85A32]/10 hover:bg-[#C85A32]/20 transition-colors text-xs font-semibold text-[#C85A32] cursor-pointer"
-            >
-              <span>🔥</span>
-              <span className="font-mono tabular-nums">{user.readingGoal.streakDays}d</span>
-              <span className="text-[10px] opacity-80 font-normal">
-                {user.readingGoal.currentProgress}/{user.readingGoal.targetChapters}
-              </span>
-            </button>
-          )}
-
-          {/* Account Vault Button */}
-          <button
-            onClick={() => navigate('account')}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap cursor-pointer border ${
+          {/* Account / Sign In Link */}
+          <a
+            href={buildHref('account')}
+            onClick={(e) => handleNavClick(e, 'account')}
+            aria-current={currentRoute === 'account' ? 'page' : undefined}
+            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap border ${
               currentRoute === 'account'
                 ? 'bg-[#2D142C] text-[#F9F6F0] border-[#2D142C] dark:bg-white dark:text-[#160C16]'
                 : 'border-[#2D142C]/20 dark:border-white/20 sepia:border-[#2C1E18]/20 text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] hover:bg-[#2D142C]/5 dark:hover:bg-white/5'
@@ -196,22 +219,113 @@ export const Navbar: React.FC = () => {
           >
             <User className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">
-              {isPatron ? 'Patron Vault' : 'Account'}
+              {!isAuthenticated ? 'Sign In' : isPatron ? 'Patron Account' : 'Account'}
             </span>
-          </button>
+          </a>
 
           {/* Primary CTA */}
-          <button
-            onClick={() => navigate('stories')}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#C85A32] hover:bg-[#b04d28] rounded shadow-xs hover:shadow transition-all duration-150 whitespace-nowrap shrink-0 cursor-pointer"
+          <a
+            href={buildHref('stories')}
+            onClick={(e) => handleNavClick(e, 'stories')}
+            className="hidden sm:flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#C85A32] hover:bg-[#b04d28] rounded shadow-xs hover:shadow transition-all duration-150 whitespace-nowrap shrink-0"
           >
             <BookOpen className="w-3.5 h-3.5" />
             <span>Read Stories</span>
+          </a>
+
+          {/* Mobile Drawer Trigger */}
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen((prev) => !prev)}
+            aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-nav-drawer"
+            aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            className="lg:hidden p-2 rounded-lg border border-[#2D142C]/15 dark:border-white/15 text-[#2D142C] dark:text-[#F9F6F0] hover:border-[#C85A32] cursor-pointer"
+          >
+            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
-
       </div>
+
+      {/* Responsive Mobile Navigation Drawer */}
+      {mobileMenuOpen && (
+        <div
+          id="mobile-nav-drawer"
+          className="lg:hidden border-t border-[#2D142C]/10 dark:border-white/10 bg-[#F9F6F0] dark:bg-[#160C16] sepia:bg-[#F4ECE1] px-4 py-5 space-y-4 font-sans-ui text-sm"
+        >
+          <nav aria-label="Mobile navigation" className="flex flex-col space-y-2">
+            <a
+              href={buildHref('stories')}
+              onClick={(e) => handleNavClick(e, 'stories')}
+              className={`px-3 py-2.5 rounded-lg font-medium ${
+                currentRoute === 'stories' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
+              }`}
+            >
+              Library
+            </a>
+            <a
+              href={buildHref('pricing')}
+              onClick={(e) => handleNavClick(e, 'pricing')}
+              className={`px-3 py-2.5 rounded-lg font-medium ${
+                currentRoute === 'pricing' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
+              }`}
+            >
+              Membership &amp; Pricing
+            </a>
+            <a
+              href={buildHref('contact')}
+              onClick={(e) => handleNavClick(e, 'contact')}
+              className={`px-3 py-2.5 rounded-lg font-medium ${
+                currentRoute === 'contact' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
+              }`}
+            >
+              Contact &amp; Editorial
+            </a>
+            <a
+              href={buildHref('account')}
+              onClick={(e) => handleNavClick(e, 'account')}
+              className={`px-3 py-2.5 rounded-lg font-medium ${
+                currentRoute === 'account' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
+              }`}
+            >
+              {isAuthenticated ? 'My Account & Library' : 'Sign In / Create Account'}
+            </a>
+            {isOwner && (
+              <a
+                href={buildHref('admin')}
+                onClick={(e) => handleNavClick(e, 'admin')}
+                className={`px-3 py-2.5 rounded-lg font-medium flex items-center gap-2 ${
+                  currentRoute === 'admin' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
+                }`}
+              >
+                <ShieldCheck className="w-4 h-4 text-[#C85A32]" />
+                <span>Publishing Desk</span>
+              </a>
+            )}
+          </nav>
+
+          {/* Theme Switcher for Small Screens */}
+          <div className="pt-3 border-t border-current/10 flex items-center justify-between text-xs">
+            <span className="font-semibold opacity-75">Reading Theme</span>
+            <div className="flex items-center gap-1.5">
+              {(['day', 'sepia', 'night'] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTheme(t)}
+                  className={`px-3 py-1.5 rounded border capitalize cursor-pointer ${
+                    readerSettings.theme === t
+                      ? 'border-[#C85A32] bg-[#C85A32]/10 text-[#C85A32] font-semibold'
+                      : 'border-current/15'
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };
-

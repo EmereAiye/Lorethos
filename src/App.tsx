@@ -11,9 +11,18 @@ import { PricingView } from './views/PricingView';
 import { AccountView } from './views/AccountView';
 import { ContactView } from './views/ContactView';
 import { AdminView } from './views/AdminView';
+import { CheckCircle2, X } from 'lucide-react';
 
 const MainContent: React.FC = () => {
-  const { currentRoute, readerSettings, activeProgress, navigate } = useApp();
+  const {
+    currentRoute,
+    readerSettings,
+    activeProgress,
+    navigate,
+    buildHref,
+    checkoutStatusMessage,
+    clearCheckoutStatusMessage
+  } = useApp();
 
   const renderCurrentView = () => {
     switch (currentRoute) {
@@ -47,17 +56,36 @@ const MainContent: React.FC = () => {
   return (
     <div className={`flex flex-col min-h-screen transition-colors duration-200 ${themeClasses}`}>
       <Navbar />
+
+      {checkoutStatusMessage && (
+        <div
+          role="status"
+          className="bg-emerald-700 text-white px-4 py-2.5 text-xs font-sans-ui flex items-center justify-center gap-3"
+        >
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{checkoutStatusMessage}</span>
+          <button
+            type="button"
+            onClick={clearCheckoutStatusMessage}
+            aria-label="Dismiss payment status message"
+            className="p-0.5 hover:opacity-80 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       <main className="flex-1">
         {renderCurrentView()}
       </main>
       <Footer />
       <PaystackModal />
 
-      {/* Global Floating Reading Progress Dock (when outside reader) */}
+      {/* Global Floating Reading Progress Dock */}
       {currentRoute !== 'reader' && activeProgress && (
-        <aside 
+        <aside
           aria-label="Reading progress quick dock"
-          className="fixed bottom-5 left-5 z-40 hidden md:flex items-center gap-3 p-2.5 pr-4 rounded-xl shadow-2xl border border-[#C85A32]/40 bg-white/95 dark:bg-[#1E111E]/95 sepia:bg-[#EDE3D5]/95 backdrop-blur-md text-xs font-sans-ui animate-in slide-in-from-bottom-2"
+          className="fixed bottom-5 left-5 z-40 hidden md:flex items-center gap-3 p-2.5 pr-4 rounded-xl shadow-2xl border border-[#C85A32]/40 bg-white/95 dark:bg-[#1E111E]/95 sepia:bg-[#EDE3D5]/95 backdrop-blur-md text-xs font-sans-ui"
         >
           <img
             src={activeProgress.story.coverImage}
@@ -77,18 +105,29 @@ const MainContent: React.FC = () => {
               Chapter {activeProgress.chapterNumber} &middot; {activeProgress.lastReadAt}
             </span>
             <div className="w-36 bg-current/15 h-1 rounded-full overflow-hidden mt-1">
-              <div 
+              <div
                 className="bg-[#C85A32] h-full rounded-full transition-all"
                 style={{ width: `${activeProgress.progressPercent}%` }}
               />
             </div>
           </div>
-          <button
-            onClick={() => navigate('reader', { slug: activeProgress.story.slug, chapterNumber: activeProgress.chapterNumber })}
-            className="ml-2 px-3 py-1.5 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs rounded-lg transition-colors cursor-pointer shadow-2xs shrink-0"
+          <a
+            href={buildHref('reader', {
+              slug: activeProgress.story.slug,
+              chapterNumber: activeProgress.chapterNumber
+            })}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+              e.preventDefault();
+              navigate('reader', {
+                slug: activeProgress.story.slug,
+                chapterNumber: activeProgress.chapterNumber
+              });
+            }}
+            className="ml-2 px-3 py-1.5 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs rounded-lg transition-colors shadow-2xs shrink-0"
           >
             Resume &rarr;
-          </button>
+          </a>
         </aside>
       )}
     </div>

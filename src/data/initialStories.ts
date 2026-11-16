@@ -1,5 +1,6 @@
-import { Story } from '../types';
+import { PaymentTransaction, Story } from '../types';
 
+// Sanitized public fallback catalog: paid (!isFree) chapters NEVER include full prose in client bundle.
 export const INITIAL_STORIES: Story[] = [
   {
     id: 'story-obsidian-throne',
@@ -7,7 +8,7 @@ export const INITIAL_STORIES: Story[] = [
     title: 'The Obsidian Throne',
     subtitle: 'An Epic Dark Fantasy of Sovereignty, Ash, and Royal Reckoning',
     author: 'Elara Kavanagh',
-    authorBio: 'Award-winning fabulist and folklorist exploring ancient dynastic mythologies and high-court political intrigue.',
+    authorBio: 'Fabulist and folklorist exploring dynastic mythologies and high-court political intrigue.',
     genre: 'Epic Fantasy',
     tags: ['Dark Fantasy', 'Monarchy', 'Ancient Magic', 'Political Intrigue'],
     coverImage: '/assets/images/book_cover_obsidian_throne_1794465561565.jpg',
@@ -16,14 +17,14 @@ export const INITIAL_STORIES: Story[] = [
     status: 'Ongoing',
     accessTier: 'subscription',
     priceNgn: 2800,
-    rating: 4.9,
-    ratingsCount: 342,
-    totalChapters: 12,
-    totalReads: 14200,
+    rating: 0,
+    ratingsCount: 0,
+    totalChapters: 5,
+    totalReads: 0,
     freeChaptersCount: 3,
     featured: true,
     spotlightOrder: 1,
-    updatedAt: '2 days ago',
+    updatedAt: 'Oct 2026',
     chapters: [
       {
         id: 'ch-obsidian-1',
@@ -44,8 +45,6 @@ export const INITIAL_STORIES: Story[] = [
           '"Let the lower gates remain open," Vane commanded, his voice measured, hollowed by three decades of quiet wars. "If the ancient pact demands a tithe, let the heavens look upon men who refuse to kneel in the dark."',
           'A murmur rippled along the battlements. Far below, in the sunken sanctuaries beneath the foundation stones, the first hymn began to rise—a guttural, primordial chant passed down from ancestors who walked before the stars had names.'
         ],
-        audioUrl: 'ambient-obsidian',
-        audioDuration: '9:24',
         ambientSoundscape: 'fireplace'
       },
       {
@@ -99,12 +98,7 @@ export const INITIAL_STORIES: Story[] = [
         readTimeMinutes: 12,
         isFree: false,
         excerpt: 'The deep subterranean lake gave off a phosphorescent mist, shimmering with the memories of those who dared drink from its basin.',
-        content: [
-          'The deep subterranean lake gave off a phosphorescent mist, shimmering with the memories of those who dared drink from its basin.',
-          'To pass the Fourth Gate, one must surrender the memory that hurts the most. Sylva stood at the edge of the glassy pool, feeling the chill seeping through the soles of her riding boots.',
-          'Vane raised the ceremonial obsidian ladle. "Once consumed, there is no weeping for what has been excised. You will remember the name of your child, but not the sound of her laugh."',
-          'Sylva stepped forward into the shallows without hesitation.'
-        ],
+        content: [],
         ambientSoundscape: 'mythic_drone'
       },
       {
@@ -118,11 +112,7 @@ export const INITIAL_STORIES: Story[] = [
         readTimeMinutes: 11,
         isFree: false,
         excerpt: 'A silent coup does not begin with poisoned chalices, but with rewritten histories.',
-        content: [
-          'A silent coup does not begin with poisoned chalices, but with rewritten histories.',
-          'In the dead of night, the scribes worked under guard, scraping parchment with razor horn to substitute names of fallen houses with those favored by the regent council.',
-          'When dawn broke, three families no longer legally existed.'
-        ]
+        content: []
       }
     ]
   },
@@ -141,14 +131,14 @@ export const INITIAL_STORIES: Story[] = [
     status: 'Ongoing',
     accessTier: 'subscription',
     priceNgn: 2500,
-    rating: 4.95,
-    ratingsCount: 512,
-    totalChapters: 16,
-    totalReads: 22100,
+    rating: 0,
+    ratingsCount: 0,
+    totalChapters: 4,
+    totalReads: 0,
     freeChaptersCount: 3,
     featured: true,
     spotlightOrder: 2,
-    updatedAt: 'Yesterday',
+    updatedAt: 'Sep 2026',
     chapters: [
       {
         id: 'ch-baobab-1',
@@ -168,8 +158,6 @@ export const INITIAL_STORIES: Story[] = [
           '"The baobab has spoken thrice this moon," Elder Tari said, limping to her side with his carved mahogany staff. "The first time it whispered of droughts. The second time it wept salt. But tonight... tonight its trunk shines with the script of the Sky People."',
           'Boma looked up at the colossal tree towering at the center of the desert basin. Its trunk, wider than twenty men with arms outstretched, was veined with pale cobalt light, pulsing in rhythm with her own heartbeat.'
         ],
-        audioUrl: 'ambient-baobab',
-        audioDuration: '10:15',
         ambientSoundscape: 'mythic_drone'
       },
       {
@@ -220,11 +208,7 @@ export const INITIAL_STORIES: Story[] = [
         readTimeMinutes: 12,
         isFree: false,
         excerpt: 'Deep in the forbidden hollow, the water did not reflect the sky above, but the sky on the opposite hemisphere of the world.',
-        content: [
-          'Deep in the forbidden hollow, the water did not reflect the sky above, but the sky on the opposite hemisphere of the world.',
-          'Boma knelt at the water\'s edge. Constellations she had never seen before floated beneath the lily pads, turning slowly in a dark aquatic vortex.',
-          'A voice like rustling dry palm fronds spoke from the shadow of the acacia: "You have arrived earlier than your mother did."'
-        ]
+        content: []
       }
     ]
   },
@@ -243,14 +227,14 @@ export const INITIAL_STORIES: Story[] = [
     status: 'Completed',
     accessTier: 'purchase',
     priceNgn: 3200,
-    rating: 4.88,
-    ratingsCount: 289,
-    totalChapters: 10,
-    totalReads: 9800,
+    rating: 0,
+    ratingsCount: 0,
+    totalChapters: 4,
+    totalReads: 0,
     freeChaptersCount: 3,
-    featured: false,
+    featured: true,
     spotlightOrder: 3,
-    updatedAt: 'Last week',
+    updatedAt: 'Jul 2026',
     chapters: [
       {
         id: 'ch-sunken-1',
@@ -315,10 +299,7 @@ export const INITIAL_STORIES: Story[] = [
         readTimeMinutes: 13,
         isFree: false,
         excerpt: 'A hairline fracture appeared in the atmospheric crystal keeping the central library dry for three millennia.',
-        content: [
-          'A hairline fracture appeared in the atmospheric crystal keeping the central library dry for three millennia.',
-          'Water droplets struck the ancient dry scrolls with the finality of rifle shots.'
-        ]
+        content: []
       }
     ]
   },
@@ -337,14 +318,14 @@ export const INITIAL_STORIES: Story[] = [
     status: 'Ongoing',
     accessTier: 'subscription',
     priceNgn: 2200,
-    rating: 4.85,
-    ratingsCount: 194,
-    totalChapters: 8,
-    totalReads: 7600,
+    rating: 0,
+    ratingsCount: 0,
+    totalChapters: 4,
+    totalReads: 0,
     freeChaptersCount: 3,
-    featured: false,
+    featured: true,
     spotlightOrder: 4,
-    updatedAt: '3 days ago',
+    updatedAt: 'Sep 2026',
     chapters: [
       {
         id: 'ch-scribe-1',
@@ -409,59 +390,10 @@ export const INITIAL_STORIES: Story[] = [
         readTimeMinutes: 12,
         isFree: false,
         excerpt: 'Every door in the scriptorium was bolted from the outside as footsteps echoed along the flagstones.',
-        content: [
-          'Every door in the scriptorium was bolted from the outside as footsteps echoed along the flagstones.',
-          'Lucien hid inside the secret recess behind the theological treatises, breathing through his teeth as armed men with lanterns searched the desks.'
-        ]
+        content: []
       }
     ]
   }
 ];
 
-export const INITIAL_TRANSACTIONS = [
-  {
-    id: 'tx-101',
-    reference: 'pstk_ref_982410a82b',
-    customerEmail: 'folake.adebayo@gmail.com',
-    amountNgn: 3500,
-    itemType: 'subscription' as const,
-    itemName: 'Patron Monthly Subscription',
-    channel: 'card' as const,
-    status: 'success' as const,
-    date: '2026-11-10 14:22'
-  },
-  {
-    id: 'tx-102',
-    reference: 'pstk_ref_34901fbc44',
-    customerEmail: 'chukwuma.eze@yahoo.com',
-    amountNgn: 32000,
-    itemType: 'subscription' as const,
-    itemName: 'Patron Annual Circle (12 Months)',
-    channel: 'bank_transfer' as const,
-    status: 'success' as const,
-    date: '2026-11-09 09:15'
-  },
-  {
-    id: 'tx-103',
-    reference: 'pstk_ref_77810ec512',
-    customerEmail: 'zainab.danladi@outlook.com',
-    amountNgn: 3200,
-    itemType: 'book_purchase' as const,
-    itemName: 'Book Unlock: Chronicles of the Sunken Epoch',
-    itemId: 'story-sunken-epoch',
-    channel: 'ussd' as const,
-    status: 'success' as const,
-    date: '2026-11-08 19:40'
-  },
-  {
-    id: 'tx-104',
-    reference: 'pstk_ref_11209bca78',
-    customerEmail: 'david.okafor@gmail.com',
-    amountNgn: 3500,
-    itemType: 'subscription' as const,
-    itemName: 'Patron Monthly Subscription',
-    channel: 'card' as const,
-    status: 'success' as const,
-    date: '2026-11-08 11:05'
-  }
-];
+export const INITIAL_TRANSACTIONS: PaymentTransaction[] = [];

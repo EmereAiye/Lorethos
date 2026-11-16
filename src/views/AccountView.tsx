@@ -1,56 +1,56 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { 
-  User, 
-  ShieldCheck, 
-  BookOpen, 
-  Bookmark, 
-  History, 
-  Settings, 
-  CreditCard, 
-  CheckCircle2, 
+import {
+  ShieldCheck,
+  BookOpen,
+  Bookmark,
+  Settings,
+  CreditCard,
+  CheckCircle2,
   ArrowRight,
-  ExternalLink,
   Flame,
-  Target,
-  Trophy,
-  Sparkles,
-  Plus,
-  Minus,
-  RotateCcw,
-  Calendar,
-  Award
+  Highlighter,
+  Trash2,
+  LogIn,
+  LogOut,
+  XCircle
 } from 'lucide-react';
 import { ReadingActivityChart } from '../components/ReadingActivityChart';
+import { ReadingGoal } from '../components/ReadingGoal';
 
 export const AccountView: React.FC = () => {
-  const { 
-    user, 
-    stories, 
-    transactions, 
-    readerSettings, 
-    updateReaderSettings, 
-    navigate, 
+  const {
+    user,
+    isAuthenticated,
+    authLoading,
+    login,
+    register,
+    logout,
+    cancelSubscription,
+    stories,
+    transactions,
+    readerSettings,
+    updateReaderSettings,
+    navigate,
+    buildHref,
     openPaystackCheckout,
-    updateReadingGoal,
-    logChapterCompleted
+    highlights,
+    removeHighlight
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'vault' | 'goals' | 'history' | 'subscription' | 'settings'>('vault');
+  const [activeTab, setActiveTab] = useState<'library' | 'goals' | 'highlights' | 'bookmarks' | 'subscription' | 'settings'>('library');
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [authName, setAuthName] = useState('');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [cancelingSub, setCancelingSub] = useState(false);
 
-  const isPatron = user.subscription.status === 'active';
-  const goal = user.readingGoal || {
-    frequency: 'daily',
-    targetChapters: 2,
-    currentProgress: 1,
-    streakDays: 5,
-    bestStreakDays: 14,
-    lastUpdatedDate: 'Today',
-    history: []
-  };
+  const isPatron = isAuthenticated && user.subscription.status === 'active';
+  const goal = user.readingGoal;
 
-  const progressPct = Math.min(100, Math.round((goal.currentProgress / Math.max(1, goal.targetChapters)) * 100));
-  const isGoalMet = goal.currentProgress >= goal.targetChapters;
   const dailyTargetForChart = goal.frequency === 'weekly'
     ? Math.max(1, Math.ceil(goal.targetChapters / 7))
     : goal.targetChapters;
@@ -60,160 +60,274 @@ export const AccountView: React.FC = () => {
       ? { ...day, chaptersRead: goal.currentProgress, metTarget: goal.currentProgress >= dailyTargetForChart }
       : day
   );
-  const recent7Days = chartHistory.slice(-7);
-  const recent7DaysMet = recent7Days.filter(d => d.chaptersRead >= dailyTargetForChart).length;
-  const weeklyConsistencyPct = recent7Days.length > 0
-    ? Math.round((recent7DaysMet / recent7Days.length) * 100)
-    : 0;
 
-  // Find stories that the user has unlocked or has in progress
-  const unlockedStories = stories.filter(s => 
-    user.unlockedStoryIds.includes(s.id) || (isPatron && s.accessTier === 'subscription')
+  const unlockedStories = stories.filter(s =>
+    isAuthenticated &&
+    (user.unlockedStoryIds.includes(s.id) || (isPatron && s.accessTier === 'subscription') || user.role === 'owner')
   );
 
-  const bookmarkedChapters = stories.flatMap(s => 
-    s.chapters.filter(c => user.bookmarkedChapterIds.includes(c.id)).map(c => ({
-      ...c,
-      storyTitle: s.title,
-      storySlug: s.slug,
-      storyCover: s.coverImage
-    }))
+  const bookmarkedChapters = stories.flatMap(s =>
+    s.chapters
+      .filter(c => user.bookmarkedChapterIds.includes(c.id))
+      .map(c => ({
+        ...c,
+        storyTitle: s.title,
+        storySlug: s.slug,
+        storyCover: s.coverImage
+      }))
   );
+
+  const handleLink = (
+    e: React.MouseEvent<HTMLAnchorElement>,
+    route: string,
+    params?: Parameters<typeof navigate>[1]
+  ) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    navigate(route, params);
+  };
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthMessage(null);
+    setAuthSubmitting(true);
+
+    try {
+      const res =
+        authMode === 'signin'
+          ? await login(authEmail, authPassword)
+          : await register(authName, authEmail, authPassword);
+
+      if (res.error) {
+        setAuthError(res.error);
+      } else {
+        setAuthMessage(authMode === 'signin' ? 'Signed in successfully.' : 'Account created and signed in.');
+        setAuthPassword('');
+      }
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#F9F6F0] dark:bg-[#160C16] text-[#2D142C] dark:text-[#F9F6F0] py-12 transition-colors">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
-        
-        {/* Profile Banner */}
-        <div className="p-8 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-full bg-[#2D142C] text-[#F9F6F0] flex items-center justify-center font-display text-2xl font-bold border-2 border-[#C85A32]">
-              {user.name.charAt(0)}
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <h1 className="font-display text-2xl font-bold">{user.name}</h1>
-                {isPatron ? (
-                  <span className="text-[11px] font-semibold bg-[#C85A32] text-white px-2 py-0.5 rounded font-sans-ui">
-                    Patron Circle Member
-                  </span>
-                ) : (
-                  <span className="text-[11px] font-semibold bg-[#2D142C]/10 dark:bg-white/10 text-[#2D142C]/70 dark:text-white/70 px-2 py-0.5 rounded font-sans-ui">
-                    Free Traveler
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
-                {user.email} &middot; Member since 2026
+
+        {/* Account Banner or Sign-In Card */}
+        {!isAuthenticated ? (
+          <div className="p-8 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            <div className="lg:col-span-6 space-y-3">
+              <span className="text-xs font-semibold uppercase tracking-wider text-[#C85A32] font-sans-ui">
+                Reader Account
+              </span>
+              <h1 className="font-display text-3xl font-bold">
+                {authMode === 'signin' ? 'Sign In to Lorethos' : 'Create Your Lorethos Account'}
+              </h1>
+              <p className="font-reader text-sm text-[#2D142C]/75 dark:text-white/75 leading-relaxed">
+                Sign in to unlock paid chapters after checkout, keep bookmarks and reading progress across devices, and post chapter notes.
               </p>
+              {authLoading && (
+                <p className="text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
+                  Checking session...
+                </p>
+              )}
             </div>
-          </div>
 
-          <div className="flex items-center gap-3">
-            {!isPatron ? (
-              <button
-                onClick={() => openPaystackCheckout({
-                  type: 'subscription',
-                  title: 'Patron Monthly Membership',
-                  amountNgn: 3500,
-                  planId: 'monthly'
-                })}
-                className="px-4 py-2.5 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
-              >
-                <ShieldCheck className="w-4 h-4" />
-                <span>Upgrade to Patron (₦3,500/mo)</span>
-              </button>
-            ) : (
-              <div className="text-right">
-                <span className="text-[11px] text-[#2D142C]/50 dark:text-white/50 block font-sans-ui">
-                  Active Subscription
-                </span>
-                <span className="text-xs font-semibold text-emerald-600">
-                  Renews {user.subscription.renewsAt || 'Dec 15, 2026'}
-                </span>
+            <form onSubmit={handleAuthSubmit} className="lg:col-span-6 space-y-3 text-xs font-sans-ui">
+              <div className="flex gap-2 border-b border-current/10 pb-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('signin');
+                    setAuthError(null);
+                  }}
+                  className={`px-3 py-1.5 rounded font-semibold cursor-pointer ${
+                    authMode === 'signin' ? 'bg-[#C85A32] text-white' : 'opacity-70 hover:opacity-100'
+                  }`}
+                >
+                  Sign In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('signup');
+                    setAuthError(null);
+                  }}
+                  className={`px-3 py-1.5 rounded font-semibold cursor-pointer ${
+                    authMode === 'signup' ? 'bg-[#C85A32] text-white' : 'opacity-70 hover:opacity-100'
+                  }`}
+                >
+                  Create Account
+                </button>
               </div>
-            )}
-          </div>
-        </div>
 
-        {/* Reading Goal & Streak Interactive Quick Banner */}
-        <div className="p-6 rounded-2xl bg-gradient-to-r from-[#2D142C] via-[#3B1939] to-[#2D142C] text-[#F9F6F0] border border-[#C85A32]/30 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-          <div className="flex items-center gap-4">
-            <div className="w-13 h-13 rounded-xl bg-[#C85A32]/20 border border-[#C85A32]/50 flex items-center justify-center shrink-0">
-              <span className="text-2xl">🔥</span>
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono font-bold uppercase tracking-wider text-[#C85A32]">
-                  Daily Habit & Streak
-                </span>
-                <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/90 font-mono">
-                  {goal.streakDays}-Day Streak
-                </span>
-              </div>
-              <h3 className="font-display text-xl font-bold">
-                {isGoalMet
-                  ? '🎉 Daily Milestone Achieved!'
-                  : `${goal.currentProgress} of ${goal.targetChapters} Chapters Read Today`}
-              </h3>
-              <p className="text-xs text-white/70 font-sans-ui">
-                {isGoalMet
-                  ? 'Your streak is protected for today. Fantastic dedication to African storytelling.'
-                  : `Read ${goal.targetChapters - goal.currentProgress} more chapter${goal.targetChapters - goal.currentProgress > 1 ? 's' : ''} today to keep your streak glowing.`}
-              </p>
-            </div>
-          </div>
+              {authMode === 'signup' && (
+                <div>
+                  <label htmlFor="auth-name" className="block font-semibold mb-1">
+                    Full Name
+                  </label>
+                  <input
+                    id="auth-name"
+                    type="text"
+                    required
+                    value={authName}
+                    onChange={(e) => setAuthName(e.target.value)}
+                    placeholder="Your full name"
+                    className="w-full px-3 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
+                  />
+                </div>
+              )}
 
-          <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
-            {/* Visual Linear Progress Indicator */}
-            <div className="space-y-1.5 w-36 sm:w-44">
-              <div className="flex justify-between text-[11px] font-mono">
-                <span className="text-white/70">{goal.currentProgress}/{goal.targetChapters} ch</span>
-                <span className="text-[#C85A32] font-bold">{progressPct}%</span>
-              </div>
-              <div className="h-2 bg-white/15 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-[#C85A32] rounded-full transition-all duration-300"
-                  style={{ width: `${progressPct}%` }}
+              <div>
+                <label htmlFor="auth-email" className="block font-semibold mb-1">
+                  Email Address
+                </label>
+                <input
+                  id="auth-email"
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full px-3 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
                 />
               </div>
+
+              <div>
+                <label htmlFor="auth-password" className="block font-semibold mb-1">
+                  Password (min. 8 characters)
+                </label>
+                <input
+                  id="auth-password"
+                  type="password"
+                  required
+                  minLength={8}
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="Enter password"
+                  className="w-full px-3 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
+                />
+              </div>
+
+              {authError && (
+                <p role="alert" className="text-red-600 dark:text-red-400">
+                  {authError}
+                </p>
+              )}
+              {authMessage && (
+                <p role="status" className="text-emerald-600 dark:text-emerald-400">
+                  {authMessage}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                disabled={authSubmitting}
+                className="w-full py-2.5 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold rounded-lg flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>
+                  {authSubmitting
+                    ? 'Please wait...'
+                    : authMode === 'signin'
+                    ? 'Sign In'
+                    : 'Create Account'}
+                </span>
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div className="p-8 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-full bg-[#2D142C] text-[#F9F6F0] flex items-center justify-center font-display text-2xl font-bold border-2 border-[#C85A32]">
+                {user.name.charAt(0).toUpperCase()}
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="font-display text-2xl font-bold">{user.name}</h1>
+                  {user.role === 'owner' && (
+                    <span className="text-[11px] font-semibold bg-[#2D142C] text-white px-2 py-0.5 rounded font-sans-ui">
+                      Publisher (Owner)
+                    </span>
+                  )}
+                  {isPatron ? (
+                    <span className="text-[11px] font-semibold bg-[#C85A32] text-white px-2 py-0.5 rounded font-sans-ui">
+                      Active Subscriber
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-semibold bg-[#2D142C]/10 dark:bg-white/10 text-[#2D142C]/75 dark:text-white/75 px-2 py-0.5 rounded font-sans-ui">
+                      Free Account
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                  {user.email}
+                </p>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                onClick={logChapterCompleted}
-                title="Log 1 chapter completed today"
-                className="px-3 py-2 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Log Ch.</span>
-              </button>
+            <div className="flex flex-wrap items-center gap-3">
+              {user.role === 'owner' && (
+                <a
+                  href={buildHref('admin')}
+                  onClick={(e) => handleLink(e, 'admin')}
+                  className="px-4 py-2 rounded-lg border border-[#C85A32] text-[#C85A32] text-xs font-semibold hover:bg-[#C85A32] hover:text-white transition-colors"
+                >
+                  Open Publishing Desk
+                </a>
+              )}
+
+              {!isPatron && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    openPaystackCheckout({
+                      type: 'subscription',
+                      title: 'Patron Monthly Subscription',
+                      amountNgn: 3500,
+                      planId: 'monthly'
+                    })
+                  }
+                  className="px-4 py-2 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Upgrade Monthly (₦3,500/mo)</span>
+                </button>
+              )}
 
               <button
-                onClick={() => setActiveTab('goals')}
-                className="px-3 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer shrink-0"
+                type="button"
+                onClick={() => void logout()}
+                className="px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-red-500 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
               >
-                Set Goal &rarr;
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
               </button>
             </div>
           </div>
-        </div>
+        )}
+
+        {/* Reading Goal Banner */}
+        <ReadingGoal variant="banner" onOpenSettings={() => setActiveTab('goals')} />
 
         {/* Tab Navigation */}
         <div className="flex border-b border-[#2D142C]/10 dark:border-white/10 gap-2 font-sans-ui text-xs font-medium overflow-x-auto">
           <button
-            onClick={() => setActiveTab('vault')}
+            type="button"
+            onClick={() => setActiveTab('library')}
             className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
-              activeTab === 'vault'
+              activeTab === 'library'
                 ? 'border-[#C85A32] text-[#C85A32] font-semibold'
                 : 'border-transparent text-[#2D142C]/70 dark:text-white/70 hover:text-[#C85A32]'
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
-            <span>My Book Vault ({unlockedStories.length})</span>
+            <span>My Library ({unlockedStories.length})</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('goals')}
             className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
               activeTab === 'goals'
@@ -222,16 +336,27 @@ export const AccountView: React.FC = () => {
             }`}
           >
             <Flame className="w-3.5 h-3.5 text-[#C85A32]" />
-            <span>Reading Goal & Streak</span>
-            <span className="text-[10px] font-mono font-bold bg-[#C85A32]/15 text-[#C85A32] px-1.5 py-0.5 rounded-full">
-              🔥 {goal.streakDays}d
-            </span>
+            <span>Reading Goal &amp; Streak</span>
           </button>
 
           <button
-            onClick={() => setActiveTab('history')}
+            type="button"
+            onClick={() => setActiveTab('highlights')}
             className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
-              activeTab === 'history'
+              activeTab === 'highlights'
+                ? 'border-[#C85A32] text-[#C85A32] font-semibold'
+                : 'border-transparent text-[#2D142C]/70 dark:text-white/70 hover:text-[#C85A32]'
+            }`}
+          >
+            <Highlighter className="w-3.5 h-3.5 text-[#C85A32]" />
+            <span>Highlights &amp; Notes ({highlights.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('bookmarks')}
+            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
+              activeTab === 'bookmarks'
                 ? 'border-[#C85A32] text-[#C85A32] font-semibold'
                 : 'border-transparent text-[#2D142C]/70 dark:text-white/70 hover:text-[#C85A32]'
             }`}
@@ -241,6 +366,7 @@ export const AccountView: React.FC = () => {
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('subscription')}
             className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
               activeTab === 'subscription'
@@ -249,10 +375,11 @@ export const AccountView: React.FC = () => {
             }`}
           >
             <CreditCard className="w-3.5 h-3.5" />
-            <span>Subscription & Paystack Ledger</span>
+            <span>Subscription &amp; Receipts</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('settings')}
             className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
               activeTab === 'settings'
@@ -261,41 +388,43 @@ export const AccountView: React.FC = () => {
             }`}
           >
             <Settings className="w-3.5 h-3.5" />
-            <span>Reading Preferences</span>
+            <span>Preferences</span>
           </button>
         </div>
 
-        {/* Tab 1: Book Vault */}
-        {activeTab === 'vault' && (
+        {/* Tab 1: My Library */}
+        {activeTab === 'library' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-display text-2xl font-bold">Unlocked Works & Ongoing Reading</h3>
-                <p className="text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
-                  Stories available to read without chapter restrictions.
+                <h2 className="font-display text-2xl font-bold">Unlocked Stories</h2>
+                <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                  Titles available for full reading on your account.
                 </p>
               </div>
-              <button
-                onClick={() => navigate('stories')}
+              <a
+                href={buildHref('stories')}
+                onClick={(e) => handleLink(e, 'stories')}
                 className="text-xs font-semibold text-[#C85A32] hover:underline"
               >
                 Browse Catalog &rarr;
-              </button>
+              </a>
             </div>
 
             {unlockedStories.length === 0 ? (
               <div className="p-8 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center space-y-3">
                 <BookOpen className="w-8 h-8 mx-auto text-[#C85A32]/60" />
-                <h4 className="font-display text-lg font-bold">Your Vault is Empty</h4>
-                <p className="text-xs text-[#2D142C]/60 dark:text-white/60 max-w-sm mx-auto">
-                  Unlock a single story or join the Patron Circle to build your permanent digital library.
+                <h3 className="font-display text-lg font-bold">No Unlocked Paid Works Yet</h3>
+                <p className="text-xs text-[#2D142C]/65 dark:text-white/65 max-w-sm mx-auto">
+                  Start reading free opening chapters or subscribe to unlock all published chapters across series.
                 </p>
-                <button
-                  onClick={() => navigate('pricing')}
-                  className="px-4 py-2 bg-[#C85A32] text-white text-xs font-semibold rounded-lg hover:bg-[#b04d28] cursor-pointer"
+                <a
+                  href={buildHref('pricing')}
+                  onClick={(e) => handleLink(e, 'pricing')}
+                  className="inline-block px-4 py-2 bg-[#C85A32] text-white text-xs font-semibold rounded-lg hover:bg-[#b04d28]"
                 >
-                  Explore Membership Plans
-                </button>
+                  View Membership Plans
+                </a>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -319,9 +448,9 @@ export const AccountView: React.FC = () => {
                           <span className="text-[10px] uppercase font-bold text-[#C85A32] font-sans-ui">
                             {story.genre}
                           </span>
-                          <h4 className="font-display text-base font-bold truncate">
+                          <h3 className="font-display text-base font-bold truncate">
                             {story.title}
-                          </h4>
+                          </h3>
                           <p className="text-[11px] text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
                             By {story.author}
                           </p>
@@ -330,35 +459,35 @@ export const AccountView: React.FC = () => {
 
                       <div className="space-y-2 pt-2 border-t border-[#2D142C]/10 dark:border-white/10">
                         <div className="flex justify-between text-xs font-sans-ui">
-                          <span className="text-[#2D142C]/60 dark:text-white/60">
-                            Current: Ch. {currentCh} of {story.totalChapters}
+                          <span className="text-[#2D142C]/65 dark:text-white/65">
+                            Current: Ch. {currentCh} of {story.chapters.length}
                           </span>
                           <span className="font-semibold tabular-nums text-[#C85A32]">
                             {pct}% Read
                           </span>
                         </div>
                         <div className="w-full h-1.5 bg-[#2D142C]/10 dark:bg-white/10 rounded-full overflow-hidden">
-                          <div 
+                          <div
                             className="h-full bg-[#C85A32] rounded-full"
                             style={{ width: `${Math.max(5, pct)}%` }}
                           />
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => navigate('reader', { slug: story.slug, chapterNumber: currentCh })}
-                        className="w-full py-2 bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] text-xs font-semibold rounded hover:opacity-90 transition-opacity cursor-pointer flex items-center justify-center gap-1.5"
+                      <a
+                        href={buildHref('reader', { slug: story.slug, chapterNumber: currentCh })}
+                        onClick={(e) => handleLink(e, 'reader', { slug: story.slug, chapterNumber: currentCh })}
+                        className="w-full py-2 bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] text-xs font-semibold rounded hover:opacity-90 transition-opacity flex items-center justify-center gap-1.5"
                       >
                         <span>Resume Reading</span>
                         <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
+                      </a>
                     </div>
                   );
                 })}
               </div>
             )}
 
-            {/* D3 Two-Week Reading Activity Bar Chart */}
             <div className="pt-4">
               <ReadingActivityChart
                 history={chartHistory}
@@ -370,443 +499,73 @@ export const AccountView: React.FC = () => {
           </div>
         )}
 
-        {/* Tab 2: Reading Goal & Streak Feature */}
-        {activeTab === 'goals' && (
-          <div className="space-y-8 animate-in fade-in duration-200">
-            {/* Header Lockup */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs uppercase font-mono font-bold tracking-wider text-[#C85A32]">
-                    Reading Habits & Consistency
-                  </span>
-                  <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-full bg-[#C85A32]/10 text-[#C85A32]">
-                    🔥 {goal.streakDays}-Day Streak
-                  </span>
-                </div>
-                <h3 className="font-display text-3xl font-bold mt-1">Reading Goal & Streak</h3>
-                <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui mt-0.5">
-                  Set your daily or weekly chapter milestones, protect your streak, and track reading velocity.
-                </p>
-              </div>
+        {/* Tab 2: Reading Goals */}
+        {activeTab === 'goals' && <ReadingGoal variant="full" />}
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={logChapterCompleted}
-                  className="px-4 py-2.5 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>+ Log Chapter Read</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Goal Progress Ring & Goal Configuration Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              
-              {/* Left: Circular Visual Progress Ring & Status */}
-              <div className="lg:col-span-5 p-7 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs flex flex-col items-center justify-between space-y-6 text-center">
-                <div className="w-full flex items-center justify-between text-xs font-sans-ui text-[#2D142C]/60 dark:text-white/60">
-                  <span className="font-mono uppercase font-bold tracking-wider text-[#C85A32]">
-                    {goal.frequency === 'daily' ? 'Today’s Progress' : 'Weekly Progress'}
-                  </span>
-                  <span className="font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                    {isGoalMet && <CheckCircle2 className="w-3.5 h-3.5" />}
-                    <span>{isGoalMet ? 'Target Reached' : 'In Progress'}</span>
-                  </span>
-                </div>
-
-                {/* SVG Circular Radial Progress Meter */}
-                <div className="relative w-48 h-48 flex items-center justify-center my-2">
-                  <svg className="w-48 h-48 -rotate-90">
-                    {/* Background track circle */}
-                    <circle
-                      cx="96"
-                      cy="96"
-                      r="76"
-                      stroke="currentColor"
-                      strokeWidth="12"
-                      fill="transparent"
-                      className="text-[#2D142C]/10 dark:text-white/10"
-                    />
-                    {/* Foreground colored progress arc */}
-                    <circle
-                      cx="96"
-                      cy="96"
-                      r="76"
-                      stroke="#C85A32"
-                      strokeWidth="12"
-                      strokeDasharray={477.5}
-                      strokeDashoffset={477.5 - (477.5 * progressPct) / 100}
-                      strokeLinecap="round"
-                      fill="transparent"
-                      className="transition-all duration-500 ease-out"
-                    />
-                  </svg>
-
-                  {/* Central Statistics in the Progress Ring */}
-                  <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-3xl font-display font-bold tabular-nums">
-                      {goal.currentProgress}
-                      <span className="text-xl text-[#2D142C]/40 dark:text-white/40 font-normal"> / {goal.targetChapters}</span>
-                    </span>
-                    <span className="text-[11px] uppercase tracking-wider font-mono font-semibold text-[#C85A32] mt-0.5">
-                      Chapters Read
-                    </span>
-                    <span className="text-xs font-mono font-bold mt-1 text-[#2D142C]/70 dark:text-white/70 tabular-nums">
-                      {progressPct}% Met
-                    </span>
-                  </div>
-                </div>
-
-                {/* Dynamic Status / Encouragement Message */}
-                <div className="p-3.5 rounded-xl bg-[#F9F6F0] dark:bg-[#160C16] border border-[#2D142C]/5 dark:border-white/5 w-full text-xs font-sans-ui space-y-1">
-                  {isGoalMet ? (
-                    <div className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center justify-center gap-1.5">
-                      <Sparkles className="w-4 h-4" />
-                      <span>{goal.frequency === 'daily' ? 'Daily' : 'Weekly'} Target Complete! Streak Maintained 🔥</span>
-                    </div>
-                  ) : (
-                    <div className="text-[#2D142C]/80 dark:text-white/80">
-                      <span>Read </span>
-                      <strong className="text-[#C85A32] font-mono">
-                        {goal.targetChapters - goal.currentProgress}
-                      </strong>
-                      <span> more chapter{goal.targetChapters - goal.currentProgress > 1 ? 's' : ''} {goal.frequency === 'daily' ? 'today' : 'this week'} to hit your goal.</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Direct Log & Reset Controls */}
-                <div className="w-full flex items-center gap-2 pt-1">
-                  <button
-                    onClick={logChapterCompleted}
-                    className="flex-1 py-2.5 px-3 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>+1 Chapter Finished</span>
-                  </button>
-
-                  <button
-                    onClick={() => updateReadingGoal({ currentProgress: 0 })}
-                    title="Reset current cycle progress to 0"
-                    className="p-2.5 rounded-lg border border-[#2D142C]/20 dark:border-white/20 text-[#2D142C]/60 dark:text-white/60 hover:text-[#C85A32] hover:border-[#C85A32] transition-colors cursor-pointer"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Right: Target Settings & Velocity Configuration */}
-              <div className="lg:col-span-7 p-7 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs flex flex-col justify-between space-y-6">
-                <div className="space-y-5">
-                  <div className="flex items-center justify-between border-b border-[#2D142C]/10 dark:border-white/10 pb-4">
-                    <div>
-                      <h4 className="font-display text-xl font-bold">Goal Frequency & Targets</h4>
-                      <p className="text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui mt-0.5">
-                        Customize how often you read and how many chapters you aim for.
-                      </p>
-                    </div>
-                    <Target className="w-5 h-5 text-[#C85A32]" />
-                  </div>
-
-                  {/* Frequency Switcher: Daily vs Weekly */}
-                  <div className="space-y-2">
-                    <label className="text-xs font-semibold block font-sans-ui">Cadence</label>
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => updateReadingGoal({ 
-                          frequency: 'daily',
-                          targetChapters: goal.frequency === 'daily' ? goal.targetChapters : Math.max(1, Math.round(goal.targetChapters / 5))
-                        })}
-                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                          goal.frequency === 'daily'
-                            ? 'border-[#C85A32] bg-[#C85A32]/5 ring-1 ring-[#C85A32]'
-                            : 'border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32]/40'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-xs">Daily Habit</span>
-                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#C85A32]/10 text-[#C85A32]">
-                            Every Day
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-[#2D142C]/60 dark:text-white/60 mt-1">
-                          Build momentum by reading chapters daily.
-                        </p>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => updateReadingGoal({ 
-                          frequency: 'weekly',
-                          targetChapters: goal.frequency === 'weekly' ? goal.targetChapters : Math.max(5, goal.targetChapters * 5)
-                        })}
-                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                          goal.frequency === 'weekly'
-                            ? 'border-[#C85A32] bg-[#C85A32]/5 ring-1 ring-[#C85A32]'
-                            : 'border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32]/40'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-xs">Weekly Sprint</span>
-                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#C85A32]/10 text-[#C85A32]">
-                            Per Week
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-[#2D142C]/60 dark:text-white/60 mt-1">
-                          Flexible reading across 7 days at your own pace.
-                        </p>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Target Chapters Stepper */}
-                  <div className="space-y-2">
-                    <label className="text-xs font-semibold block font-sans-ui">
-                      Target Chapters ({goal.frequency === 'daily' ? 'Per Day' : 'Per Week'})
-                    </label>
-
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => updateReadingGoal({ 
-                          targetChapters: Math.max(1, goal.targetChapters - 1) 
-                        })}
-                        className="w-12 h-12 rounded-xl border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] hover:text-[#C85A32] flex items-center justify-center font-bold text-lg cursor-pointer transition-colors"
-                      >
-                        <Minus className="w-4 h-4" />
-                      </button>
-
-                      <div className="flex-1 py-2 px-4 rounded-xl bg-[#F9F6F0] dark:bg-[#160C16] border border-[#2D142C]/10 dark:border-white/10 text-center">
-                        <div className="font-display text-2xl font-bold text-[#C85A32] tabular-nums">
-                          {goal.targetChapters}
-                        </div>
-                        <div className="text-[10px] uppercase font-mono tracking-wider text-[#2D142C]/60 dark:text-white/60">
-                          Chapters {goal.frequency === 'daily' ? 'per day' : 'per week'}
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => updateReadingGoal({ 
-                          targetChapters: Math.min(goal.frequency === 'daily' ? 20 : 70, goal.targetChapters + 1) 
-                        })}
-                        className="w-12 h-12 rounded-xl border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] hover:text-[#C85A32] flex items-center justify-center font-bold text-lg cursor-pointer transition-colors"
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    {/* Quick Preset Buttons */}
-                    <div className="flex items-center gap-2 pt-1">
-                      <span className="text-[11px] text-[#2D142C]/50 dark:text-white/50 font-sans-ui">Quick Presets:</span>
-                      {(goal.frequency === 'daily' ? [1, 2, 3, 5] : [5, 10, 15, 20]).map(preset => (
-                        <button
-                          key={preset}
-                          type="button"
-                          onClick={() => updateReadingGoal({ targetChapters: preset })}
-                          className={`text-[11px] px-2.5 py-1 rounded-md border font-mono transition-colors cursor-pointer ${
-                            goal.targetChapters === preset
-                              ? 'bg-[#C85A32] text-white border-[#C85A32] font-bold'
-                              : 'border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32]'
-                          }`}
-                        >
-                          {preset} ch
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Velocity Estimate Callout */}
-                  <div className="p-4 rounded-xl bg-[#F9F6F0] dark:bg-[#160C16] border border-[#2D142C]/10 dark:border-white/10 flex items-start gap-3 text-xs font-sans-ui">
-                    <Sparkles className="w-4 h-4 text-[#C85A32] shrink-0 mt-0.5" />
-                    <div className="space-y-0.5 text-[#2D142C]/75 dark:text-white/75">
-                      <strong className="text-[#2D142C] dark:text-white block font-semibold">Reading Velocity Projection</strong>
-                      <p>
-                        At <span className="font-mono text-[#C85A32] font-semibold">{goal.targetChapters} chapters</span> {goal.frequency === 'daily' ? 'per day' : 'per week'}, you will spend roughly <span className="font-mono font-semibold">{goal.targetChapters * 12} mins</span> reading and finish a full 24-chapter serialized epic in ~<span className="font-mono text-[#C85A32] font-semibold">{Math.ceil(24 / (goal.frequency === 'daily' ? goal.targetChapters : goal.targetChapters / 7))} days</span>.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-            </div>
-
-            {/* Streak & Achievements Highlights */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 font-sans-ui">
-              <div className="p-5 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-[#C85A32]/10 text-[#C85A32] flex items-center justify-center shrink-0">
-                  <Flame className="w-6 h-6" />
-                </div>
-                <div>
-                  <span className="text-[11px] text-[#2D142C]/60 dark:text-white/60 block">Current Streak</span>
-                  <div className="text-2xl font-bold font-display text-[#C85A32] tabular-nums">
-                    {goal.streakDays} Days
-                  </div>
-                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">
-                    Active & burning bright
-                  </span>
-                </div>
-              </div>
-
-              <div className="p-5 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-[#2D142C]/10 dark:bg-white/10 text-[#2D142C] dark:text-white flex items-center justify-center shrink-0">
-                  <Trophy className="w-6 h-6 text-amber-500" />
-                </div>
-                <div>
-                  <span className="text-[11px] text-[#2D142C]/60 dark:text-white/60 block">Personal Best</span>
-                  <div className="text-2xl font-bold font-display tabular-nums">
-                    {goal.bestStreakDays} Days
-                  </div>
-                  <span className="text-[10px] text-[#2D142C]/60 dark:text-white/60">
-                    All-time record streak
-                  </span>
-                </div>
-              </div>
-
-              <div className="p-5 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-[#C85A32]/10 text-[#C85A32] flex items-center justify-center shrink-0">
-                  <Award className="w-6 h-6" />
-                </div>
-                <div>
-                  <span className="text-[11px] text-[#2D142C]/60 dark:text-white/60 block">Weekly Consistency</span>
-                  <div className="text-2xl font-bold font-display tabular-nums text-emerald-600">
-                    {weeklyConsistencyPct}%
-                  </div>
-                  <span className="text-[10px] text-[#2D142C]/60 dark:text-white/60">
-                    {recent7DaysMet} of last {recent7Days.length} days completed
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* D3 Two-Week Reading Activity Bar Chart */}
-            <ReadingActivityChart
-              history={chartHistory}
-              dailyTarget={dailyTargetForChart}
-              theme={readerSettings.theme}
-            />
-
-            {/* 7-Day Habit Activity Tracker */}
-            <div className="p-6 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="font-display text-lg font-bold flex items-center gap-2">
-                    <Calendar className="w-4 h-4 text-[#C85A32]" />
-                    <span>7-Day Reading Activity Matrix</span>
-                  </h4>
-                  <p className="text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui mt-0.5">
-                    Your recent daily chapter completions across the Lorethos serialized library.
-                  </p>
-                </div>
-                <span className="text-xs font-mono text-[#C85A32] font-semibold">
-                  Nigeria &middot; Standard Time
-                </span>
-              </div>
-
-              <div className="grid grid-cols-7 gap-3 pt-2">
-                {recent7Days.map((day, idx) => {
-                  const isCurrentDay = idx === recent7Days.length - 1;
-                  const isMet = day.metTarget || (isCurrentDay && isGoalMet);
-                  const count = isCurrentDay ? goal.currentProgress : day.chaptersRead;
-
-                  return (
-                    <div
-                      key={day.dateStr}
-                      className={`p-3.5 rounded-xl border text-center flex flex-col items-center justify-between space-y-2 transition-all ${
-                        isCurrentDay
-                          ? 'border-[#C85A32] bg-[#C85A32]/5 ring-1 ring-[#C85A32]'
-                          : isMet
-                          ? 'border-emerald-500/30 bg-emerald-500/5'
-                          : 'border-[#2D142C]/10 dark:border-white/10 bg-[#F9F6F0]/50 dark:bg-[#160C16]/50'
-                      }`}
-                    >
-                      <div className="space-y-0.5">
-                        <span className="text-xs font-bold block font-sans-ui">
-                          {day.dayName}
-                        </span>
-                        <span className="text-[10px] text-[#2D142C]/50 dark:text-white/50 block font-mono">
-                          {day.dateStr}
-                        </span>
-                      </div>
-
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-xs font-bold ${
-                        isMet
-                          ? 'bg-[#C85A32] text-white shadow-xs'
-                          : count > 0
-                          ? 'bg-[#2D142C]/10 dark:bg-white/10 text-[#C85A32]'
-                          : 'bg-[#2D142C]/5 dark:bg-white/5 text-[#2D142C]/40 dark:text-white/40'
-                      }`}>
-                        {isMet ? '✓' : count}
-                      </div>
-
-                      <span className="text-[10px] font-mono text-[#2D142C]/60 dark:text-white/60">
-                        {count} ch
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* African Storytelling Wisdom Banner */}
-            <div className="p-6 rounded-2xl bg-[#F9F6F0] dark:bg-[#160C16] border border-[#2D142C]/10 dark:border-white/10 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="space-y-1 text-center sm:text-left">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-[#C85A32] font-semibold">
-                  The Storyteller’s Discipline
-                </span>
-                <p className="font-reader text-sm italic text-[#2D142C]/80 dark:text-white/80">
-                  "The story is our escort; without it, we are blind."
-                </p>
-                <span className="text-xs text-[#2D142C]/50 dark:text-white/50 font-sans-ui block">
-                  — Chinua Achebe
-                </span>
-              </div>
-
-              <button
-                onClick={() => navigate('stories')}
-                className="px-5 py-2.5 bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] text-xs font-semibold rounded-lg hover:opacity-90 transition-opacity cursor-pointer shrink-0"
-              >
-                Continue Reading in Library &rarr;
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 3: Bookmarks */}
-        {activeTab === 'history' && (
+        {/* Tab 3: Highlights */}
+        {activeTab === 'highlights' && (
           <div className="space-y-6">
-            <h3 className="font-display text-2xl font-bold">Saved Bookmarks</h3>
-            {bookmarkedChapters.length === 0 ? (
-              <div className="p-8 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center text-xs text-[#2D142C]/60 dark:text-white/60">
-                No bookmarked chapters yet. While reading any chapter, click the bookmark icon to save it here.
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-display text-2xl font-bold">Highlights &amp; Margin Notes</h2>
+                <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                  Passages saved while reading chapters.
+                </p>
+              </div>
+              <a
+                href={buildHref('stories')}
+                onClick={(e) => handleLink(e, 'stories')}
+                className="text-xs font-semibold text-[#C85A32] hover:underline"
+              >
+                Open Library &rarr;
+              </a>
+            </div>
+
+            {highlights.length === 0 ? (
+              <div className="p-8 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center text-xs text-[#2D142C]/65 dark:text-white/65 space-y-2">
+                <Highlighter className="w-7 h-7 mx-auto text-[#C85A32]/60" />
+                <p>No highlights saved yet.</p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {bookmarkedChapters.map(ch => (
+              <div className="space-y-4">
+                {highlights.map(hl => (
                   <div
-                    key={ch.id}
-                    onClick={() => navigate('reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
-                    className="p-4 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 hover:border-[#C85A32] transition-colors flex items-center justify-between gap-4 cursor-pointer"
+                    key={hl.id}
+                    className="p-5 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 border-l-4 border-l-[#C85A32] space-y-3"
                   >
-                    <div className="flex items-center gap-4">
-                      <img src={ch.storyCover} alt="" className="w-10 h-14 object-cover rounded" />
+                    <div className="flex items-center justify-between gap-3 text-xs font-sans-ui">
                       <div>
-                        <div className="text-[11px] text-[#C85A32] font-semibold font-sans-ui">
-                          {ch.storyTitle} &middot; Chapter {ch.chapterNumber}
-                        </div>
-                        <h4 className="font-display text-base font-bold">{ch.title}</h4>
-                        <p className="text-xs text-[#2D142C]/60 dark:text-white/60 line-clamp-1 font-reader">
-                          "{ch.excerpt}"
-                        </p>
+                        <span className="font-semibold text-[#C85A32]">{hl.storyTitle}</span>
+                        <span className="mx-1.5 opacity-40">&middot;</span>
+                        <span>Ch. {hl.chapterNumber}: {hl.chapterTitle}</span>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => removeHighlight(hl.id)}
+                        aria-label="Delete highlight"
+                        className="opacity-65 hover:text-red-500 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
-
-                    <button className="text-xs font-semibold text-[#C85A32] shrink-0">
-                      Jump to Chapter &rarr;
-                    </button>
+                    <blockquote className="font-reader text-sm italic">
+                      &ldquo;{hl.excerpt}&rdquo;
+                    </blockquote>
+                    {hl.note && (
+                      <div className="p-3 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] text-xs font-sans-ui">
+                        <strong className="text-[#C85A32] mr-1.5">Note:</strong>
+                        <span>{hl.note}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-end">
+                      <a
+                        href={buildHref('reader', { slug: hl.storySlug, chapterNumber: hl.chapterNumber })}
+                        onClick={(e) => handleLink(e, 'reader', { slug: hl.storySlug, chapterNumber: hl.chapterNumber })}
+                        className="text-xs font-semibold text-[#C85A32] hover:underline"
+                      >
+                        Open Chapter {hl.chapterNumber} &rarr;
+                      </a>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -814,11 +573,71 @@ export const AccountView: React.FC = () => {
           </div>
         )}
 
-        {/* Tab 3: Subscription & Paystack Ledger */}
+        {/* Tab 4: Saved Bookmarks */}
+        {activeTab === 'bookmarks' && (
+          <div className="space-y-6">
+            <h2 className="font-display text-2xl font-bold">Saved Bookmarks</h2>
+            {bookmarkedChapters.length === 0 ? (
+              <div className="p-8 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center text-xs text-[#2D142C]/65 dark:text-white/65">
+                No bookmarked chapters yet. Click the bookmark button while reading to save a chapter here.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {bookmarkedChapters.map(ch => (
+                  <div
+                    key={ch.id}
+                    className="p-4 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 flex items-center justify-between gap-4"
+                  >
+                    <div className="flex items-center gap-4 min-w-0">
+                      <img src={ch.storyCover} alt="" className="w-10 h-14 object-cover rounded shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-[11px] text-[#C85A32] font-semibold font-sans-ui">
+                          {ch.storyTitle} &middot; Chapter {ch.chapterNumber}
+                        </div>
+                        <h3 className="font-display text-base font-bold truncate">{ch.title}</h3>
+                        <p className="text-xs text-[#2D142C]/65 dark:text-white/65 line-clamp-1 font-reader">
+                          &ldquo;{ch.excerpt}&rdquo;
+                        </p>
+                      </div>
+                    </div>
+
+                    <a
+                      href={buildHref('reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
+                      onClick={(e) => handleLink(e, 'reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
+                      className="text-xs font-semibold text-[#C85A32] hover:underline shrink-0"
+                    >
+                      Open Chapter &rarr;
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 5: Subscription & Receipts */}
         {activeTab === 'subscription' && (
           <div className="space-y-8">
             <div className="p-6 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-4">
-              <h3 className="font-display text-xl font-bold">Billing Status</h3>
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <h2 className="font-display text-xl font-bold">Membership Status</h2>
+                {isPatron && (
+                  <button
+                    type="button"
+                    disabled={cancelingSub}
+                    onClick={async () => {
+                      setCancelingSub(true);
+                      await cancelSubscription();
+                      setCancelingSub(false);
+                    }}
+                    className="px-3 py-1.5 rounded-lg border border-red-500/30 text-red-600 dark:text-red-400 text-xs font-semibold hover:bg-red-500/10 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <XCircle className="w-3.5 h-3.5" />
+                    <span>{cancelingSub ? 'Canceling...' : 'Cancel Subscription'}</span>
+                  </button>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-sans-ui">
                 <div className="p-4 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] space-y-1">
                   <span className="text-[#2D142C]/60 dark:text-white/60 block">Plan</span>
@@ -826,68 +645,70 @@ export const AccountView: React.FC = () => {
                 </div>
                 <div className="p-4 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] space-y-1">
                   <span className="text-[#2D142C]/60 dark:text-white/60 block">Status</span>
-                  <span className="font-bold text-sm text-emerald-600 capitalize">
-                    {user.subscription.status === 'active' ? 'Active Subscription' : 'Free Access'}
+                  <span className="font-bold text-sm capitalize">
+                    {isPatron ? 'Active' : user.subscription.status === 'expired' ? 'Canceled' : 'Free Access'}
                   </span>
                 </div>
                 <div className="p-4 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] space-y-1">
-                  <span className="text-[#2D142C]/60 dark:text-white/60 block">Payment Method</span>
-                  <span className="font-bold text-sm">Paystack Nigeria (NIBSS)</span>
+                  <span className="text-[#2D142C]/60 dark:text-white/60 block">Payment Provider</span>
+                  <span className="font-bold text-sm">Paystack Hosted Checkout</span>
                 </div>
               </div>
             </div>
 
-            {/* Paystack Transactions Ledger */}
             <div className="space-y-3">
-              <h4 className="font-display text-lg font-bold">Paystack Transaction Receipts</h4>
-              <div className="rounded-xl border border-[#2D142C]/10 dark:border-white/10 overflow-hidden bg-white dark:bg-[#1E111E]">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs font-sans-ui">
-                    <thead className="bg-[#2D142C]/5 dark:bg-white/5 border-b border-[#2D142C]/10 dark:border-white/10 text-[#2D142C]/70 dark:text-white/70">
-                      <tr>
-                        <th className="py-3 px-4">Paystack Ref</th>
-                        <th className="py-3 px-4">Item Description</th>
-                        <th className="py-3 px-4">Amount</th>
-                        <th className="py-3 px-4">Channel</th>
-                        <th className="py-3 px-4">Status</th>
-                        <th className="py-3 px-4">Date</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#2D142C]/10 dark:divide-white/10">
-                      {transactions.map(tx => (
-                        <tr key={tx.id} className="hover:bg-[#2D142C]/[0.02]">
-                          <td className="py-3 px-4 font-mono text-[11px] text-[#C85A32]">{tx.reference}</td>
-                          <td className="py-3 px-4 font-medium">{tx.itemName}</td>
-                          <td className="py-3 px-4 font-bold tabular-nums">₦{tx.amountNgn.toLocaleString('en-NG')}</td>
-                          <td className="py-3 px-4 uppercase text-[10px]">{tx.channel}</td>
-                          <td className="py-3 px-4">
-                            <span className="inline-flex items-center gap-1 text-emerald-600 font-semibold text-[11px]">
-                              <CheckCircle2 className="w-3 h-3" />
-                              <span>Success</span>
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-[#2D142C]/60 dark:text-white/60">{tx.date}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <h3 className="font-display text-lg font-bold">Payment Receipts</h3>
+              {transactions.length === 0 ? (
+                <div className="p-6 rounded-xl border border-[#2D142C]/10 dark:border-white/10 bg-white dark:bg-[#1E111E] text-xs text-[#2D142C]/65 dark:text-white/65">
+                  No verified transactions recorded on this account yet.
                 </div>
-              </div>
+              ) : (
+                <div className="rounded-xl border border-[#2D142C]/10 dark:border-white/10 overflow-hidden bg-white dark:bg-[#1E111E]">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs font-sans-ui">
+                      <thead className="bg-[#2D142C]/5 dark:bg-white/5 border-b border-[#2D142C]/10 dark:border-white/10 text-[#2D142C]/70 dark:text-white/70">
+                        <tr>
+                          <th className="py-3 px-4">Reference</th>
+                          <th className="py-3 px-4">Item</th>
+                          <th className="py-3 px-4">Amount</th>
+                          <th className="py-3 px-4">Status</th>
+                          <th className="py-3 px-4">Date</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#2D142C]/10 dark:divide-white/10">
+                        {transactions.map(tx => (
+                          <tr key={tx.id}>
+                            <td className="py-3 px-4 font-mono text-[11px] text-[#C85A32]">{tx.reference}</td>
+                            <td className="py-3 px-4 font-medium">{tx.itemName}</td>
+                            <td className="py-3 px-4 font-bold tabular-nums">₦{tx.amountNgn.toLocaleString('en-NG')}</td>
+                            <td className="py-3 px-4 capitalize">
+                              <span className="inline-flex items-center gap-1 text-emerald-600 font-semibold text-[11px]">
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>{tx.status}</span>
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-[#2D142C]/65 dark:text-white/65">
+                              {new Date(tx.date).toLocaleDateString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {/* Tab 4: Reading Preferences */}
+        {/* Tab 6: Preferences */}
         {activeTab === 'settings' && (
-          <div className="p-6 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-6 max-w-xl">
-            <h3 className="font-display text-xl font-bold">Saved Reading Preferences</h3>
-            <p className="text-xs text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
-              These preferences will automatically apply whenever you launch any chapter on Lorethos.
-            </p>
+          <div className="p-6 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-6 max-w-2xl">
+            <h2 className="font-display text-xl font-bold">Default Reading Preferences</h2>
 
             <div className="space-y-4 text-xs font-sans-ui">
               <div>
-                <label className="block font-semibold mb-1">Default Canvas Theme</label>
+                <span className="block font-semibold mb-2">Default Color Theme</span>
                 <div className="grid grid-cols-3 gap-2">
                   {(['day', 'sepia', 'night'] as const).map(t => (
                     <button
@@ -907,7 +728,7 @@ export const AccountView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block font-semibold mb-1">Default Body Typeface</label>
+                <span className="block font-semibold mb-2">Default Typeface</span>
                 <div className="grid grid-cols-3 gap-2">
                   {(['literata', 'garamond', 'sans'] as const).map(f => (
                     <button

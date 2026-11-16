@@ -62,6 +62,7 @@ export type ReadingGoalFrequency = 'daily' | 'weekly';
 export interface DayGoalHistory {
   dayName: string;
   dateStr: string;
+  dateIso?: string;
   chaptersRead: number;
   metTarget: boolean;
 }
@@ -73,7 +74,48 @@ export interface ReadingGoal {
   streakDays: number;
   bestStreakDays: number;
   lastUpdatedDate: string;
+  completedChapterIds?: string[];
   history: DayGoalHistory[];
+}
+
+export type HighlightColor = 'terracotta' | 'gold' | 'sage';
+
+export interface TextHighlight {
+  id: string;
+  storyId: string;
+  storyTitle: string;
+  storySlug: string;
+  chapterId: string;
+  chapterNumber: number;
+  chapterTitle: string;
+  paragraphIndex: number;
+  excerpt: string;
+  color: HighlightColor;
+  note?: string;
+  createdAt: string;
+}
+
+export type CommentTag = 'Reaction' | 'Lore' | 'Theory';
+
+export interface ChapterComment {
+  id: string;
+  storyId: string;
+  chapterId: string;
+  authorName: string;
+  tag: CommentTag;
+  body: string;
+  createdAt: string;
+}
+
+export interface CommunityInquiry {
+  id: string;
+  referenceId: string;
+  name: string;
+  email: string;
+  inquiryType: string;
+  subject: string;
+  message: string;
+  submittedAt: string;
 }
 
 export interface UserProfile {
