@@ -39,6 +39,8 @@ export const AccountView: React.FC = () => {
     toggleBookmark,
     highlights,
     removeHighlight,
+    paragraphBookmarks,
+    removeParagraphBookmark,
     preferredGenres,
     openReadingPrompt,
     routeParams,
@@ -453,7 +455,7 @@ export const AccountView: React.FC = () => {
             }`}
           >
             <Bookmark className="w-3.5 h-3.5" />
-            <span>Saved Bookmarks ({bookmarkedChapters.length})</span>
+            <span>Saved Bookmarks ({bookmarkedChapters.length + paragraphBookmarks.length})</span>
           </button>
 
           <button
@@ -667,53 +669,135 @@ export const AccountView: React.FC = () => {
 
         {/* Tab 4: Saved Bookmarks */}
         {activeTab === 'bookmarks' && (
-          <div className="space-y-6">
-            <h2 className="font-display text-2xl font-bold">Saved Bookmarks</h2>
-            {bookmarkedChapters.length === 0 ? (
-              <div className="p-8 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center text-xs text-[#2D142C]/65 dark:text-white/65">
-                No bookmarked chapters yet. Click the bookmark button while reading to save a chapter here.
+          <div className="space-y-8">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-2xl font-bold">Marked Passages &amp; Sections</h2>
+                  <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                    Specific paragraphs and named story moments saved while reading.
+                  </p>
+                </div>
+                <span className="text-xs font-mono opacity-65 tabular-nums">
+                  {paragraphBookmarks.length} saved
+                </span>
               </div>
-            ) : (
-              <div className="space-y-3">
-                {bookmarkedChapters.map(ch => (
-                  <div
-                    key={ch.id}
-                    className="p-4 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 flex items-center justify-between gap-4"
-                  >
-                    <div className="flex items-center gap-4 min-w-0">
-                      <img src={ch.storyCover} alt="" loading="lazy" className="w-10 h-14 object-cover rounded shrink-0" />
-                      <div className="min-w-0">
-                        <div className="text-[11px] text-[#C85A32] font-semibold font-sans-ui">
-                          {ch.storyTitle} &middot; Chapter {ch.chapterNumber}
+
+              {paragraphBookmarks.length === 0 ? (
+                <div className="p-8 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center text-xs text-[#2D142C]/65 dark:text-white/65 space-y-2">
+                  <Bookmark className="w-7 h-7 mx-auto text-[#C85A32]/60" />
+                  <p>No bookmarked paragraphs or sections yet. Select Bookmark beside any paragraph in the reader to save it for quick reference.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-[#2D142C]/10 dark:divide-white/10 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 overflow-hidden">
+                  {paragraphBookmarks.map((bm) => (
+                    <div
+                      key={bm.id}
+                      className="p-5 flex flex-col sm:flex-row sm:items-start justify-between gap-4"
+                    >
+                      <div className="min-w-0 space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-sans-ui">
+                          <span className="font-semibold text-[#C85A32]">{bm.storyTitle}</span>
+                          <span className="opacity-40">&middot;</span>
+                          <span className="tabular-nums">Ch. {bm.chapterNumber}</span>
+                          <span className="opacity-40">&middot;</span>
+                          <span className="font-mono tabular-nums opacity-75">Para. {bm.paragraphIndex + 1}</span>
+                          {bm.createdAt && (
+                            <>
+                              <span className="opacity-40">&middot;</span>
+                              <span className="opacity-60">{bm.createdAt}</span>
+                            </>
+                          )}
                         </div>
-                        <h3 className="font-display text-base font-bold truncate">{ch.title}</h3>
-                        <p className="text-xs text-[#2D142C]/65 dark:text-white/65 line-clamp-1 font-reader">
-                          &ldquo;{ch.excerpt}&rdquo;
-                        </p>
+                        {bm.label && (
+                          <h3 className="font-display text-base font-bold">{bm.label}</h3>
+                        )}
+                        <blockquote className="font-reader text-sm italic text-[#2D142C]/80 dark:text-white/80 line-clamp-2">
+                          &ldquo;{bm.excerpt}&rdquo;
+                        </blockquote>
+                      </div>
+
+                      <div className="flex items-center gap-3 shrink-0 sm:pt-1">
+                        <a
+                          href={buildHref('reader', {
+                            slug: bm.storySlug,
+                            chapterNumber: bm.chapterNumber,
+                            paragraph: bm.paragraphIndex
+                          })}
+                          onClick={(e) =>
+                            handleLink(e, 'reader', {
+                              slug: bm.storySlug,
+                              chapterNumber: bm.chapterNumber,
+                              paragraph: bm.paragraphIndex
+                            })
+                          }
+                          className="text-xs font-semibold text-[#C85A32] hover:underline whitespace-nowrap"
+                        >
+                          Jump to Passage &rarr;
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => removeParagraphBookmark(bm.id)}
+                          aria-label={`Remove bookmark in ${bm.storyTitle} Chapter ${bm.chapterNumber} Paragraph ${bm.paragraphIndex + 1}`}
+                          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
-                    <div className="flex items-center gap-3 shrink-0">
-                      <a
-                        href={buildHref('reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
-                        onClick={(e) => handleLink(e, 'reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
-                        className="text-xs font-semibold text-[#C85A32] hover:underline"
-                      >
-                        Open Chapter &rarr;
-                      </a>
-                      <button
-                        type="button"
-                        onClick={() => toggleBookmark(ch.id)}
-                        aria-label={`Remove bookmark for ${ch.title}`}
-                        className="p-1.5 text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+            <div className="space-y-4">
+              <h2 className="font-display text-2xl font-bold">Bookmarked Chapters</h2>
+              {bookmarkedChapters.length === 0 ? (
+                <div className="p-8 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center text-xs text-[#2D142C]/65 dark:text-white/65">
+                  No bookmarked chapters yet. Open Bookmarks in the reader toolbar to save a whole chapter here.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {bookmarkedChapters.map(ch => (
+                    <div
+                      key={ch.id}
+                      className="p-4 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 flex items-center justify-between gap-4"
+                    >
+                      <div className="flex items-center gap-4 min-w-0">
+                        <img src={ch.storyCover} alt="" loading="lazy" className="w-10 h-14 object-cover rounded shrink-0" />
+                        <div className="min-w-0">
+                          <div className="text-[11px] text-[#C85A32] font-semibold font-sans-ui">
+                            {ch.storyTitle} &middot; Chapter {ch.chapterNumber}
+                          </div>
+                          <h3 className="font-display text-base font-bold truncate">{ch.title}</h3>
+                          <p className="text-xs text-[#2D142C]/65 dark:text-white/65 line-clamp-1 font-reader">
+                            &ldquo;{ch.excerpt}&rdquo;
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 shrink-0">
+                        <a
+                          href={buildHref('reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
+                          onClick={(e) => handleLink(e, 'reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
+                          className="text-xs font-semibold text-[#C85A32] hover:underline whitespace-nowrap"
+                        >
+                          Open Chapter &rarr;
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => toggleBookmark(ch.id)}
+                          aria-label={`Remove bookmark for ${ch.title}`}
+                          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

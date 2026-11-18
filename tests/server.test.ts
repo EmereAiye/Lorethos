@@ -414,6 +414,12 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       })
     });
     assert.equal(invalidAspectRes.status, 400);
+
+    const invalidPollRes = await fetch(`${baseUrl}/api/ai/video/bad!`);
+    assert.equal(invalidPollRes.status, 400);
+
+    const invalidStreamRes = await fetch(`${baseUrl}/api/ai/video/bad!/stream`);
+    assert.equal(invalidStreamRes.status, 400);
   });
 
   test('detectSceneMood keeps normal prose silent (neutral) and detects suspense, action, and storm spots', async () => {
@@ -443,5 +449,380 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       ),
       'storm'
     );
+  });
+
+  test('WaveSpeedAI helpers validate models, build Wan payloads, and clamp Vercel byte ranges', async () => {
+    const {
+      resolveWaveSpeedVideoModel,
+      buildWaveSpeedVideoPayload,
+      clampByteRange,
+      DEFAULT_WAVESPEED_VIDEO_MODEL,
+    } = await import('../server/wavespeed');
+
+    assert.equal(resolveWaveSpeedVideoModel(undefined), DEFAULT_WAVESPEED_VIDEO_MODEL);
+    assert.equal(resolveWaveSpeedVideoModel('/alibaba/wan-3.0/text-to-video/'), 'alibaba/wan-3.0/text-to-video');
+    assert.throws(() => resolveWaveSpeedVideoModel('../bad/path'));
+
+    assert.deepEqual(
+      buildWaveSpeedVideoPayload({
+        model: 'wavespeed-ai/wan-2.2/t2v-480p-ultra-fast',
+        prompt: 'Rain over bronze roofs',
+        aspectRatio: '16:9',
+        duration: '6s',
+      }),
+      { prompt: 'Rain over bronze roofs', size: '832*480', duration: 5 }
+    );
+
+    assert.deepEqual(
+      buildWaveSpeedVideoPayload({
+        model: 'wavespeed-ai/wan-2.2/t2v-480p-ultra-fast',
+        prompt: 'Vertical lantern shot',
+        aspectRatio: '9:16',
+        duration: '10s',
+      }),
+      { prompt: 'Vertical lantern shot', size: '480*832', duration: 8 }
+    );
+
+    assert.deepEqual(
+      buildWaveSpeedVideoPayload({
+        model: 'alibaba/wan-3.0/text-to-video',
+        prompt: 'Obsidian gate opening',
+        aspectRatio: '9:16',
+        duration: '10s',
+        resolution: '720p',
+      }),
+      {
+        prompt: 'Obsidian gate opening',
+        aspect_ratio: '9:16',
+        resolution: '720p',
+        duration: 10,
+        enable_prompt_expansion: false,
+      }
+    );
+
+    assert.deepEqual(clampByteRange('bytes=0-', 6_000_000, 3_500_000), {
+      valid: true,
+      start: 0,
+      end: 3_499_999,
+    });
+    assert.deepEqual(clampByteRange('bytes=3500000-8000000', 5_000_000, 3_500_000), {
+      valid: true,
+      start: 3_500_000,
+      end: 4_999_999,
+    });
+    assert.deepEqual(clampByteRange('bytes=5000000-', 5_000_000, 3_500_000), { valid: false });
+  });
+
+  test('WaveSpeedAI end-to-end /api/ai/video submission, polling, streaming, and error mapping', async () => {
+    const { createApp } = await import('../server');
+    const mockMp4 = Buffer.from('00000018667479706d703432-lorethos-mock-video-bytes', 'utf8');
+    let pollStep = 0;
+    let lastAuthHeader = '';
+    let lastSubmittedUrl = '';
+    let lastSubmittedBody: Record<string, unknown> = {};
+    let mode: 'success' | 'insufficient_credits' | 'expired_cdn' = 'success';
+
+    const mockFetch: typeof fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const method = (init?.method || 'GET').toUpperCase();
+      const headers = new Headers(init?.headers);
+
+      if (url.startsWith('https://api.wavespeed.test/api/v3/wavespeed-ai/wan-2.2/t2v-480p-ultra-fast') && method === 'POST') {
+        lastAuthHeader = headers.get('authorization') || '';
+        lastSubmittedUrl = url;
+        lastSubmittedBody = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+
+        if (mode === 'insufficient_credits') {
+          return new Response(
+            JSON.stringify({ code: 1407, message: 'insufficient_credits: please top up' }),
+            { status: 402, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            code: 200,
+            data: { id: 'ws_pred_12345', status: 'created' },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (url === 'https://api.wavespeed.test/api/v3/predictions/ws_pred_12345/result') {
+        pollStep += 1;
+        if (pollStep === 1) {
+          return new Response(
+            JSON.stringify({
+              code: 200,
+              data: { id: 'ws_pred_12345', status: 'processing' },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            code: 200,
+            data: {
+              id: 'ws_pred_12345',
+              status: 'completed',
+              outputs: ['https://cdn.wavespeed.test/outputs/ws_pred_12345.mp4'],
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (url === 'https://cdn.wavespeed.test/outputs/ws_pred_12345.mp4') {
+        if (mode === 'expired_cdn') {
+          return new Response('AccessDenied', { status: 403 });
+        }
+        const range = headers.get('range');
+        if (range) {
+          const match = range.match(/^bytes=(\d+)-(\d+)$/);
+          const start = match ? Number(match[1]) : 0;
+          const end = match ? Math.min(Number(match[2]), mockMp4.length - 1) : mockMp4.length - 1;
+          const slice = mockMp4.subarray(start, end + 1);
+          return new Response(slice, {
+            status: 206,
+            headers: {
+              'Content-Type': 'video/mp4',
+              'Content-Length': String(slice.length),
+              'Content-Range': `bytes ${start}-${end}/${mockMp4.length}`,
+            },
+          });
+        }
+        return new Response(mockMp4, {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4',
+            'Content-Length': String(mockMp4.length),
+          },
+        });
+      }
+
+      return new Response('Not Found', { status: 404 });
+    };
+
+    const wsApp = await createApp({
+      withVite: false,
+      waveSpeedConfig: {
+        apiKey: 'ws_test_secret_key_should_stay_private',
+        apiBase: 'https://api.wavespeed.test/api/v3',
+        fetchImpl: mockFetch,
+      },
+    });
+
+    let wsServer: http.Server | undefined;
+    try {
+      const wsBaseUrl = await new Promise<string>((resolve) => {
+        wsServer = wsApp.listen(0, '127.0.0.1', () => {
+          const addr = wsServer!.address();
+          assert.ok(addr && typeof addr === 'object');
+          resolve(`http://127.0.0.1:${addr.port}`);
+        });
+      });
+
+      // 1. Submit job with storySlug enrichment -> 202 in_progress
+      const submitRes = await fetch(`${wsBaseUrl}/api/ai/video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: 'Golden lantern swinging beside rain-slick obsidian walls',
+          aspectRatio: '16:9',
+          duration: '6s',
+          storySlug: 'the-obsidian-throne',
+        }),
+      });
+      assert.equal(submitRes.status, 202);
+      const submitData = await submitRes.json();
+      assert.equal(submitData.status, 'in_progress');
+      assert.equal(submitData.interactionId, 'ws_pred_12345');
+      assert.equal(lastAuthHeader, 'Bearer ws_test_secret_key_should_stay_private');
+      assert.ok(lastSubmittedUrl.includes('wavespeed-ai/wan-2.2/t2v-480p-ultra-fast'));
+      assert.ok(String(lastSubmittedBody.prompt || '').includes('The Obsidian Throne'));
+      assert.equal(lastSubmittedBody.size, '832*480');
+      assert.equal(lastSubmittedBody.duration, 5);
+
+      // 2. First poll -> processing
+      const poll1 = await (await fetch(`${wsBaseUrl}/api/ai/video/ws_pred_12345`)).json();
+      assert.equal(poll1.status, 'in_progress');
+
+      // 3. Second poll -> completed with internal /stream URL (upstream CDN URL never leaked)
+      const poll2 = await (await fetch(`${wsBaseUrl}/api/ai/video/ws_pred_12345`)).json();
+      assert.equal(poll2.status, 'completed');
+      assert.equal(poll2.videoUrl, '/api/ai/video/ws_pred_12345/stream');
+      assert.equal(poll2.sizeBytes, mockMp4.length);
+      assert.equal(poll2.chunkDownload, false);
+
+      // 4. Stream full video + Range request
+      const fullRes = await fetch(`${wsBaseUrl}${poll2.videoUrl}`);
+      assert.equal(fullRes.status, 200);
+      assert.equal(fullRes.headers.get('content-type'), 'video/mp4');
+      assert.deepEqual(Buffer.from(await fullRes.arrayBuffer()), mockMp4);
+
+      const rangeRes = await fetch(`${wsBaseUrl}${poll2.videoUrl}`, {
+        headers: { Range: 'bytes=0-15' },
+      });
+      assert.equal(rangeRes.status, 206);
+      assert.equal(rangeRes.headers.get('content-range'), `bytes 0-15/${mockMp4.length}`);
+      assert.deepEqual(Buffer.from(await rangeRes.arrayBuffer()), mockMp4.subarray(0, 16));
+
+      // 5. Expired CDN output returns 410 Gone
+      mode = 'expired_cdn';
+      const expiredRes = await fetch(`${wsBaseUrl}${poll2.videoUrl}`);
+      assert.equal(expiredRes.status, 410);
+
+      // 6. Insufficient credits maps cleanly to HTTP 402 without exposing API key
+      mode = 'insufficient_credits';
+      const creditRes = await fetch(`${wsBaseUrl}/api/ai/video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: 'Lantern light across ancient bronze gates at dusk',
+          aspectRatio: '9:16',
+          duration: '10s',
+        }),
+      });
+      assert.equal(creditRes.status, 402);
+      const creditData = await creditRes.json();
+      assert.ok(/insufficient credits/i.test(creditData.error));
+      assert.equal(JSON.stringify(creditData).includes('ws_test_secret_key'), false);
+    } finally {
+      if (wsServer) {
+        await new Promise<void>((resolve, reject) => {
+          wsServer!.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
+    }
+  });
+
+  test('paragraph & section bookmarks endpoints enforce auth/access, upsert labels idempotently, and delete cleanly', async () => {
+    // 1. Unauthenticated access rejected
+    const unauthGet = await fetch(`${baseUrl}/api/account/paragraph-bookmarks`);
+    assert.equal(unauthGet.status, 401);
+
+    const obsidian = repoRef.getStoryBySlug('the-obsidian-throne')!;
+    const ch1 = obsidian.chapters.find((c) => c.chapterNumber === 1)!;
+    const ch4 = obsidian.chapters.find((c) => c.chapterNumber === 4)!;
+
+    // 2. Invalid payloads rejected
+    const invalidRes = await fetch(`${baseUrl}/api/account/paragraph-bookmarks`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: readerCookie,
+      },
+      body: JSON.stringify({
+        storyId: obsidian.id,
+        chapterId: ch1.id,
+        paragraphIndex: -1,
+        excerpt: 'Bad index',
+      }),
+    });
+    assert.equal(invalidRes.status, 400);
+
+    const outOfRangeRes = await fetch(`${baseUrl}/api/account/paragraph-bookmarks`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: readerCookie,
+      },
+      body: JSON.stringify({
+        storyId: obsidian.id,
+        chapterId: ch1.id,
+        paragraphIndex: ch1.content.length + 5,
+        excerpt: 'Beyond end of chapter',
+      }),
+    });
+    assert.equal(outOfRangeRes.status, 400);
+
+    // 3. Locked chapter bookmarking rejected for non-entitled user (create a second user with no purchases)
+    const freshRegRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Tunde Guest',
+        email: 'tunde.bookmark@example.com',
+        password: 'StrongPassword123',
+      }),
+    });
+    assert.equal(freshRegRes.status, 201);
+    const freshCookie = extractSessionCookie(freshRegRes);
+
+    const lockedBookmarkRes = await fetch(`${baseUrl}/api/account/paragraph-bookmarks`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: freshCookie,
+      },
+      body: JSON.stringify({
+        storyId: obsidian.id,
+        chapterId: ch4.id,
+        paragraphIndex: 0,
+        excerpt: 'Locked passage',
+      }),
+    });
+    assert.equal(lockedBookmarkRes.status, 403);
+
+    // 4. Create paragraph bookmark on free chapter 1
+    const createRes = await fetch(`${baseUrl}/api/account/paragraph-bookmarks`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: readerCookie,
+      },
+      body: JSON.stringify({
+        storyId: obsidian.id,
+        chapterId: ch1.id,
+        paragraphIndex: 1,
+        label: 'First Clue',
+        excerpt: ch1.content[1],
+      }),
+    });
+    assert.equal(createRes.status, 200);
+    const createdData = await createRes.json();
+    assert.equal(createdData.paragraphBookmarks.length, 1);
+    const createdId = createdData.paragraphBookmarks[0].id;
+    assert.equal(createdData.paragraphBookmarks[0].label, 'First Clue');
+    assert.equal(createdData.paragraphBookmarks[0].paragraphIndex, 1);
+
+    // 5. Upsert same (chapterId, paragraphIndex) preserves id and updates label
+    const updateRes = await fetch(`${baseUrl}/api/account/paragraph-bookmarks`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: readerCookie,
+      },
+      body: JSON.stringify({
+        storyId: obsidian.id,
+        chapterId: ch1.id,
+        paragraphIndex: 1,
+        label: 'Updated Council Clue',
+        excerpt: ch1.content[1],
+      }),
+    });
+    assert.equal(updateRes.status, 200);
+    const updatedData = await updateRes.json();
+    assert.equal(updatedData.paragraphBookmarks.length, 1);
+    assert.equal(updatedData.paragraphBookmarks[0].id, createdId);
+    assert.equal(updatedData.paragraphBookmarks[0].label, 'Updated Council Clue');
+
+    // 6. GET returns persisted bookmark
+    const listRes = await fetch(`${baseUrl}/api/account/paragraph-bookmarks`, {
+      headers: { Cookie: readerCookie },
+    });
+    assert.equal(listRes.status, 200);
+    const listData = await listRes.json();
+    assert.equal(listData.paragraphBookmarks.length, 1);
+    assert.equal(listData.paragraphBookmarks[0].storySlug, 'the-obsidian-throne');
+
+    // 7. DELETE removes bookmark cleanly
+    const deleteRes = await fetch(`${baseUrl}/api/account/paragraph-bookmarks/${encodeURIComponent(createdId)}`, {
+      method: 'DELETE',
+      headers: { Cookie: readerCookie },
+    });
+    assert.equal(deleteRes.status, 200);
+    const deletedData = await deleteRes.json();
+    assert.equal(deletedData.paragraphBookmarks.length, 0);
   });
 });

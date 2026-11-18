@@ -12,6 +12,7 @@ import {
   DayGoalHistory,
   TextHighlight,
   HighlightColor,
+  ParagraphBookmark,
   ChapterComment,
   CommentTag,
   CommunityInquiry
@@ -22,6 +23,7 @@ import { apiFetch, parseJsonSafe, setStoredSessionToken } from '../lib/apiClient
 export interface RouteParams {
   slug?: string;
   chapterNumber?: number;
+  paragraph?: number;
   q?: string;
   genre?: string;
   status?: string;
@@ -82,6 +84,18 @@ interface HighlightInput {
   excerpt: string;
   color: HighlightColor;
   note?: string;
+}
+
+interface ParagraphBookmarkInput {
+  storyId: string;
+  storyTitle: string;
+  storySlug: string;
+  chapterId: string;
+  chapterNumber: number;
+  chapterTitle: string;
+  paragraphIndex: number;
+  excerpt: string;
+  label?: string;
 }
 
 interface CommentInput {
@@ -199,10 +213,14 @@ interface AppContextType {
   updateReadingGoal: (partial: Partial<ReadingGoal>) => void;
   logChapterCompleted: (chapterId?: string) => boolean;
 
-  // Highlights, Margin Notes, Chapter Comments & Community Inquiries
+  // Highlights, Paragraph Bookmarks, Margin Notes, Chapter Comments & Community Inquiries
   highlights: TextHighlight[];
   saveHighlight: (input: HighlightInput) => void;
   removeHighlight: (highlightId: string) => void;
+  paragraphBookmarks: ParagraphBookmark[];
+  saveParagraphBookmark: (input: ParagraphBookmarkInput) => void;
+  removeParagraphBookmark: (bookmarkId: string) => void;
+  isParagraphBookmarked: (chapterId: string, paragraphIndex: number) => boolean;
   chapterComments: ChapterComment[];
   loadChapterComments: (chapterId: string) => Promise<void>;
   addChapterComment: (input: CommentInput) => Promise<{ error?: string }>;
@@ -411,10 +429,13 @@ export function buildHref(route: string, params?: RouteParams): string {
     }
     case 'story-detail':
       return params?.slug ? `/stories/${encodeURIComponent(params.slug)}` : '/stories';
-    case 'reader':
-      return params?.slug
-        ? `/stories/${encodeURIComponent(params.slug)}/chapters/${params.chapterNumber || 1}`
-        : '/stories';
+    case 'reader': {
+      if (!params?.slug) return '/stories';
+      const base = `/stories/${encodeURIComponent(params.slug)}/chapters/${params.chapterNumber || 1}`;
+      return typeof params.paragraph === 'number' && Number.isInteger(params.paragraph) && params.paragraph >= 0
+        ? `${base}?paragraph=${params.paragraph}`
+        : base;
+    }
     case 'pricing':
       return '/pricing';
     case 'account': {
@@ -465,11 +486,14 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
 
   const chapterMatch = cleanPath.match(/^\/stories\/([^/]+)\/chapters\/(\d+)$/);
   if (chapterMatch) {
+    const rawPara = qs.get('paragraph');
+    const parsedPara = rawPara !== null && /^\d+$/.test(rawPara) ? Number(rawPara) : undefined;
     return {
       route: 'reader',
       params: {
         slug: decodeURIComponent(chapterMatch[1]),
-        chapterNumber: Number(chapterMatch[2]) || 1
+        chapterNumber: Number(chapterMatch[2]) || 1,
+        ...(parsedPara !== undefined ? { paragraph: parsedPara } : {})
       }
     };
   }
@@ -552,6 +576,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [highlights, setHighlights] = useState<TextHighlight[]>([]);
+  const [paragraphBookmarks, setParagraphBookmarks] = useState<ParagraphBookmark[]>(() => {
+    try {
+      const raw = window.localStorage.getItem('lorethos_guest_paragraph_bookmarks');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [chapterComments, setChapterComments] = useState<ChapterComment[]>([]);
   const [inquiries, setInquiries] = useState<CommunityInquiry[]>([]);
 
@@ -594,6 +628,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [isAuthenticated, user.readingGoal]);
 
+  // Persist guest paragraph bookmarks locally when not authenticated
+  useEffect(() => {
+    if (!isAuthenticated && !authLoading) {
+      try {
+        localStorage.setItem('lorethos_guest_paragraph_bookmarks', JSON.stringify(paragraphBookmarks));
+      } catch {
+        // Ignore storage quota errors
+      }
+    }
+  }, [isAuthenticated, authLoading, paragraphBookmarks]);
+
   // Synchronize document classes based on reader theme
   useEffect(() => {
     const root = document.documentElement;
@@ -635,9 +680,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const loadAccountExtras = useCallback(async () => {
     try {
-      const [txRes, hlRes] = await Promise.all([
+      const [txRes, hlRes, pbmRes] = await Promise.all([
         apiFetch('/api/account/transactions'),
-        apiFetch('/api/account/highlights')
+        apiFetch('/api/account/highlights'),
+        apiFetch('/api/account/paragraph-bookmarks')
       ]);
       if (txRes.ok) {
         const txData = await txRes.json();
@@ -646,6 +692,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (hlRes.ok) {
         const hlData = await hlRes.json();
         setHighlights(Array.isArray(hlData.highlights) ? hlData.highlights : []);
+      }
+      if (pbmRes.ok) {
+        const pbmData = await pbmRes.json();
+        setParagraphBookmarks(Array.isArray(pbmData.paragraphBookmarks) ? pbmData.paragraphBookmarks : []);
       }
     } catch {
       // Safe fallback
@@ -776,7 +826,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (route === 'account' && params?.redirect) {
         setPendingAuthRedirect(sanitizeInternalRedirect(params.redirect));
       }
-      if (!options?.replace) {
+      if (!options?.replace && params?.paragraph === undefined) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     },
@@ -938,6 +988,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsAuthenticated(false);
     setTransactions([]);
     setHighlights([]);
+    try {
+      const rawGuestBookmarks = window.localStorage.getItem('lorethos_guest_paragraph_bookmarks');
+      const parsedGuestBookmarks = rawGuestBookmarks ? JSON.parse(rawGuestBookmarks) : [];
+      setParagraphBookmarks(Array.isArray(parsedGuestBookmarks) ? parsedGuestBookmarks : []);
+    } catch {
+      setParagraphBookmarks([]);
+    }
     setAdminOverview(null);
     setPreferredGenresState([]);
     setReadingPromptOpen(false);
@@ -1183,6 +1240,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
   };
+
+  const saveParagraphBookmark = (input: ParagraphBookmarkInput) => {
+    const existing = paragraphBookmarks.find(
+      b => b.chapterId === input.chapterId && b.paragraphIndex === input.paragraphIndex
+    );
+    const cleanedLabel = input.label?.trim() || undefined;
+
+    const record: ParagraphBookmark = {
+      id: existing ? existing.id : `pbm-${Date.now()}-${input.paragraphIndex}`,
+      storyId: input.storyId,
+      storyTitle: input.storyTitle,
+      storySlug: input.storySlug,
+      chapterId: input.chapterId,
+      chapterNumber: input.chapterNumber,
+      chapterTitle: input.chapterTitle,
+      paragraphIndex: input.paragraphIndex,
+      label: cleanedLabel,
+      excerpt: input.excerpt,
+      createdAt: 'Just now'
+    };
+
+    setParagraphBookmarks(prev =>
+      existing ? prev.map(b => (b.id === existing.id ? record : b)) : [record, ...prev]
+    );
+
+    if (isAuthenticated) {
+      void apiFetch('/api/account/paragraph-bookmarks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record)
+      }).then(async (res) => {
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.paragraphBookmarks)) {
+            setParagraphBookmarks(data.paragraphBookmarks);
+          }
+        }
+      });
+    }
+  };
+
+  const removeParagraphBookmark = (bookmarkId: string) => {
+    setParagraphBookmarks(prev => prev.filter(b => b.id !== bookmarkId));
+    if (isAuthenticated) {
+      void apiFetch(`/api/account/paragraph-bookmarks/${encodeURIComponent(bookmarkId)}`, {
+        method: 'DELETE',
+      }).then(async (res) => {
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.paragraphBookmarks)) {
+            setParagraphBookmarks(data.paragraphBookmarks);
+          }
+        }
+      });
+    }
+  };
+
+  const isParagraphBookmarked = useCallback(
+    (chapterId: string, paragraphIndex: number) =>
+      paragraphBookmarks.some(b => b.chapterId === chapterId && b.paragraphIndex === paragraphIndex),
+    [paragraphBookmarks]
+  );
 
   const loadChapterComments = useCallback(async (chapterId: string) => {
     try {
@@ -1473,6 +1592,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         highlights,
         saveHighlight,
         removeHighlight,
+        paragraphBookmarks,
+        saveParagraphBookmark,
+        removeParagraphBookmark,
+        isParagraphBookmarked,
         chapterComments,
         loadChapterComments,
         addChapterComment,

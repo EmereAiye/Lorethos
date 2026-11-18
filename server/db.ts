@@ -10,6 +10,7 @@ import type {
   UserProfile,
   PaymentTransaction,
   TextHighlight,
+  ParagraphBookmark,
   ChapterComment,
   CommunityInquiry,
   ReadingGoal
@@ -53,6 +54,7 @@ interface PersistedSnapshot {
   orders: ServerOrder[];
   processedEventIds: string[];
   highlights: Record<string, TextHighlight[]>;
+  paragraphBookmarks: Record<string, ParagraphBookmark[]>;
   comments: ChapterComment[];
   inquiries: CommunityInquiry[];
 }
@@ -165,6 +167,7 @@ class LorethosRepository {
             orders: parsed.orders || [],
             processedEventIds: parsed.processedEventIds || [],
             highlights: parsed.highlights || {},
+            paragraphBookmarks: parsed.paragraphBookmarks || {},
             comments: parsed.comments || [],
             inquiries: parsed.inquiries || []
           };
@@ -184,6 +187,7 @@ class LorethosRepository {
       orders: [],
       processedEventIds: [],
       highlights: {},
+      paragraphBookmarks: {},
       comments: [],
       inquiries: []
     };
@@ -331,6 +335,18 @@ class LorethosRepository {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (user_id, chapter_id, paragraph_index)
       );
+      CREATE TABLE IF NOT EXISTS paragraph_bookmarks (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        paragraph_index INTEGER NOT NULL CHECK (paragraph_index >= 0),
+        label TEXT,
+        excerpt TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, chapter_id, paragraph_index)
+      );
+      CREATE INDEX IF NOT EXISTS idx_paragraph_bookmarks_user_id ON paragraph_bookmarks(user_id);
       CREATE TABLE IF NOT EXISTS chapter_comments (
         id TEXT PRIMARY KEY,
         story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
@@ -428,6 +444,7 @@ class LorethosRepository {
         subsRes,
         entRes,
         bmRes,
+        pbmRes,
         progRes,
         hlRes,
         cmtRes,
@@ -441,6 +458,7 @@ class LorethosRepository {
         this.pool.query('SELECT * FROM subscriptions'),
         this.pool.query('SELECT * FROM entitlements'),
         this.pool.query('SELECT * FROM bookmarks'),
+        this.pool.query('SELECT * FROM paragraph_bookmarks ORDER BY created_at DESC'),
         this.pool.query('SELECT * FROM reading_progress'),
         this.pool.query('SELECT * FROM highlights ORDER BY created_at DESC'),
         this.pool.query('SELECT * FROM chapter_comments ORDER BY created_at DESC'),
@@ -575,6 +593,27 @@ class LorethosRepository {
           createdAt: new Date(h.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
         });
         this.state.highlights[h.user_id] = list;
+      }
+
+      this.state.paragraphBookmarks = {};
+      for (const pb of pbmRes.rows) {
+        const st = storyLookup.get(pb.story_id);
+        const ch = st?.chapters.find((c) => c.id === pb.chapter_id);
+        const list = this.state.paragraphBookmarks[pb.user_id] || [];
+        list.push({
+          id: pb.id,
+          storyId: pb.story_id,
+          storyTitle: st?.title || '',
+          storySlug: st?.slug || '',
+          chapterId: pb.chapter_id,
+          chapterNumber: ch?.chapterNumber || 1,
+          chapterTitle: ch?.title || '',
+          paragraphIndex: Number(pb.paragraph_index),
+          label: pb.label || undefined,
+          excerpt: pb.excerpt,
+          createdAt: new Date(pb.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        });
+        this.state.paragraphBookmarks[pb.user_id] = list;
       }
 
       this.state.comments = cmtRes.rows.map((c) => ({
@@ -1361,6 +1400,61 @@ class LorethosRepository {
     });
 
     return this.state.highlights[userId];
+  }
+
+  public getParagraphBookmarks(userId: string): ParagraphBookmark[] {
+    return this.state.paragraphBookmarks[userId] || [];
+  }
+
+  public saveParagraphBookmark(userId: string, bookmark: ParagraphBookmark): ParagraphBookmark[] {
+    const existingList = [...(this.state.paragraphBookmarks[userId] || [])];
+    const idx = existingList.findIndex(
+      (b) => b.chapterId === bookmark.chapterId && b.paragraphIndex === bookmark.paragraphIndex
+    );
+    const savedRecord: ParagraphBookmark = idx >= 0
+      ? { ...bookmark, id: existingList[idx].id }
+      : bookmark;
+
+    if (idx >= 0) {
+      existingList[idx] = savedRecord;
+    } else {
+      existingList.unshift(savedRecord);
+    }
+    this.state.paragraphBookmarks[userId] = existingList;
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO paragraph_bookmarks (id, user_id, story_id, chapter_id, paragraph_index, label, excerpt)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (user_id, chapter_id, paragraph_index) DO UPDATE SET
+           label = EXCLUDED.label,
+           excerpt = EXCLUDED.excerpt`,
+        [
+          savedRecord.id,
+          userId,
+          savedRecord.storyId,
+          savedRecord.chapterId,
+          savedRecord.paragraphIndex,
+          savedRecord.label ?? null,
+          savedRecord.excerpt
+        ]
+      );
+    });
+
+    return existingList;
+  }
+
+  public deleteParagraphBookmark(userId: string, bookmarkId: string): ParagraphBookmark[] {
+    const existingList = this.state.paragraphBookmarks[userId] || [];
+    this.state.paragraphBookmarks[userId] = existingList.filter((b) => b.id !== bookmarkId);
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query('DELETE FROM paragraph_bookmarks WHERE id = $1 AND user_id = $2', [bookmarkId, userId]);
+    });
+
+    return this.state.paragraphBookmarks[userId];
   }
 
   public getComments(chapterId?: string): ChapterComment[] {

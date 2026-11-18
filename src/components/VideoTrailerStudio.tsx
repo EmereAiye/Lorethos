@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Film, Loader2, Download } from 'lucide-react';
 import { VoiceDictationButton } from './VoiceDictationButton';
 import { apiFetch, parseJsonSafe } from '../lib/apiClient';
@@ -9,6 +9,19 @@ interface VideoTrailerStudioProps {
   defaultPrompt?: string;
   heading?: string;
   description?: string;
+}
+
+interface VideoApiResponse {
+  status?: string;
+  interactionId?: string;
+  videoUrl?: string;
+  videoBase64?: string;
+  videoUri?: string;
+  mimeType?: string;
+  aspectRatio?: string;
+  sizeBytes?: number | null;
+  chunkDownload?: boolean;
+  error?: string;
 }
 
 export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
@@ -22,9 +35,59 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
   const [duration, setDuration] = useState<'6s' | '10s'>('6s');
   const [generating, setGenerating] = useState(false);
+  const [renderStatus, setRenderStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [renderedRatio, setRenderedRatio] = useState<'16:9' | '9:16'>('16:9');
+
+  const activeRunIdRef = useRef(0);
+  const blobUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      activeRunIdRef.current += 1;
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  const downloadVideoInChunks = async (
+    url: string,
+    totalBytes: number,
+    mimeType: string,
+    runId: number
+  ): Promise<string> => {
+    const chunkSize = 3_000_000;
+    const chunks: Uint8Array[] = [];
+    let offset = 0;
+
+    while (offset < totalBytes) {
+      if (activeRunIdRef.current !== runId) {
+        throw new Error('Cancelled');
+      }
+      const end = Math.min(offset + chunkSize - 1, totalBytes - 1);
+      const partRes = await apiFetch(url, {
+        headers: { Range: `bytes=${offset}-${end}` }
+      });
+      if (!partRes.ok) {
+        throw new Error(`Failed while downloading rendered clip (HTTP ${partRes.status}).`);
+      }
+      const buf = new Uint8Array(await partRes.arrayBuffer());
+      if (buf.byteLength === 0) break;
+      chunks.push(buf);
+      offset += buf.byteLength;
+    }
+
+    const blob = new Blob(chunks as BlobPart[], { type: mimeType || 'video/mp4' });
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+    }
+    const nextUrl = URL.createObjectURL(blob);
+    blobUrlRef.current = nextUrl;
+    return nextUrl;
+  };
 
   const handleGenerateVideo = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,7 +97,9 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
       return;
     }
 
+    const runId = ++activeRunIdRef.current;
     setGenerating(true);
+    setRenderStatus('Starting video render...');
     setError(null);
 
     try {
@@ -48,30 +113,102 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
           storySlug
         })
       });
-      const data = await parseJsonSafe<{
-        videoBase64?: string;
-        videoUri?: string;
-        mimeType?: string;
-        aspectRatio?: string;
-        error?: string;
-      }>(res);
-      if (!res.ok || !data) {
-        throw new Error(data?.error || 'Could not generate video clip.');
+      const initialData = await parseJsonSafe<VideoApiResponse>(res);
+      if (!res.ok || !initialData) {
+        throw new Error(
+          initialData?.error ||
+            (res.status === 504
+              ? 'Video request timed out on the server gateway. Please try again.'
+              : `Could not start video rendering (HTTP ${res.status}).`)
+        );
       }
 
-      if (data.videoBase64) {
-        setVideoSrc(`data:${data.mimeType || 'video/mp4'};base64,${data.videoBase64}`);
-        setRenderedRatio(data.aspectRatio === '9:16' ? '9:16' : '16:9');
-      } else if (data.videoUri) {
-        setVideoSrc(data.videoUri);
-        setRenderedRatio(data.aspectRatio === '9:16' ? '9:16' : '16:9');
+      let completedData = initialData;
+      const targetRatio: '16:9' | '9:16' =
+        initialData.aspectRatio === '9:16' || aspectRatio === '9:16' ? '9:16' : '16:9';
+
+      if (initialData.status !== 'completed') {
+        if (!initialData.interactionId) {
+          throw new Error('Server did not return a video rendering job ID.');
+        }
+
+        const startedAt = Date.now();
+        const maxWaitMs = 300_000;
+        let transientFailures = 0;
+
+        while (activeRunIdRef.current === runId) {
+          const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+          setRenderStatus(`Rendering ${duration} trailer clip (${elapsedSec}s)...`);
+
+          await new Promise((resolve) => window.setTimeout(resolve, 3500));
+          if (activeRunIdRef.current !== runId) return;
+
+          if (Date.now() - startedAt > maxWaitMs) {
+            throw new Error('Video generation timed out after 5 minutes. Please try again.');
+          }
+
+          const pollRes = await apiFetch(
+            `/api/ai/video/${encodeURIComponent(initialData.interactionId)}`
+          );
+          const pollData = await parseJsonSafe<VideoApiResponse>(pollRes);
+
+          if (!pollRes.ok) {
+            if (pollRes.status >= 500 && pollRes.status !== 502 && transientFailures < 3) {
+              transientFailures += 1;
+              continue;
+            }
+            throw new Error(pollData?.error || `Video rendering failed (HTTP ${pollRes.status}).`);
+          }
+
+          transientFailures = 0;
+          if (!pollData) continue;
+
+          if (pollData.status === 'completed') {
+            completedData = pollData;
+            break;
+          }
+        }
+      }
+
+      if (activeRunIdRef.current !== runId) return;
+
+      if (completedData.videoUrl) {
+        if (completedData.chunkDownload && completedData.sizeBytes) {
+          setRenderStatus('Loading rendered video stream...');
+          const objectUrl = await downloadVideoInChunks(
+            completedData.videoUrl,
+            completedData.sizeBytes,
+            completedData.mimeType || 'video/mp4',
+            runId
+          );
+          if (activeRunIdRef.current !== runId) return;
+          setVideoSrc(objectUrl);
+        } else {
+          if (blobUrlRef.current) {
+            URL.revokeObjectURL(blobUrlRef.current);
+            blobUrlRef.current = null;
+          }
+          setVideoSrc(completedData.videoUrl);
+        }
+        setRenderedRatio(targetRatio);
+      } else if (completedData.videoBase64) {
+        setVideoSrc(`data:${completedData.mimeType || 'video/mp4'};base64,${completedData.videoBase64}`);
+        setRenderedRatio(targetRatio);
+      } else if (completedData.videoUri) {
+        setVideoSrc(completedData.videoUri);
+        setRenderedRatio(targetRatio);
       } else {
         throw new Error('No playable video stream was returned.');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Video generation failed.');
+      if (activeRunIdRef.current === runId) {
+        setError(err instanceof Error ? err.message : 'Video generation failed.');
+      }
     } finally {
-      setGenerating(false);
+      if (activeRunIdRef.current === runId) {
+        setGenerating(false);
+        setRenderStatus(null);
+      }
     }
   };
 
@@ -188,7 +325,7 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
             {generating ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Rendering Video...</span>
+                <span>{renderStatus || 'Rendering Video...'}</span>
               </>
             ) : (
               <>

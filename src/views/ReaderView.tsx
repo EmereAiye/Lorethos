@@ -85,6 +85,9 @@ export const ReaderView: React.FC = () => {
     highlights,
     saveHighlight,
     removeHighlight,
+    paragraphBookmarks,
+    saveParagraphBookmark,
+    removeParagraphBookmark,
     chapterComments,
     loadChapterComments,
     addChapterComment,
@@ -93,6 +96,7 @@ export const ReaderView: React.FC = () => {
 
   const [scrollProgress, setScrollProgress] = useState(0);
   const [controlsOpen, setControlsOpen] = useState(false);
+  const [bookmarksDrawerOpen, setBookmarksDrawerOpen] = useState(false);
   const [audioDrawerOpen, setAudioDrawerOpen] = useState(false);
   const [companionOpen, setCompanionOpen] = useState(false);
   const [companionLoading, setCompanionLoading] = useState(false);
@@ -120,6 +124,12 @@ export const ReaderView: React.FC = () => {
   const [editingParagraphIdx, setEditingParagraphIdx] = useState<number | null>(null);
   const [selectedColor, setSelectedColor] = useState<HighlightColor>('terracotta');
   const [noteDraft, setNoteDraft] = useState('');
+
+  // Paragraph / Section Bookmark editor & deep-link focus state
+  const [bookmarkingParagraphIdx, setBookmarkingParagraphIdx] = useState<number | null>(null);
+  const [bookmarkLabelDraft, setBookmarkLabelDraft] = useState('');
+  const [focusedParagraphIdx, setFocusedParagraphIdx] = useState<number | null>(null);
+  const focusTimerRef = useRef<number | null>(null);
 
   // Chapter Discussion state
   const [commentTag, setCommentTag] = useState<CommentTag>('Reaction');
@@ -245,6 +255,9 @@ export const ReaderView: React.FC = () => {
     setCompanionReply(null);
     setCompanionError(null);
     setEditingParagraphIdx(null);
+    setBookmarkingParagraphIdx(null);
+    setBookmarksDrawerOpen(false);
+    setFocusedParagraphIdx(null);
     setAutoCompletedToast(false);
     setActiveParagraphIdx(0);
     setMoodPreviewActive(false);
@@ -257,7 +270,9 @@ export const ReaderView: React.FC = () => {
     });
     setTtsPlaying(false);
     setScrollProgress(0);
-    window.scrollTo({ top: 0 });
+    if (routeParams.paragraph === undefined) {
+      window.scrollTo({ top: 0 });
+    }
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
       ttsAudioRef.current.removeAttribute('src');
@@ -421,7 +436,63 @@ export const ReaderView: React.FC = () => {
   const paragraphs = chapter.content || [];
   const isBookmarked = user.bookmarkedChapterIds.includes(chapter.id);
   const chapterHighlights = highlights.filter(h => h.chapterId === chapter.id);
+  const chapterParagraphBookmarks = paragraphBookmarks
+    .filter(b => b.chapterId === chapter.id)
+    .sort((a, b) => a.paragraphIndex - b.paragraphIndex);
+  const storyOtherParagraphBookmarks = paragraphBookmarks
+    .filter(b => b.storyId === story.id && b.chapterId !== chapter.id)
+    .sort((a, b) => a.chapterNumber - b.chapterNumber || a.paragraphIndex - b.paragraphIndex);
   const activeComments = chapterComments.filter(c => c.chapterId === chapter.id);
+
+  const jumpToParagraph = (paragraphIdx: number, openLabelEditor = false) => {
+    setBookmarksDrawerOpen(false);
+    const el =
+      document.getElementById(`paragraph-${paragraphIdx}`) ||
+      document.querySelector<HTMLElement>(`[data-paragraph-idx="${paragraphIdx}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setFocusedParagraphIdx(paragraphIdx);
+    if (focusTimerRef.current) {
+      window.clearTimeout(focusTimerRef.current);
+    }
+    focusTimerRef.current = window.setTimeout(() => {
+      setFocusedParagraphIdx(null);
+    }, 2400);
+
+    if (openLabelEditor) {
+      const existing = chapterParagraphBookmarks.find(b => b.paragraphIndex === paragraphIdx);
+      setBookmarkLabelDraft(existing?.label || '');
+      setBookmarkingParagraphIdx(paragraphIdx);
+      setEditingParagraphIdx(null);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (focusTimerRef.current) {
+        window.clearTimeout(focusTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Automatically scroll to ?paragraph=N when arriving from a saved bookmark deep link
+  useEffect(() => {
+    const targetPara = routeParams.paragraph;
+    if (
+      typeof targetPara !== 'number' ||
+      chapterLoading ||
+      !isAccessible ||
+      targetPara < 0 ||
+      targetPara >= paragraphs.length
+    ) {
+      return;
+    }
+    const raf = window.requestAnimationFrame(() => {
+      jumpToParagraph(targetPara);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [routeParams.paragraph, chapterLoading, isAccessible, paragraphs.length, chapter.id]);
 
   // Observe visible paragraph so Scene Mood (Auto) activates only on tense/suspense spots
   useEffect(() => {
@@ -534,10 +605,43 @@ export const ReaderView: React.FC = () => {
       setEditingParagraphIdx(null);
       return;
     }
+    setBookmarkingParagraphIdx(null);
     const existing = chapterHighlights.find(h => h.paragraphIndex === idx);
     setSelectedColor(existing?.color || 'terracotta');
     setNoteDraft(existing?.note || '');
     setEditingParagraphIdx(idx);
+  };
+
+  const openBookmarkEditor = (idx: number) => {
+    if (bookmarkingParagraphIdx === idx) {
+      setBookmarkingParagraphIdx(null);
+      return;
+    }
+    setEditingParagraphIdx(null);
+    const existing = chapterParagraphBookmarks.find(b => b.paragraphIndex === idx);
+    setBookmarkLabelDraft(existing?.label || '');
+    setBookmarkingParagraphIdx(idx);
+  };
+
+  const handleToggleOrMarkParagraph = (idx: number, paragraphText: string) => {
+    const existing = chapterParagraphBookmarks.find(b => b.paragraphIndex === idx);
+    if (existing) {
+      openBookmarkEditor(idx);
+      return;
+    }
+    saveParagraphBookmark({
+      storyId: story.id,
+      storyTitle: story.title,
+      storySlug: story.slug,
+      chapterId: chapter.id,
+      chapterNumber: chapter.chapterNumber,
+      chapterTitle: chapter.title,
+      paragraphIndex: idx,
+      excerpt: paragraphText
+    });
+    setEditingParagraphIdx(null);
+    setBookmarkLabelDraft('');
+    setBookmarkingParagraphIdx(idx);
   };
 
   return (
@@ -650,26 +754,40 @@ export const ReaderView: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => toggleBookmark(chapter.id)}
-              aria-label={isBookmarked ? 'Remove bookmark' : 'Bookmark chapter'}
-              aria-pressed={isBookmarked}
-              className={`p-1.5 rounded transition-colors cursor-pointer ${
-                isBookmarked ? 'text-[#C85A32]' : 'opacity-70 hover:opacity-100'
+              onClick={() => {
+                setBookmarksDrawerOpen(!bookmarksDrawerOpen);
+                setControlsOpen(false);
+                setAudioDrawerOpen(false);
+                setCompanionOpen(false);
+              }}
+              aria-expanded={bookmarksDrawerOpen}
+              aria-label="Chapter and paragraph bookmarks"
+              className={`flex items-center gap-1 px-2 py-1 rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                bookmarksDrawerOpen || isBookmarked || chapterParagraphBookmarks.length > 0
+                  ? 'text-[#C85A32] bg-[#C85A32]/12 font-semibold'
+                  : 'opacity-80 hover:opacity-100 hover:text-[#C85A32]'
               }`}
             >
-              <Bookmark className={`w-4 h-4 ${isBookmarked ? 'fill-current' : ''}`} />
+              <Bookmark className={`w-4 h-4 ${isBookmarked || chapterParagraphBookmarks.length > 0 ? 'fill-current' : ''}`} />
+              {chapterParagraphBookmarks.length > 0 && (
+                <span className="text-[11px] font-semibold tabular-nums">
+                  {chapterParagraphBookmarks.length}
+                </span>
+              )}
+              <span className="hidden lg:inline">Bookmarks</span>
             </button>
 
             <button
               type="button"
               onClick={() => {
                 setAudioDrawerOpen(!audioDrawerOpen);
+                setBookmarksDrawerOpen(false);
                 setControlsOpen(false);
                 setCompanionOpen(false);
               }}
               aria-expanded={audioDrawerOpen}
               aria-label="Audio narration and adaptive scene mood audio"
-              className={`flex items-center gap-1 px-2 py-1 rounded transition-colors cursor-pointer ${
+              className={`flex items-center gap-1 px-2 py-1 rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 audioDrawerOpen || readerSettings.ambientSound || ttsPlaying
                   ? 'text-[#C85A32] bg-[#C85A32]/15 font-semibold'
                   : 'opacity-80 hover:opacity-100 hover:text-[#C85A32]'
@@ -689,12 +807,13 @@ export const ReaderView: React.FC = () => {
               type="button"
               onClick={() => {
                 setCompanionOpen(!companionOpen);
+                setBookmarksDrawerOpen(false);
                 setControlsOpen(false);
                 setAudioDrawerOpen(false);
               }}
               aria-expanded={companionOpen}
               aria-label="Ask about this chapter"
-              className={`flex items-center gap-1 px-2 py-1 rounded transition-colors cursor-pointer ${
+              className={`flex items-center gap-1 px-2 py-1 rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                 companionOpen
                   ? 'text-[#C85A32] bg-[#C85A32]/15 font-semibold'
                   : 'opacity-80 hover:opacity-100 hover:text-[#C85A32]'
@@ -708,18 +827,162 @@ export const ReaderView: React.FC = () => {
               type="button"
               onClick={() => {
                 setControlsOpen(!controlsOpen);
+                setBookmarksDrawerOpen(false);
                 setCompanionOpen(false);
                 setAudioDrawerOpen(false);
               }}
               aria-expanded={controlsOpen}
               aria-label="Typography settings"
-              className="p-1.5 rounded opacity-80 hover:opacity-100 hover:text-[#C85A32] transition-colors cursor-pointer flex items-center gap-1"
+              className="p-1.5 rounded opacity-80 hover:opacity-100 hover:text-[#C85A32] transition-colors cursor-pointer flex items-center gap-1 shrink-0"
             >
               <Settings2 className="w-4 h-4" />
               <span className="font-serif">Aa</span>
             </button>
           </div>
         </div>
+
+        {/* Bookmarks & Marked Sections Drawer */}
+        {bookmarksDrawerOpen && (
+          <div className="max-w-xl mx-auto mt-2 p-5 rounded-xl border transition-all text-xs space-y-4 shadow-xl bg-white dark:bg-[#1E111E] sepia:bg-[#EDE3D5] border-[#C85A32]/25 text-slate-800 dark:text-slate-100 sepia:text-[#2C1E18]">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Bookmark className="w-4 h-4 text-[#C85A32]" />
+                <div>
+                  <span className="font-display text-sm font-bold block">Bookmarks &amp; Sections</span>
+                  <span className="text-[11px] opacity-65">Save this chapter or jump to marked paragraphs</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBookmarksDrawerOpen(false)}
+                className="text-xs text-[#C85A32] font-semibold hover:underline cursor-pointer"
+              >
+                Close &times;
+              </button>
+            </div>
+
+            <div className="p-3 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] sepia:bg-[#F4ECE1] border border-current/10 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <span className="font-semibold block truncate">
+                  Chapter {chapter.chapterNumber}: {chapter.title}
+                </span>
+                <span className="text-[11px] opacity-65">
+                  {isBookmarked ? 'Saved in your chapter bookmarks' : 'Mark the entire chapter for quick access'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => toggleBookmark(chapter.id)}
+                className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors ${
+                  isBookmarked
+                    ? 'bg-[#C85A32] text-white'
+                    : 'border border-[#C85A32]/40 text-[#C85A32] hover:bg-[#C85A32] hover:text-white'
+                }`}
+              >
+                <Bookmark className={`w-3.5 h-3.5 ${isBookmarked ? 'fill-current' : ''}`} />
+                <span>{isBookmarked ? 'Bookmarked' : 'Bookmark Chapter'}</span>
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-semibold opacity-75">
+                <span>Marked Paragraphs in This Chapter</span>
+                <span className="tabular-nums">{chapterParagraphBookmarks.length}</span>
+              </div>
+
+              {chapterParagraphBookmarks.length === 0 ? (
+                <p className="p-3.5 rounded-lg border border-dashed border-current/15 text-[11px] opacity-70 leading-relaxed">
+                  No passages marked in this chapter yet. Select <strong className="text-[#C85A32]">Bookmark</strong> on any paragraph while reading to mark a key section for reference.
+                </p>
+              ) : (
+                <div className="divide-y divide-current/10 border border-current/12 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
+                  {chapterParagraphBookmarks.map((bm) => (
+                    <div
+                      key={bm.id}
+                      className="p-3 flex items-start justify-between gap-3 hover:bg-current/[0.03] transition-colors"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => jumpToParagraph(bm.paragraphIndex)}
+                        className="text-left flex-1 min-w-0 space-y-1 cursor-pointer"
+                      >
+                        <div className="flex items-center gap-1.5 text-[11px] font-sans-ui">
+                          <span className="font-mono font-semibold text-[#C85A32] tabular-nums">
+                            Para. {bm.paragraphIndex + 1}
+                          </span>
+                          {bm.label && (
+                            <>
+                              <span className="opacity-40">&middot;</span>
+                              <span className="font-semibold truncate">{bm.label}</span>
+                            </>
+                          )}
+                        </div>
+                        <p className="font-reader text-xs opacity-75 line-clamp-2 italic">
+                          &ldquo;{bm.excerpt}&rdquo;
+                        </p>
+                      </button>
+
+                      <div className="flex items-center gap-2 shrink-0 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => jumpToParagraph(bm.paragraphIndex, true)}
+                          className="text-[11px] font-semibold text-[#C85A32] hover:underline cursor-pointer"
+                        >
+                          {bm.label ? 'Rename' : 'Label'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeParagraphBookmark(bm.id)}
+                          aria-label={`Remove bookmark at paragraph ${bm.paragraphIndex + 1}`}
+                          className="p-1 opacity-60 hover:opacity-100 hover:text-red-500 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {storyOtherParagraphBookmarks.length > 0 && (
+              <div className="space-y-1.5 pt-2 border-t border-current/10">
+                <span className="text-[11px] font-semibold opacity-70 block">
+                  Other Marked Sections in {story.title}
+                </span>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {storyOtherParagraphBookmarks.map((bm) => (
+                    <a
+                      key={bm.id}
+                      href={buildHref('reader', {
+                        slug: story.slug,
+                        chapterNumber: bm.chapterNumber,
+                        paragraph: bm.paragraphIndex
+                      })}
+                      onClick={(e) => {
+                        setBookmarksDrawerOpen(false);
+                        handleLink(e, 'reader', {
+                          slug: story.slug,
+                          chapterNumber: bm.chapterNumber,
+                          paragraph: bm.paragraphIndex
+                        });
+                      }}
+                      className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded hover:bg-current/[0.04] text-[11px]"
+                    >
+                      <span className="truncate">
+                        <span className="font-semibold text-[#C85A32] tabular-nums">
+                          Ch. {bm.chapterNumber} &middot; Para. {bm.paragraphIndex + 1}
+                        </span>
+                        {bm.label ? ` — ${bm.label}` : ''}
+                      </span>
+                      <span className="text-[#C85A32] font-semibold shrink-0">Jump &rarr;</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Reading Settings Drawer */}
         {controlsOpen && (
@@ -1183,17 +1446,64 @@ export const ReaderView: React.FC = () => {
               {paragraphs.map((paragraph, index) => {
                 const existingHighlight = chapterHighlights.find(h => h.paragraphIndex === index);
                 const hlStyle = existingHighlight ? HIGHLIGHT_STYLES[existingHighlight.color] : null;
+                const existingBookmark = chapterParagraphBookmarks.find(b => b.paragraphIndex === index);
                 const isEditing = editingParagraphIdx === index;
+                const isBookmarkEditing = bookmarkingParagraphIdx === index;
+                const isFocused = focusedParagraphIdx === index;
 
                 return (
-                  <div key={index} data-paragraph-idx={index} className="group relative space-y-2">
+                  <div
+                    key={index}
+                    id={`paragraph-${index}`}
+                    data-paragraph-idx={index}
+                    className="group relative space-y-2 scroll-mt-24"
+                  >
                     <div
-                      className={`rounded-r-lg transition-all ${
+                      className={`rounded-lg transition-all duration-300 ${
                         hlStyle
-                          ? `${hlStyle.border} ${hlStyle.bg} pl-4 pr-3 py-2`
+                          ? `${hlStyle.border} ${hlStyle.bg} pl-4 pr-3 py-2 ${isFocused ? 'ring-2 ring-[#C85A32]/70' : existingBookmark ? 'ring-1 ring-[#C85A32]/25' : ''}`
+                          : isFocused
+                          ? 'ring-2 ring-[#C85A32]/70 bg-[#C85A32]/[0.08] px-3 py-2 -mx-3'
+                          : existingBookmark
+                          ? 'bg-[#C85A32]/[0.045] ring-1 ring-[#C85A32]/20 px-3 py-2 -mx-3'
                           : 'hover:bg-current/[0.025] px-2 -mx-2 py-1'
                       }`}
                     >
+                      {existingBookmark && (
+                        <div className="flex items-center justify-between gap-2 text-[11px] font-sans-ui text-[#C85A32] pb-1.5 mb-2 border-b border-[#C85A32]/20">
+                          <span className="flex items-center gap-1.5 font-semibold min-w-0">
+                            <Bookmark className="w-3 h-3 fill-current shrink-0" />
+                            <span className="truncate">
+                              {existingBookmark.label ? existingBookmark.label : `Bookmarked · Para. ${index + 1}`}
+                            </span>
+                            {existingBookmark.label && (
+                              <span className="opacity-65 font-normal tabular-nums shrink-0">
+                                &middot; Para. {index + 1}
+                              </span>
+                            )}
+                          </span>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => openBookmarkEditor(index)}
+                              className="hover:underline cursor-pointer"
+                            >
+                              {existingBookmark.label ? 'Rename' : 'Add label'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                removeParagraphBookmark(existingBookmark.id);
+                                if (bookmarkingParagraphIdx === index) setBookmarkingParagraphIdx(null);
+                              }}
+                              className="opacity-75 hover:opacity-100 hover:text-red-500 cursor-pointer"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
                       <p
                         className={
                           index === 0
@@ -1203,7 +1513,21 @@ export const ReaderView: React.FC = () => {
                       >
                         {paragraph}
                       </p>
-                      <div className="mt-1 flex justify-end opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                      <div
+                        className={`mt-1.5 flex items-center justify-end gap-4 transition-opacity ${
+                          existingBookmark || existingHighlight || isEditing || isBookmarkEditing
+                            ? 'opacity-100'
+                            : 'opacity-70 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleToggleOrMarkParagraph(index, paragraph)}
+                          className="text-[11px] font-sans-ui text-[#C85A32] hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Bookmark className={`w-3 h-3 ${existingBookmark ? 'fill-current' : ''}`} />
+                          <span>{existingBookmark ? 'Edit Bookmark' : 'Bookmark'}</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => openParagraphEditor(index)}
@@ -1226,6 +1550,77 @@ export const ReaderView: React.FC = () => {
                           Edit
                         </button>
                       </div>
+                    )}
+
+                    {isBookmarkEditing && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          saveParagraphBookmark({
+                            storyId: story.id,
+                            storyTitle: story.title,
+                            storySlug: story.slug,
+                            chapterId: chapter.id,
+                            chapterNumber: chapter.chapterNumber,
+                            chapterTitle: chapter.title,
+                            paragraphIndex: index,
+                            excerpt: paragraph,
+                            label: bookmarkLabelDraft
+                          });
+                          setBookmarkingParagraphIdx(null);
+                        }}
+                        className={`p-4 rounded-xl border text-xs font-sans-ui space-y-3 ${themeStyles.panel}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <label htmlFor={`bookmark-label-${index}`} className="font-semibold flex items-center gap-1.5">
+                            <Bookmark className="w-3.5 h-3.5 text-[#C85A32] fill-current" />
+                            <span>Name Section Bookmark (Para. {index + 1})</span>
+                          </label>
+                          <span className="text-[10px] opacity-60">Optional label</span>
+                        </div>
+                        <input
+                          id={`bookmark-label-${index}`}
+                          type="text"
+                          maxLength={120}
+                          value={bookmarkLabelDraft}
+                          onChange={(e) => setBookmarkLabelDraft(e.target.value)}
+                          placeholder="e.g. The Council Oath, Key Clue, Turning Point..."
+                          className="w-full px-3 py-2 rounded-lg border border-current/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
+                        />
+                        <div className="flex items-center justify-between gap-2">
+                          {existingBookmark ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                removeParagraphBookmark(existingBookmark.id);
+                                setBookmarkingParagraphIdx(null);
+                              }}
+                              className="text-red-600 dark:text-red-400 hover:underline flex items-center gap-1 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Remove Bookmark</span>
+                            </button>
+                          ) : (
+                            <span />
+                          )}
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setBookmarkingParagraphIdx(null)}
+                              className="px-3 py-1.5 rounded-lg border border-current/20 opacity-80 hover:opacity-100 cursor-pointer"
+                            >
+                              Done
+                            </button>
+                            <button
+                              type="submit"
+                              className="px-3.5 py-1.5 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold cursor-pointer"
+                            >
+                              Save Label
+                            </button>
+                          </div>
+                        </div>
+                      </form>
                     )}
 
                     {isEditing && (

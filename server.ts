@@ -10,6 +10,13 @@ import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import { repo, verifyPassword, PLAN_PRICES_NGN } from './server/db.js';
 import type { StoredUserRecord } from './server/db.js';
 import { sanitizeStoryForPublic } from './server/catalog.js';
+import {
+  submitWaveSpeedVideoJob,
+  getWaveSpeedVideoJob,
+  streamWaveSpeedVideoAsset,
+  formatWaveSpeedError,
+  type WaveSpeedConfig,
+} from './server/wavespeed.js';
 import type { AccessTier, CommentTag, HighlightColor, PublicationStatus } from './src/types/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -205,10 +212,11 @@ function getGeminiClient(): GoogleGenAI {
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs = 25000): Promise<T> {
+  const seconds = Math.max(1, Math.round(timeoutMs / 1000));
   return Promise.race([
     promise,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error('Request timed out after 25 seconds.')), timeoutMs)
+      setTimeout(() => reject(new Error(`Request timed out after ${seconds} seconds.`)), timeoutMs)
     )
   ]);
 }
@@ -271,12 +279,17 @@ function mapPaystackChannel(channel: unknown): 'card' | 'bank_transfer' | 'ussd'
   return 'card';
 }
 
-export async function createApp(options?: { withVite?: boolean; httpServer?: http.Server }) {
+export async function createApp(options?: {
+  withVite?: boolean;
+  httpServer?: http.Server;
+  waveSpeedConfig?: WaveSpeedConfig;
+}) {
   await repo.initDatabase();
   const app = express();
   app.set('trust proxy', 1);
 
   const aiLimiter = createRateLimiter(20, 60_000);
+  const videoPollLimiter = createRateLimiter(120, 60_000);
   const authLimiter = createRateLimiter(25, 60_000);
   const inquiryLimiter = createRateLimiter(10, 60_000);
 
@@ -631,6 +644,82 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
   app.delete('/api/account/highlights/:id', requireAuth, (req: AuthedRequest, res) => {
     const highlights = repo.deleteHighlight(req.currentUser!.id, req.params.id);
     res.json({ highlights });
+  });
+
+  app.get('/api/account/paragraph-bookmarks', requireAuth, (req: AuthedRequest, res) => {
+    res.json({ paragraphBookmarks: repo.getParagraphBookmarks(req.currentUser!.id) });
+  });
+
+  app.post('/api/account/paragraph-bookmarks', requireAuth, (req: AuthedRequest, res) => {
+    const body = req.body as {
+      id?: string;
+      storyId?: string;
+      chapterId?: string;
+      paragraphIndex?: number;
+      label?: string;
+      excerpt?: string;
+    };
+
+    const storyId = typeof body.storyId === 'string' ? body.storyId.trim() : '';
+    const chapterId = typeof body.chapterId === 'string' ? body.chapterId.trim() : '';
+    const paragraphIndex = body.paragraphIndex;
+    const rawExcerpt = typeof body.excerpt === 'string' ? body.excerpt.trim() : '';
+
+    if (
+      !storyId ||
+      !chapterId ||
+      typeof paragraphIndex !== 'number' ||
+      !Number.isInteger(paragraphIndex) ||
+      paragraphIndex < 0 ||
+      !rawExcerpt
+    ) {
+      res.status(400).json({ error: 'Invalid paragraph bookmark payload.' });
+      return;
+    }
+
+    const story = repo.getStoryById(storyId);
+    const chapter = story?.chapters.find((c) => c.id === chapterId);
+    if (!story || !chapter) {
+      res.status(404).json({ error: 'Story or chapter not found.' });
+      return;
+    }
+
+    if (!repo.hasAccessToChapter(req.currentUser, story, chapter)) {
+      res.status(403).json({ error: 'You do not have access to bookmark this chapter.' });
+      return;
+    }
+
+    if (chapter.content.length > 0 && paragraphIndex >= chapter.content.length) {
+      res.status(400).json({ error: 'Invalid paragraph index.' });
+      return;
+    }
+
+    const cleanedLabel = typeof body.label === 'string' ? body.label.trim().slice(0, 120) : '';
+    const safeId =
+      typeof body.id === 'string' && body.id.trim().length > 0 && body.id.trim().length <= 100
+        ? body.id.trim()
+        : `pbm_${crypto.randomUUID()}`;
+
+    const paragraphBookmarks = repo.saveParagraphBookmark(req.currentUser!.id, {
+      id: safeId,
+      storyId: story.id,
+      storyTitle: story.title.slice(0, 120),
+      storySlug: story.slug.slice(0, 120),
+      chapterId: chapter.id,
+      chapterNumber: chapter.chapterNumber,
+      chapterTitle: chapter.title.slice(0, 160),
+      paragraphIndex,
+      label: cleanedLabel || undefined,
+      excerpt: rawExcerpt.slice(0, 1200),
+      createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    });
+
+    res.json({ paragraphBookmarks });
+  });
+
+  app.delete('/api/account/paragraph-bookmarks/:id', requireAuth, (req: AuthedRequest, res) => {
+    const paragraphBookmarks = repo.deleteParagraphBookmark(req.currentUser!.id, req.params.id);
+    res.json({ paragraphBookmarks });
   });
 
   app.get('/api/comments', (req, res) => {
@@ -1376,7 +1465,9 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
     }
   });
 
-  // 6. Text-to-Video Story Trailer / Scene Visualizer via Interactions API (gemini-omni-1.2-flash)
+  // 6. Text-to-Video Story Trailer / Scene Visualizer via WaveSpeedAI API v3 (Wan series)
+  // Uses asynchronous prediction submission + polling so Vercel serverless functions never hit the
+  // 60s timeout, and streams MP4 bytes via /stream with Range clamping under the 4.5MB payload limit.
   app.post('/api/ai/video', aiLimiter, async (req, res) => {
     try {
       const { prompt, aspectRatio, duration, storySlug } = req.body as {
@@ -1413,42 +1504,99 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
         ? `Atmospheric literary book trailer inspired by "${story.title}" (${story.genre}): ${cleanPrompt}`
         : cleanPrompt;
 
-      const ai = getGeminiClient();
-      const interaction = await withTimeout(
-        ai.interactions.create(
-          {
-            model: 'gemini-omni-1.2-flash',
-            input: cinematicInput,
-            background: false,
-            store: false,
-            stream: false,
-            response_format: {
-              type: 'video',
-              aspect_ratio: safeAspectRatio,
-              duration: safeDuration,
-              resolution: '720p',
-            },
-          },
-          { timeout: 300000 }
-        ),
-        300000
+      const job = await submitWaveSpeedVideoJob(
+        {
+          prompt: cinematicInput,
+          aspectRatio: safeAspectRatio,
+          duration: safeDuration,
+        },
+        options?.waveSpeedConfig
       );
 
-      const videoPart = interaction.output_video;
-      if (!videoPart || (!videoPart.data && !videoPart.uri)) {
-        res.status(502).json({ error: 'The model completed without returning a video clip.' });
+      if (job.status === 'completed') {
+        res.json({
+          status: 'completed',
+          interactionId: job.taskId,
+          videoUrl: `/api/ai/video/${encodeURIComponent(job.taskId)}/stream`,
+          mimeType: job.mimeType,
+          aspectRatio: job.aspectRatio,
+          duration: job.duration,
+          sizeBytes: job.sizeBytes,
+          chunkDownload: job.chunkDownload,
+        });
+        return;
+      }
+
+      res.status(202).json({
+        status: 'in_progress',
+        interactionId: job.taskId,
+        aspectRatio: job.aspectRatio,
+        duration: job.duration,
+      });
+    } catch (err) {
+      const formatted = formatWaveSpeedError(err);
+      res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+
+  app.get('/api/ai/video/:interactionId', videoPollLimiter, async (req, res) => {
+    try {
+      const interactionId = String(req.params.interactionId || '').trim();
+      if (!/^[a-zA-Z0-9._:-]{4,200}$/.test(interactionId)) {
+        res.status(400).json({ error: 'Invalid video interaction identifier.' });
+        return;
+      }
+
+      const job = await getWaveSpeedVideoJob(interactionId, options?.waveSpeedConfig);
+
+      if (job.status === 'completed') {
+        res.json({
+          status: 'completed',
+          interactionId: job.taskId,
+          videoUrl: `/api/ai/video/${encodeURIComponent(job.taskId)}/stream`,
+          mimeType: job.mimeType || 'video/mp4',
+          sizeBytes: job.sizeBytes ?? null,
+          chunkDownload: Boolean(job.chunkDownload),
+        });
         return;
       }
 
       res.json({
-        videoBase64: videoPart.data || null,
-        videoUri: videoPart.uri || null,
-        mimeType: videoPart.mime_type || 'video/mp4',
-        aspectRatio: safeAspectRatio,
-        duration: safeDuration,
+        status: 'in_progress',
+        interactionId: job.taskId,
       });
     } catch (err) {
-      const formatted = formatGeminiError(err);
+      const formatted = formatWaveSpeedError(err);
+      res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+
+  app.get('/api/ai/video/:interactionId/stream', videoPollLimiter, async (req, res) => {
+    try {
+      const interactionId = String(req.params.interactionId || '').trim();
+      if (!/^[a-zA-Z0-9._:-]{4,200}$/.test(interactionId)) {
+        res.status(400).json({ error: 'Invalid video interaction identifier.' });
+        return;
+      }
+
+      const streamRes = await streamWaveSpeedVideoAsset(
+        interactionId,
+        req.headers.range,
+        options?.waveSpeedConfig
+      );
+
+      res.status(streamRes.status);
+      res.setHeader('Content-Type', streamRes.mimeType);
+      res.setHeader('Accept-Ranges', 'bytes');
+      if (streamRes.contentRange) {
+        res.setHeader('Content-Range', streamRes.contentRange);
+      }
+      res.setHeader('Content-Length', String(streamRes.contentLength));
+      res.setHeader('Content-Disposition', 'inline; filename="lorethos-trailer.mp4"');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.send(streamRes.body);
+    } catch (err) {
+      const formatted = formatWaveSpeedError(err);
       res.status(formatted.status).json({ error: formatted.message });
     }
   });

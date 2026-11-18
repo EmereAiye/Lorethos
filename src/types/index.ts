@@ -98,6 +98,20 @@ export interface TextHighlight {
   createdAt: string;
 }
 
+export interface ParagraphBookmark {
+  id: string;
+  storyId: string;
+  storyTitle: string;
+  storySlug: string;
+  chapterId: string;
+  chapterNumber: number;
+  chapterTitle: string;
+  paragraphIndex: number;
+  label?: string;
+  excerpt: string;
+  createdAt: string;
+}
+
 export type CommentTag = 'Reaction' | 'Lore' | 'Theory';
 
 export interface ChapterComment {

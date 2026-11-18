@@ -696,6 +696,7 @@ var LorethosRepository = class {
             orders: parsed.orders || [],
             processedEventIds: parsed.processedEventIds || [],
             highlights: parsed.highlights || {},
+            paragraphBookmarks: parsed.paragraphBookmarks || {},
             comments: parsed.comments || [],
             inquiries: parsed.inquiries || []
           };
@@ -713,6 +714,7 @@ var LorethosRepository = class {
       orders: [],
       processedEventIds: [],
       highlights: {},
+      paragraphBookmarks: {},
       comments: [],
       inquiries: []
     };
@@ -856,6 +858,18 @@ var LorethosRepository = class {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (user_id, chapter_id, paragraph_index)
       );
+      CREATE TABLE IF NOT EXISTS paragraph_bookmarks (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        paragraph_index INTEGER NOT NULL CHECK (paragraph_index >= 0),
+        label TEXT,
+        excerpt TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, chapter_id, paragraph_index)
+      );
+      CREATE INDEX IF NOT EXISTS idx_paragraph_bookmarks_user_id ON paragraph_bookmarks(user_id);
       CREATE TABLE IF NOT EXISTS chapter_comments (
         id TEXT PRIMARY KEY,
         story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
@@ -950,6 +964,7 @@ var LorethosRepository = class {
           subsRes,
           entRes,
           bmRes,
+          pbmRes,
           progRes,
           hlRes,
           cmtRes,
@@ -963,6 +978,7 @@ var LorethosRepository = class {
           this.pool.query("SELECT * FROM subscriptions"),
           this.pool.query("SELECT * FROM entitlements"),
           this.pool.query("SELECT * FROM bookmarks"),
+          this.pool.query("SELECT * FROM paragraph_bookmarks ORDER BY created_at DESC"),
           this.pool.query("SELECT * FROM reading_progress"),
           this.pool.query("SELECT * FROM highlights ORDER BY created_at DESC"),
           this.pool.query("SELECT * FROM chapter_comments ORDER BY created_at DESC"),
@@ -1087,6 +1103,26 @@ var LorethosRepository = class {
             createdAt: new Date(h.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
           });
           this.state.highlights[h.user_id] = list;
+        }
+        this.state.paragraphBookmarks = {};
+        for (const pb of pbmRes.rows) {
+          const st = storyLookup.get(pb.story_id);
+          const ch = st?.chapters.find((c) => c.id === pb.chapter_id);
+          const list = this.state.paragraphBookmarks[pb.user_id] || [];
+          list.push({
+            id: pb.id,
+            storyId: pb.story_id,
+            storyTitle: st?.title || "",
+            storySlug: st?.slug || "",
+            chapterId: pb.chapter_id,
+            chapterNumber: ch?.chapterNumber || 1,
+            chapterTitle: ch?.title || "",
+            paragraphIndex: Number(pb.paragraph_index),
+            label: pb.label || void 0,
+            excerpt: pb.excerpt,
+            createdAt: new Date(pb.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+          });
+          this.state.paragraphBookmarks[pb.user_id] = list;
         }
         this.state.comments = cmtRes.rows.map((c) => ({
           id: c.id,
@@ -1766,6 +1802,51 @@ var LorethosRepository = class {
     });
     return this.state.highlights[userId];
   }
+  getParagraphBookmarks(userId) {
+    return this.state.paragraphBookmarks[userId] || [];
+  }
+  saveParagraphBookmark(userId, bookmark) {
+    const existingList = [...this.state.paragraphBookmarks[userId] || []];
+    const idx = existingList.findIndex(
+      (b) => b.chapterId === bookmark.chapterId && b.paragraphIndex === bookmark.paragraphIndex
+    );
+    const savedRecord = idx >= 0 ? { ...bookmark, id: existingList[idx].id } : bookmark;
+    if (idx >= 0) {
+      existingList[idx] = savedRecord;
+    } else {
+      existingList.unshift(savedRecord);
+    }
+    this.state.paragraphBookmarks[userId] = existingList;
+    this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO paragraph_bookmarks (id, user_id, story_id, chapter_id, paragraph_index, label, excerpt)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (user_id, chapter_id, paragraph_index) DO UPDATE SET
+           label = EXCLUDED.label,
+           excerpt = EXCLUDED.excerpt`,
+        [
+          savedRecord.id,
+          userId,
+          savedRecord.storyId,
+          savedRecord.chapterId,
+          savedRecord.paragraphIndex,
+          savedRecord.label ?? null,
+          savedRecord.excerpt
+        ]
+      );
+    });
+    return existingList;
+  }
+  deleteParagraphBookmark(userId, bookmarkId) {
+    const existingList = this.state.paragraphBookmarks[userId] || [];
+    this.state.paragraphBookmarks[userId] = existingList.filter((b) => b.id !== bookmarkId);
+    this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query("DELETE FROM paragraph_bookmarks WHERE id = $1 AND user_id = $2", [bookmarkId, userId]);
+    });
+    return this.state.paragraphBookmarks[userId];
+  }
   getComments(chapterId) {
     if (!chapterId) return this.state.comments;
     return this.state.comments.filter((c) => c.chapterId === chapterId);
@@ -1817,6 +1898,485 @@ var LorethosRepository = class {
   }
 };
 var repo = new LorethosRepository();
+
+// server/wavespeed.ts
+var WAVESPEED_API_BASE = "https://api.wavespeed.ai/api/v3";
+var DEFAULT_WAVESPEED_VIDEO_MODEL = "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast";
+var VERCEL_SAFE_CHUNK_BYTES = 35e5;
+var CHUNK_DOWNLOAD_THRESHOLD_BYTES = 38e5;
+var WaveSpeedApiError = class extends Error {
+  constructor(status, message, code) {
+    super(message);
+    this.name = "WaveSpeedApiError";
+    this.status = status;
+    this.code = code;
+  }
+};
+function sanitizeWaveSpeedText(raw) {
+  return raw.replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]").replace(/\b(ws|sk|pk|AIza)[A-Za-z0-9_-]{12,}\b/g, "[redacted]").replace(/\b[a-f0-9]{40,}\b/gi, "[redacted]").trim();
+}
+function getWaveSpeedApiKey(explicitKey) {
+  const apiKey = (explicitKey ?? process.env.WAVESPEED_API_KEY ?? "").trim();
+  if (!apiKey) {
+    throw new WaveSpeedApiError(
+      503,
+      "Video generation is not configured on the server. Set WAVESPEED_API_KEY in environment variables."
+    );
+  }
+  return apiKey;
+}
+function resolveWaveSpeedVideoModel(rawModel) {
+  const candidate = (rawModel ?? process.env.WAVESPEED_VIDEO_MODEL ?? DEFAULT_WAVESPEED_VIDEO_MODEL).trim().replace(/^\/+|\/+$/g, "");
+  if (!candidate) {
+    return DEFAULT_WAVESPEED_VIDEO_MODEL;
+  }
+  if (candidate.includes("..") || !/^[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+){1,3}$/.test(candidate)) {
+    throw new WaveSpeedApiError(
+      500,
+      "Configured WAVESPEED_VIDEO_MODEL identifier is invalid. Expected a WaveSpeedAI slug such as wavespeed-ai/wan-2.2/t2v-480p-ultra-fast."
+    );
+  }
+  return candidate;
+}
+function resolveWaveSpeedResolution(rawResolution) {
+  const candidate = (rawResolution ?? process.env.WAVESPEED_VIDEO_RESOLUTION ?? "").trim().toLowerCase();
+  if (candidate === "480p" || candidate === "720p") {
+    return candidate;
+  }
+  return void 0;
+}
+function buildWaveSpeedVideoPayload(options) {
+  const { model, prompt, aspectRatio, duration, resolution } = options;
+  const lowerModel = model.toLowerCase();
+  if (lowerModel.includes("wan-3.0")) {
+    const targetRes = resolution ?? (lowerModel.includes("720p") ? "720p" : "480p");
+    return {
+      prompt,
+      aspect_ratio: aspectRatio,
+      resolution: targetRes,
+      duration: duration === "6s" ? 6 : 10,
+      enable_prompt_expansion: false
+    };
+  }
+  if (lowerModel.includes("wan-2.2")) {
+    const use720 = lowerModel.includes("720p") || !lowerModel.includes("480p") && resolution === "720p";
+    const size2 = use720 ? aspectRatio === "9:16" ? "720*1280" : "1280*720" : aspectRatio === "9:16" ? "480*832" : "832*480";
+    return {
+      prompt,
+      size: size2,
+      // Wan 2.2 endpoints support 5s or 8s clips
+      duration: duration === "6s" ? 5 : 8
+    };
+  }
+  const use480 = lowerModel.includes("480p") || !lowerModel.includes("720p") && !lowerModel.includes("1080p") && resolution === "480p";
+  const size = use480 ? aspectRatio === "9:16" ? "480*832" : "832*480" : aspectRatio === "9:16" ? "720*1280" : "1280*720";
+  return {
+    prompt,
+    size,
+    duration: duration === "6s" ? 5 : 10
+  };
+}
+function assertSafeHttpsVideoUrl(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new WaveSpeedApiError(502, "WaveSpeedAI returned a malformed video output URL.");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new WaveSpeedApiError(502, "WaveSpeedAI returned a non-HTTPS video output URL.");
+  }
+  return parsed;
+}
+function mapWaveSpeedHttpError(httpStatus, envelope, rawText) {
+  const upstreamCode = envelope?.code;
+  const rawMessage = envelope?.data?.error || envelope?.message || envelope?.error || rawText || "";
+  const cleanMessage = sanitizeWaveSpeedText(String(rawMessage)).slice(0, 240);
+  const lower = cleanMessage.toLowerCase();
+  if (httpStatus === 402 || upstreamCode === 1407 || lower.includes("insufficient") || lower.includes("credit") || lower.includes("balance") || lower.includes("payment required")) {
+    return new WaveSpeedApiError(
+      402,
+      "WaveSpeedAI account has insufficient credits for video generation. Please top up your WaveSpeedAI balance.",
+      upstreamCode
+    );
+  }
+  if (httpStatus === 401) {
+    return new WaveSpeedApiError(
+      401,
+      "WaveSpeedAI rejected WAVESPEED_API_KEY. Verify your API key configuration on the server.",
+      upstreamCode
+    );
+  }
+  if (httpStatus === 403) {
+    return new WaveSpeedApiError(
+      403,
+      cleanMessage || "WaveSpeedAI denied access to this video model or prediction. Check your API key permissions.",
+      upstreamCode
+    );
+  }
+  if (httpStatus === 404) {
+    return new WaveSpeedApiError(
+      404,
+      "The requested video rendering job or model endpoint was not found, or temporary results have expired.",
+      upstreamCode
+    );
+  }
+  if (httpStatus === 410) {
+    return new WaveSpeedApiError(
+      410,
+      "This generated video link has expired. Please generate a fresh trailer clip.",
+      upstreamCode
+    );
+  }
+  if (httpStatus === 422 || lower.includes("nsfw") || lower.includes("safety") || lower.includes("moderation") || lower.includes("policy")) {
+    return new WaveSpeedApiError(
+      422,
+      cleanMessage || "The scene prompt did not pass WaveSpeedAI content safety checks.",
+      upstreamCode
+    );
+  }
+  if (httpStatus === 429) {
+    return new WaveSpeedApiError(
+      429,
+      "WaveSpeedAI rate limit reached. Please wait a moment and try again.",
+      upstreamCode
+    );
+  }
+  if (httpStatus === 400) {
+    return new WaveSpeedApiError(
+      400,
+      cleanMessage || "WaveSpeedAI rejected the video generation request parameters.",
+      upstreamCode
+    );
+  }
+  if (httpStatus === 504) {
+    return new WaveSpeedApiError(
+      504,
+      "WaveSpeedAI took too long to respond. Please try again.",
+      upstreamCode
+    );
+  }
+  return new WaveSpeedApiError(
+    502,
+    cleanMessage || `WaveSpeedAI request failed (HTTP ${httpStatus}).`,
+    upstreamCode
+  );
+}
+async function fetchWithTimeout(url, init, timeoutMs, fetchImpl = fetch) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new WaveSpeedApiError(504, "WaveSpeedAI request timed out. Please try again.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function callWaveSpeedJson(url, init, timeoutMs, config) {
+  const apiKey = getWaveSpeedApiKey(config?.apiKey);
+  const fetchImpl = config?.fetchImpl ?? fetch;
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    ...init.headers
+  };
+  if (init.body && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  const res = await fetchWithTimeout(url, { ...init, headers }, timeoutMs, fetchImpl);
+  const rawText = await res.text();
+  let parsed;
+  if (rawText) {
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      parsed = void 0;
+    }
+  }
+  if (!res.ok || typeof parsed?.code === "number" && parsed.code >= 400) {
+    throw mapWaveSpeedHttpError(
+      res.ok && typeof parsed?.code === "number" ? parsed.code : res.status,
+      parsed,
+      rawText
+    );
+  }
+  if (!parsed || typeof parsed !== "object") {
+    throw new WaveSpeedApiError(502, "WaveSpeedAI returned an unreadable JSON response.");
+  }
+  return parsed;
+}
+async function probeRemoteVideoMetadata(outputUrl, fetchImpl = fetch) {
+  const safeUrl = assertSafeHttpsVideoUrl(outputUrl).toString();
+  try {
+    const headRes = await fetchWithTimeout(safeUrl, { method: "HEAD" }, 8e3, fetchImpl);
+    if (headRes.status === 403 || headRes.status === 404 || headRes.status === 410) {
+      throw new WaveSpeedApiError(
+        410,
+        "The generated video link on WaveSpeedAI has expired or been removed. Please generate a fresh clip."
+      );
+    }
+    if (headRes.ok) {
+      const lenHeader = headRes.headers.get("content-length");
+      const sizeBytes = lenHeader && /^\d+$/.test(lenHeader.trim()) ? Number(lenHeader.trim()) : null;
+      const mimeType = headRes.headers.get("content-type")?.split(";")[0].trim() || "video/mp4";
+      if (sizeBytes !== null) {
+        return { sizeBytes, mimeType };
+      }
+    }
+  } catch (err) {
+    if (err instanceof WaveSpeedApiError) throw err;
+  }
+  try {
+    const rangeRes = await fetchWithTimeout(
+      safeUrl,
+      { method: "GET", headers: { Range: "bytes=0-0" } },
+      8e3,
+      fetchImpl
+    );
+    if (rangeRes.status === 403 || rangeRes.status === 404 || rangeRes.status === 410) {
+      throw new WaveSpeedApiError(
+        410,
+        "The generated video link on WaveSpeedAI has expired or been removed. Please generate a fresh clip."
+      );
+    }
+    const contentRange = rangeRes.headers.get("content-range") || "";
+    const match = contentRange.match(/bytes\s+\d+-\d+\/(\d+)/i);
+    const lenHeader = rangeRes.headers.get("content-length");
+    const sizeBytes = match ? Number(match[1]) : rangeRes.status === 200 && lenHeader && /^\d+$/.test(lenHeader.trim()) ? Number(lenHeader.trim()) : null;
+    const mimeType = rangeRes.headers.get("content-type")?.split(";")[0].trim() || "video/mp4";
+    await rangeRes.arrayBuffer().catch(() => {
+    });
+    return { sizeBytes, mimeType };
+  } catch (err) {
+    if (err instanceof WaveSpeedApiError) throw err;
+    return { sizeBytes: null, mimeType: "video/mp4" };
+  }
+}
+async function submitWaveSpeedVideoJob(params, config) {
+  const apiBase = (config?.apiBase ?? WAVESPEED_API_BASE).replace(/\/+$/, "");
+  const model = resolveWaveSpeedVideoModel(config?.model);
+  const resolution = resolveWaveSpeedResolution(config?.resolution);
+  const payload = buildWaveSpeedVideoPayload({
+    model,
+    prompt: params.prompt,
+    aspectRatio: params.aspectRatio,
+    duration: params.duration,
+    resolution
+  });
+  const envelope = await callWaveSpeedJson(
+    `${apiBase}/${model}`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    },
+    25e3,
+    config
+  );
+  const data = envelope.data;
+  const taskId = String(data?.id || "").trim();
+  if (!taskId || !/^[a-zA-Z0-9._:-]{4,200}$/.test(taskId)) {
+    throw new WaveSpeedApiError(502, "WaveSpeedAI did not return a valid video prediction ID.");
+  }
+  const status = String(data?.status || "").toLowerCase();
+  const outputUrl = Array.isArray(data?.outputs) ? data.outputs.find((item) => typeof item === "string" && item.trim().length > 0) : void 0;
+  if (status === "completed" && outputUrl) {
+    const meta = await probeRemoteVideoMetadata(outputUrl, config?.fetchImpl);
+    return {
+      status: "completed",
+      taskId,
+      aspectRatio: params.aspectRatio,
+      duration: params.duration,
+      model,
+      mimeType: meta.mimeType,
+      sizeBytes: meta.sizeBytes,
+      chunkDownload: meta.sizeBytes !== null && meta.sizeBytes > CHUNK_DOWNLOAD_THRESHOLD_BYTES
+    };
+  }
+  return {
+    status: "in_progress",
+    taskId,
+    aspectRatio: params.aspectRatio,
+    duration: params.duration,
+    model,
+    mimeType: "video/mp4",
+    sizeBytes: null,
+    chunkDownload: false
+  };
+}
+async function getWaveSpeedVideoJob(taskId, config) {
+  const apiBase = (config?.apiBase ?? WAVESPEED_API_BASE).replace(/\/+$/, "");
+  const envelope = await callWaveSpeedJson(
+    `${apiBase}/predictions/${encodeURIComponent(taskId)}/result`,
+    { method: "GET" },
+    2e4,
+    config
+  );
+  const data = envelope.data;
+  if (!data) {
+    throw new WaveSpeedApiError(502, "WaveSpeedAI returned an empty prediction status payload.");
+  }
+  const status = String(data.status || "").toLowerCase();
+  if (status === "failed" || status === "cancelled" || status === "timeout" || status === "deleted") {
+    const hasNsfw = Array.isArray(data.has_nsfw_contents) && data.has_nsfw_contents.some(Boolean);
+    if (hasNsfw) {
+      throw new WaveSpeedApiError(
+        422,
+        "Generated video frames were flagged by WaveSpeedAI safety filters. Try adjusting the scene description."
+      );
+    }
+    if (status === "timeout") {
+      throw new WaveSpeedApiError(504, "WaveSpeedAI video rendering timed out on the server. Please try again.");
+    }
+    if (status === "deleted") {
+      throw new WaveSpeedApiError(410, "This video rendering job was deleted or expired. Please generate a fresh clip.");
+    }
+    const errText = data.error ? sanitizeWaveSpeedText(String(data.error)) : "";
+    if (errText) {
+      throw mapWaveSpeedHttpError(502, { data: { error: errText } }, errText);
+    }
+    throw new WaveSpeedApiError(502, `WaveSpeedAI video generation ${status}. Please try again.`);
+  }
+  if (status === "completed") {
+    const outputUrl = Array.isArray(data.outputs) ? data.outputs.find((item) => typeof item === "string" && item.trim().length > 0) : void 0;
+    if (!outputUrl) {
+      throw new WaveSpeedApiError(502, "WaveSpeedAI completed the job without returning a video output URL.");
+    }
+    const meta = await probeRemoteVideoMetadata(outputUrl, config?.fetchImpl);
+    return {
+      status: "completed",
+      taskId,
+      outputUrl: assertSafeHttpsVideoUrl(outputUrl).toString(),
+      mimeType: meta.mimeType,
+      sizeBytes: meta.sizeBytes,
+      chunkDownload: meta.sizeBytes !== null && meta.sizeBytes > CHUNK_DOWNLOAD_THRESHOLD_BYTES
+    };
+  }
+  return {
+    status: "in_progress",
+    taskId
+  };
+}
+function clampByteRange(rangeHeader, totalBytes, maxChunkBytes = VERCEL_SAFE_CHUNK_BYTES) {
+  const match = rangeHeader.trim().match(/^bytes=(\d+)-(\d*)$/i);
+  if (!match) {
+    return { valid: false };
+  }
+  const start = Number(match[1]);
+  if (!Number.isFinite(start) || start < 0) {
+    return { valid: false };
+  }
+  if (totalBytes !== null && start >= totalBytes) {
+    return { valid: false };
+  }
+  const rawEnd = match[2] ? Number(match[2]) : void 0;
+  if (rawEnd !== void 0 && (!Number.isFinite(rawEnd) || rawEnd < start)) {
+    return { valid: false };
+  }
+  const maxBoundedEnd = start + maxChunkBytes - 1;
+  let safeEnd = rawEnd !== void 0 ? Math.min(rawEnd, maxBoundedEnd) : maxBoundedEnd;
+  if (totalBytes !== null) {
+    safeEnd = Math.min(safeEnd, totalBytes - 1);
+  }
+  if (safeEnd < start) {
+    return { valid: false };
+  }
+  return { valid: true, start, end: safeEnd };
+}
+async function streamWaveSpeedVideoAsset(taskId, rangeHeader, config) {
+  const job = await getWaveSpeedVideoJob(taskId, config);
+  if (job.status !== "completed" || !job.outputUrl) {
+    throw new WaveSpeedApiError(404, "Video clip is not ready yet or has expired.");
+  }
+  const fetchImpl = config?.fetchImpl ?? fetch;
+  const outputUrl = job.outputUrl;
+  const totalBytes = job.sizeBytes ?? null;
+  const defaultMime = job.mimeType || "video/mp4";
+  const upstreamHeaders = {};
+  let requestedRange = null;
+  if (rangeHeader && rangeHeader.trim().toLowerCase().startsWith("bytes=")) {
+    const clamped = clampByteRange(rangeHeader, totalBytes, VERCEL_SAFE_CHUNK_BYTES);
+    if (!clamped.valid) {
+      throw new WaveSpeedApiError(416, "Requested byte range is outside the video bounds.");
+    }
+    requestedRange = { start: clamped.start, end: clamped.end };
+    upstreamHeaders.Range = `bytes=${clamped.start}-${clamped.end}`;
+  } else if (totalBytes !== null && totalBytes > CHUNK_DOWNLOAD_THRESHOLD_BYTES) {
+    const safeEnd = Math.min(VERCEL_SAFE_CHUNK_BYTES - 1, totalBytes - 1);
+    requestedRange = { start: 0, end: safeEnd };
+    upstreamHeaders.Range = `bytes=0-${safeEnd}`;
+  }
+  const upstreamRes = await fetchWithTimeout(
+    outputUrl,
+    { method: "GET", headers: upstreamHeaders },
+    2e4,
+    fetchImpl
+  );
+  if (upstreamRes.status === 403 || upstreamRes.status === 404 || upstreamRes.status === 410) {
+    throw new WaveSpeedApiError(
+      410,
+      "Generated video link has expired or been removed from temporary storage. Please generate a fresh clip."
+    );
+  }
+  if (!upstreamRes.ok) {
+    throw new WaveSpeedApiError(502, `Failed to retrieve generated video from upstream storage (HTTP ${upstreamRes.status}).`);
+  }
+  const bytes = Buffer.from(await upstreamRes.arrayBuffer());
+  const mimeType = upstreamRes.headers.get("content-type")?.split(";")[0].trim() || defaultMime;
+  if (upstreamRes.status === 206) {
+    const contentRange = upstreamRes.headers.get("content-range") || (requestedRange && totalBytes !== null ? `bytes ${requestedRange.start}-${requestedRange.start + bytes.length - 1}/${totalBytes}` : void 0);
+    return {
+      status: 206,
+      body: bytes,
+      mimeType,
+      contentLength: bytes.length,
+      contentRange
+    };
+  }
+  if (requestedRange) {
+    const slice = bytes.subarray(requestedRange.start, requestedRange.end + 1);
+    const total = bytes.length;
+    return {
+      status: 206,
+      body: slice,
+      mimeType,
+      contentLength: slice.length,
+      contentRange: `bytes ${requestedRange.start}-${requestedRange.start + slice.length - 1}/${total}`
+    };
+  }
+  if (bytes.length > VERCEL_SAFE_CHUNK_BYTES + 7e5) {
+    const slice = bytes.subarray(0, VERCEL_SAFE_CHUNK_BYTES);
+    return {
+      status: 206,
+      body: slice,
+      mimeType,
+      contentLength: slice.length,
+      contentRange: `bytes 0-${slice.length - 1}/${bytes.length}`
+    };
+  }
+  return {
+    status: 200,
+    body: bytes,
+    mimeType,
+    contentLength: bytes.length
+  };
+}
+function formatWaveSpeedError(err) {
+  if (err instanceof WaveSpeedApiError) {
+    return { status: err.status, message: err.message };
+  }
+  const rawMessage = err instanceof Error ? err.message : String(err);
+  console.error("[WaveSpeedAI API error]", sanitizeWaveSpeedText(rawMessage));
+  if (rawMessage.toLowerCase().includes("timed out")) {
+    return { status: 504, message: "WaveSpeedAI took too long to respond. Please try again." };
+  }
+  return {
+    status: 500,
+    message: sanitizeWaveSpeedText(rawMessage).slice(0, 240) || "Failed to generate video trailer. Please try again."
+  };
+}
 
 // server.ts
 var __filename = fileURLToPath(import.meta.url);
@@ -1981,10 +2541,11 @@ function getGeminiClient() {
   });
 }
 async function withTimeout(promise, timeoutMs = 25e3) {
+  const seconds = Math.max(1, Math.round(timeoutMs / 1e3));
   return Promise.race([
     promise,
     new Promise(
-      (_, reject) => setTimeout(() => reject(new Error("Request timed out after 25 seconds.")), timeoutMs)
+      (_, reject) => setTimeout(() => reject(new Error(`Request timed out after ${seconds} seconds.`)), timeoutMs)
     )
   ]);
 }
@@ -2048,6 +2609,7 @@ async function createApp(options) {
   const app = express();
   app.set("trust proxy", 1);
   const aiLimiter = createRateLimiter(20, 6e4);
+  const videoPollLimiter = createRateLimiter(120, 6e4);
   const authLimiter = createRateLimiter(25, 6e4);
   const inquiryLimiter = createRateLimiter(10, 6e4);
   app.post(
@@ -2300,6 +2862,54 @@ async function createApp(options) {
   app.delete("/api/account/highlights/:id", requireAuth, (req, res) => {
     const highlights = repo.deleteHighlight(req.currentUser.id, req.params.id);
     res.json({ highlights });
+  });
+  app.get("/api/account/paragraph-bookmarks", requireAuth, (req, res) => {
+    res.json({ paragraphBookmarks: repo.getParagraphBookmarks(req.currentUser.id) });
+  });
+  app.post("/api/account/paragraph-bookmarks", requireAuth, (req, res) => {
+    const body = req.body;
+    const storyId = typeof body.storyId === "string" ? body.storyId.trim() : "";
+    const chapterId = typeof body.chapterId === "string" ? body.chapterId.trim() : "";
+    const paragraphIndex = body.paragraphIndex;
+    const rawExcerpt = typeof body.excerpt === "string" ? body.excerpt.trim() : "";
+    if (!storyId || !chapterId || typeof paragraphIndex !== "number" || !Number.isInteger(paragraphIndex) || paragraphIndex < 0 || !rawExcerpt) {
+      res.status(400).json({ error: "Invalid paragraph bookmark payload." });
+      return;
+    }
+    const story = repo.getStoryById(storyId);
+    const chapter = story?.chapters.find((c) => c.id === chapterId);
+    if (!story || !chapter) {
+      res.status(404).json({ error: "Story or chapter not found." });
+      return;
+    }
+    if (!repo.hasAccessToChapter(req.currentUser, story, chapter)) {
+      res.status(403).json({ error: "You do not have access to bookmark this chapter." });
+      return;
+    }
+    if (chapter.content.length > 0 && paragraphIndex >= chapter.content.length) {
+      res.status(400).json({ error: "Invalid paragraph index." });
+      return;
+    }
+    const cleanedLabel = typeof body.label === "string" ? body.label.trim().slice(0, 120) : "";
+    const safeId = typeof body.id === "string" && body.id.trim().length > 0 && body.id.trim().length <= 100 ? body.id.trim() : `pbm_${crypto2.randomUUID()}`;
+    const paragraphBookmarks = repo.saveParagraphBookmark(req.currentUser.id, {
+      id: safeId,
+      storyId: story.id,
+      storyTitle: story.title.slice(0, 120),
+      storySlug: story.slug.slice(0, 120),
+      chapterId: chapter.id,
+      chapterNumber: chapter.chapterNumber,
+      chapterTitle: chapter.title.slice(0, 160),
+      paragraphIndex,
+      label: cleanedLabel || void 0,
+      excerpt: rawExcerpt.slice(0, 1200),
+      createdAt: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    });
+    res.json({ paragraphBookmarks });
+  });
+  app.delete("/api/account/paragraph-bookmarks/:id", requireAuth, (req, res) => {
+    const paragraphBookmarks = repo.deleteParagraphBookmark(req.currentUser.id, req.params.id);
+    res.json({ paragraphBookmarks });
   });
   app.get("/api/comments", (req, res) => {
     const chapterId = typeof req.query.chapterId === "string" ? req.query.chapterId : void 0;
@@ -2904,40 +3514,90 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
         return;
       }
       const cinematicInput = story ? `Atmospheric literary book trailer inspired by "${story.title}" (${story.genre}): ${cleanPrompt}` : cleanPrompt;
-      const ai = getGeminiClient();
-      const interaction = await withTimeout(
-        ai.interactions.create(
-          {
-            model: "gemini-omni-1.2-flash",
-            input: cinematicInput,
-            background: false,
-            store: false,
-            stream: false,
-            response_format: {
-              type: "video",
-              aspect_ratio: safeAspectRatio,
-              duration: safeDuration,
-              resolution: "720p"
-            }
-          },
-          { timeout: 3e5 }
-        ),
-        3e5
+      const job = await submitWaveSpeedVideoJob(
+        {
+          prompt: cinematicInput,
+          aspectRatio: safeAspectRatio,
+          duration: safeDuration
+        },
+        options?.waveSpeedConfig
       );
-      const videoPart = interaction.output_video;
-      if (!videoPart || !videoPart.data && !videoPart.uri) {
-        res.status(502).json({ error: "The model completed without returning a video clip." });
+      if (job.status === "completed") {
+        res.json({
+          status: "completed",
+          interactionId: job.taskId,
+          videoUrl: `/api/ai/video/${encodeURIComponent(job.taskId)}/stream`,
+          mimeType: job.mimeType,
+          aspectRatio: job.aspectRatio,
+          duration: job.duration,
+          sizeBytes: job.sizeBytes,
+          chunkDownload: job.chunkDownload
+        });
+        return;
+      }
+      res.status(202).json({
+        status: "in_progress",
+        interactionId: job.taskId,
+        aspectRatio: job.aspectRatio,
+        duration: job.duration
+      });
+    } catch (err) {
+      const formatted = formatWaveSpeedError(err);
+      res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+  app.get("/api/ai/video/:interactionId", videoPollLimiter, async (req, res) => {
+    try {
+      const interactionId = String(req.params.interactionId || "").trim();
+      if (!/^[a-zA-Z0-9._:-]{4,200}$/.test(interactionId)) {
+        res.status(400).json({ error: "Invalid video interaction identifier." });
+        return;
+      }
+      const job = await getWaveSpeedVideoJob(interactionId, options?.waveSpeedConfig);
+      if (job.status === "completed") {
+        res.json({
+          status: "completed",
+          interactionId: job.taskId,
+          videoUrl: `/api/ai/video/${encodeURIComponent(job.taskId)}/stream`,
+          mimeType: job.mimeType || "video/mp4",
+          sizeBytes: job.sizeBytes ?? null,
+          chunkDownload: Boolean(job.chunkDownload)
+        });
         return;
       }
       res.json({
-        videoBase64: videoPart.data || null,
-        videoUri: videoPart.uri || null,
-        mimeType: videoPart.mime_type || "video/mp4",
-        aspectRatio: safeAspectRatio,
-        duration: safeDuration
+        status: "in_progress",
+        interactionId: job.taskId
       });
     } catch (err) {
-      const formatted = formatGeminiError(err);
+      const formatted = formatWaveSpeedError(err);
+      res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+  app.get("/api/ai/video/:interactionId/stream", videoPollLimiter, async (req, res) => {
+    try {
+      const interactionId = String(req.params.interactionId || "").trim();
+      if (!/^[a-zA-Z0-9._:-]{4,200}$/.test(interactionId)) {
+        res.status(400).json({ error: "Invalid video interaction identifier." });
+        return;
+      }
+      const streamRes = await streamWaveSpeedVideoAsset(
+        interactionId,
+        req.headers.range,
+        options?.waveSpeedConfig
+      );
+      res.status(streamRes.status);
+      res.setHeader("Content-Type", streamRes.mimeType);
+      res.setHeader("Accept-Ranges", "bytes");
+      if (streamRes.contentRange) {
+        res.setHeader("Content-Range", streamRes.contentRange);
+      }
+      res.setHeader("Content-Length", String(streamRes.contentLength));
+      res.setHeader("Content-Disposition", 'inline; filename="lorethos-trailer.mp4"');
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.send(streamRes.body);
+    } catch (err) {
+      const formatted = formatWaveSpeedError(err);
       res.status(formatted.status).json({ error: formatted.message });
     }
   });
