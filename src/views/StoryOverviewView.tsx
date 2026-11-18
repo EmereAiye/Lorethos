@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   CheckCircle2
 } from 'lucide-react';
+import { StoryTrailerPlayer } from '../components/StoryTrailerPlayer';
 import { VideoTrailerStudio } from '../components/VideoTrailerStudio';
 
 export const StoryOverviewView: React.FC = () => {
@@ -282,9 +283,19 @@ export const StoryOverviewView: React.FC = () => {
           </div>
         </div>
 
+        {story.trailerVideoUrl && (
+          <StoryTrailerPlayer
+            story={story}
+            readerHref={buildHref('reader', { slug: story.slug, chapterNumber: 1 })}
+            onNavigateReader={() => navigate('reader', { slug: story.slug, chapterNumber: 1 })}
+          />
+        )}
+
         <VideoTrailerStudio
           storySlug={story.slug}
           storyTitle={story.title}
+          heading="Custom Scene Video Generator"
+          description="Want a custom clip from another scene? Describe the scene in words to generate a new 15–30 second talking video variation."
           defaultPrompt={`${story.synopsis.slice(0, 180)} Atmospheric book trailer, painterly lighting, slow camera push.`}
         />
 

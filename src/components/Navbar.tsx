@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { BookOpen, User, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck, Search, ArrowRight } from 'lucide-react';
+import { getDisplayName, computeReaderRank } from '../utils/readerProfile';
+import { BookOpen, User, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck, Search, ArrowRight, Film, Award } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const {
@@ -70,6 +71,8 @@ export const Navbar: React.FC = () => {
 
   const isPatron = isAuthenticated && user.subscription.status === 'active';
   const isOwner = isAuthenticated && user.role === 'owner';
+  const displayName = getDisplayName(user);
+  const rank = useMemo(() => computeReaderRank(user, stories), [user, stories]);
   const trimmedSearch = searchQuery.trim();
   const showDropdown = searchFocused && trimmedSearch.length > 0;
 
@@ -150,6 +153,20 @@ export const Navbar: React.FC = () => {
             }`}
           >
             Membership
+          </a>
+
+          <a
+            href={buildHref('studio')}
+            onClick={(e) => handleNavClick(e, 'studio')}
+            aria-current={currentRoute === 'studio' ? 'page' : undefined}
+            className={`transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+              currentRoute === 'studio'
+                ? 'text-[#C85A32] font-semibold'
+                : 'text-[#2D142C]/80 dark:text-[#F9F6F0]/80 sepia:text-[#2C1E18]/80 hover:text-[#C85A32]'
+            }`}
+          >
+            <Film className="w-3.5 h-3.5 text-[#C85A32]" />
+            <span>Video Studio</span>
           </a>
 
           <a
@@ -383,10 +400,25 @@ export const Navbar: React.FC = () => {
                 : 'border-[#2D142C]/20 dark:border-white/20 sepia:border-[#2C1E18]/20 text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] hover:bg-[#2D142C]/5 dark:hover:bg-white/5'
             }`}
           >
-            <User className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">
-              {!isAuthenticated ? 'Sign In' : isPatron ? 'Patron Account' : 'Account'}
+            <User className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden sm:inline max-w-[115px] truncate">
+              {!isAuthenticated ? 'Sign In' : displayName}
             </span>
+            {isAuthenticated && (
+              <span
+                title={`${rank.title} (${rank.completedChapters} chapters completed)`}
+                className={`hidden md:inline-flex items-center gap-0.5 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                  currentRoute === 'account'
+                    ? 'bg-[#C85A32] text-white'
+                    : isPatron
+                    ? 'bg-[#C85A32]/15 text-[#C85A32]'
+                    : 'bg-current/10 opacity-85'
+                }`}
+              >
+                <Award className="w-2.5 h-2.5" />
+                <span>{rank.roman}</span>
+              </span>
+            )}
           </a>
 
           {/* Primary CTA */}
@@ -488,6 +520,16 @@ export const Navbar: React.FC = () => {
               Membership &amp; Pricing
             </a>
             <a
+              href={buildHref('studio')}
+              onClick={(e) => handleNavClick(e, 'studio')}
+              className={`px-3 py-2.5 rounded-lg font-medium flex items-center gap-2 ${
+                currentRoute === 'studio' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
+              }`}
+            >
+              <Film className="w-4 h-4 text-[#C85A32]" />
+              <span>Video Studio (Words to Video)</span>
+            </a>
+            <a
               href={buildHref('contact')}
               onClick={(e) => handleNavClick(e, 'contact')}
               className={`px-3 py-2.5 rounded-lg font-medium ${
@@ -512,11 +554,16 @@ export const Navbar: React.FC = () => {
                     : undefined
                 )
               }
-              className={`px-3 py-2.5 rounded-lg font-medium ${
+              className={`px-3 py-2.5 rounded-lg font-medium flex items-center justify-between gap-2 ${
                 currentRoute === 'account' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
               }`}
             >
-              {isAuthenticated ? 'My Account & Library' : 'Sign In / Create Account'}
+              <span>{isAuthenticated ? `${displayName} · Account` : 'Sign In / Create Account'}</span>
+              {isAuthenticated && (
+                <span className="text-[11px] font-mono font-bold text-[#C85A32]">
+                  Rank {rank.roman} · {rank.title}
+                </span>
+              )}
             </a>
             {isOwner && (
               <a

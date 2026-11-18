@@ -13,6 +13,7 @@ const ReaderView = lazy(() => import('./views/ReaderView').then((m) => ({ defaul
 const PricingView = lazy(() => import('./views/PricingView').then((m) => ({ default: m.PricingView })));
 const AccountView = lazy(() => import('./views/AccountView').then((m) => ({ default: m.AccountView })));
 const ContactView = lazy(() => import('./views/ContactView').then((m) => ({ default: m.ContactView })));
+const VideoStudioView = lazy(() => import('./views/VideoStudioView').then((m) => ({ default: m.VideoStudioView })));
 const AdminView = lazy(() => import('./views/AdminView').then((m) => ({ default: m.AdminView })));
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
@@ -78,6 +79,8 @@ const MainContent: React.FC = () => {
         return <AccountView />;
       case 'contact':
         return <ContactView />;
+      case 'studio':
+        return <VideoStudioView />;
       case 'admin':
         return <AdminView />;
       default:

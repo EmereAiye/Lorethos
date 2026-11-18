@@ -41,6 +41,11 @@ var AUTHORITATIVE_STORIES = [
     featured: true,
     spotlightOrder: 1,
     updatedAt: "Oct 2026",
+    trailerVideoUrl: "/assets/trailers/the-obsidian-throne.mp4",
+    trailerPosterUrl: "/assets/images/trailers/the-obsidian-throne.jpg",
+    trailerDuration: "16s",
+    trailerMood: "action",
+    trailerNarration: "Beneath a blackened solar eclipse, the High Citadels of Ostraka tremble. King Vane faces betrayal behind velvet banners, bound by an ancient obsidian pact. Read The Obsidian Throne, free opening chapters now on Lorethos.",
     chapters: [
       {
         id: "ch-obsidian-1",
@@ -165,6 +170,11 @@ var AUTHORITATIVE_STORIES = [
     featured: true,
     spotlightOrder: 2,
     updatedAt: "Sep 2026",
+    trailerVideoUrl: "/assets/trailers/whisper-of-the-baobab.mp4",
+    trailerPosterUrl: "/assets/images/trailers/whisper-of-the-baobab.jpg",
+    trailerDuration: "16s",
+    trailerMood: "neutral",
+    trailerNarration: "Under the cosmic expanse of the Sahel night, young navigator Boma carries an ancestral brass compass across the singing sands. When the colossal baobab awakens with luminous runes, the stars reveal forgotten highways. Explore Whisper of the Baobab on Lorethos.",
     chapters: [
       {
         id: "ch-baobab-1",
@@ -266,6 +276,11 @@ var AUTHORITATIVE_STORIES = [
     featured: true,
     spotlightOrder: 3,
     updatedAt: "Jul 2026",
+    trailerVideoUrl: "/assets/trailers/chronicles-of-the-sunken-epoch.mp4",
+    trailerPosterUrl: "/assets/images/trailers/chronicles-of-the-sunken-epoch.jpg",
+    trailerDuration: "16s",
+    trailerMood: "storm",
+    trailerNarration: "Four thousand fathoms beneath storm-torn waters lies the sunken city of Atal-Mor. Diver Captain Kaelen uncovers a glowing golden reliquary holding the living memory of a drowned council, and a warning that the sea is rising again.",
     chapters: [
       {
         id: "ch-sunken-1",
@@ -361,6 +376,11 @@ var AUTHORITATIVE_STORIES = [
     featured: true,
     spotlightOrder: 4,
     updatedAt: "Sep 2026",
+    trailerVideoUrl: "/assets/trailers/the-crimson-scribe.mp4",
+    trailerPosterUrl: "/assets/images/trailers/the-crimson-scribe.jpg",
+    trailerDuration: "16s",
+    trailerMood: "suspense",
+    trailerNarration: "Inside the royal scriptorium of House Valerius, every decree is written in crimson ink. When apprentice copyist Lucien uncovers a hidden cipher between illuminated pages, he learns why three kings never survived the quill. Discover The Crimson Scribe.",
     chapters: [
       {
         id: "ch-scribe-1",
@@ -456,6 +476,11 @@ var AUTHORITATIVE_STORIES = [
     featured: false,
     spotlightOrder: 5,
     updatedAt: "Nov 2026",
+    trailerVideoUrl: "/assets/trailers/verses-of-the-harmattan.mp4",
+    trailerPosterUrl: "/assets/images/trailers/verses-of-the-harmattan.jpg",
+    trailerDuration: "16s",
+    trailerMood: "neutral",
+    trailerNarration: "Tracing the warm northern wind from Sahelian courtyards to Atlantic harbors, Verses of the Harmattan gathers luminous poems of brass lanterns, longing, and light surviving dust. Listen and read all cantos free on Lorethos.",
     chapters: [
       {
         id: "ch-harmattan-1",
@@ -536,6 +561,11 @@ var AUTHORITATIVE_STORIES = [
     featured: false,
     spotlightOrder: 6,
     updatedAt: "Nov 2026",
+    trailerVideoUrl: "/assets/trailers/letters-across-the-lagoon.mp4",
+    trailerPosterUrl: "/assets/images/trailers/letters-across-the-lagoon.jpg",
+    trailerDuration: "16s",
+    trailerMood: "neutral",
+    trailerNarration: "Separated by a decade of silence, two former partners exchange handwritten letters folded inside waterfront blueprints, uncovering the truth behind the fire that claimed the old lagoon reading hall. Read Letters Across the Lagoon free on Lorethos.",
     chapters: [
       {
         id: "ch-lagoon-1",
@@ -592,11 +622,36 @@ var AUTHORITATIVE_STORIES = [
     ]
   }
 ];
-function sanitizeStoryForPublic(story) {
+var TRAILER_DEFAULTS_BY_ID = new Map(
+  AUTHORITATIVE_STORIES.map((story) => [
+    story.id,
+    {
+      trailerVideoUrl: story.trailerVideoUrl,
+      trailerPosterUrl: story.trailerPosterUrl,
+      trailerDuration: story.trailerDuration,
+      trailerMood: story.trailerMood,
+      trailerNarration: story.trailerNarration
+    }
+  ])
+);
+function withOfficialTrailerMetadata(story) {
+  const defaults = TRAILER_DEFAULTS_BY_ID.get(story.id);
+  if (!defaults) return story;
   return {
     ...story,
-    totalChapters: story.chapters.length,
-    chapters: story.chapters.map((ch) => ({
+    trailerVideoUrl: story.trailerVideoUrl || defaults.trailerVideoUrl,
+    trailerPosterUrl: story.trailerPosterUrl || defaults.trailerPosterUrl,
+    trailerDuration: story.trailerDuration || defaults.trailerDuration,
+    trailerMood: story.trailerMood || defaults.trailerMood,
+    trailerNarration: story.trailerNarration || defaults.trailerNarration
+  };
+}
+function sanitizeStoryForPublic(story) {
+  const hydrated = withOfficialTrailerMetadata(story);
+  return {
+    ...hydrated,
+    totalChapters: hydrated.chapters.length,
+    chapters: hydrated.chapters.map((ch) => ({
       ...ch,
       // Never leak paid chapter prose to unauthenticated public catalog responses
       content: ch.isFree ? ch.content : []
@@ -688,11 +743,13 @@ var LorethosRepository = class {
         if (Array.isArray(parsed.stories) && parsed.stories.length > 0) {
           return {
             users: parsed.users || [],
-            stories: parsed.stories.map((s) => ({
-              ...s,
-              publicationStatus: s.publicationStatus || "published",
-              totalChapters: s.chapters.length
-            })),
+            stories: parsed.stories.map(
+              (s) => withOfficialTrailerMetadata({
+                ...s,
+                publicationStatus: s.publicationStatus || "published",
+                totalChapters: s.chapters.length
+              })
+            ),
             orders: parsed.orders || [],
             processedEventIds: parsed.processedEventIds || [],
             highlights: parsed.highlights || {},
@@ -743,6 +800,7 @@ var LorethosRepository = class {
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
+        nickname TEXT,
         email TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('reader', 'owner')),
@@ -750,6 +808,7 @@ var LorethosRepository = class {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS reading_goal JSONB;
       CREATE TABLE IF NOT EXISTS stories (
         id TEXT PRIMARY KEY,
@@ -1008,7 +1067,7 @@ var LorethosRepository = class {
           }
           this.state.stories = storiesRes.rows.map((row) => {
             const chs = chaptersByStory.get(row.id) || [];
-            return {
+            return withOfficialTrailerMetadata({
               id: row.id,
               slug: row.slug,
               title: row.title,
@@ -1033,7 +1092,7 @@ var LorethosRepository = class {
               spotlightOrder: row.spotlight_order !== null ? Number(row.spotlight_order) : void 0,
               updatedAt: row.updated_at_label,
               chapters: chs
-            };
+            });
           });
         }
         const subByUser = /* @__PURE__ */ new Map();
@@ -1072,6 +1131,7 @@ var LorethosRepository = class {
         this.state.users = usersRes.rows.map((u) => ({
           id: u.id,
           name: u.name,
+          nickname: u.nickname || void 0,
           email: u.email,
           passwordHash: u.password_hash,
           role: u.role,
@@ -1190,6 +1250,7 @@ var LorethosRepository = class {
     return {
       id: user.id,
       name: user.name,
+      nickname: user.nickname || void 0,
       email: user.email,
       role: user.role,
       subscription: user.subscription,
@@ -1241,6 +1302,7 @@ var LorethosRepository = class {
       const hydrated = {
         id: u.id,
         name: u.name,
+        nickname: u.nickname || void 0,
         email: String(u.email).trim().toLowerCase(),
         passwordHash: u.password_hash,
         role: u.role === "owner" || String(u.email).trim().toLowerCase() === getOwnerEmail() ? "owner" : "reader",
@@ -1274,12 +1336,14 @@ var LorethosRepository = class {
     if (cached) return cached;
     return this.hydrateSingleUserFromPostgres("LOWER(email) = $1", normalized);
   }
-  async createUser(name, email, password) {
+  async createUser(name, email, password, nickname) {
     const normalizedEmail = email.trim().toLowerCase();
+    const trimmedNickname = nickname?.trim() || void 0;
     const isOwner = normalizedEmail === getOwnerEmail();
     const record = {
       id: `usr_${crypto.randomUUID()}`,
       name: name.trim(),
+      nickname: trimmedNickname,
       email: normalizedEmail,
       passwordHash: hashPassword(password),
       role: isOwner ? "owner" : "reader",
@@ -1293,9 +1357,9 @@ var LorethosRepository = class {
     if (this.pool) {
       try {
         await this.pool.query(
-          `INSERT INTO users (id, name, email, password_hash, role, reading_goal, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
-          [record.id, record.name, record.email, record.passwordHash, record.role, JSON.stringify(record.readingGoal)]
+          `INSERT INTO users (id, name, nickname, email, password_hash, role, reading_goal, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
+          [record.id, record.name, record.nickname || null, record.email, record.passwordHash, record.role, JSON.stringify(record.readingGoal)]
         );
         await this.pool.query(
           `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
@@ -1865,10 +1929,11 @@ var LorethosRepository = class {
     }
     return comment;
   }
-  deleteComment(commentId, authorName, isOwner) {
+  deleteComment(commentId, authorNames, isOwner) {
     const target = this.state.comments.find((c) => c.id === commentId);
     if (!target) return false;
-    if (!isOwner && target.authorName !== authorName) return false;
+    const allowedNames = Array.isArray(authorNames) ? authorNames : [authorNames];
+    if (!isOwner && !allowedNames.includes(target.authorName)) return false;
     this.state.comments = this.state.comments.filter((c) => c.id !== commentId);
     this.persistSnapshot();
     this.mirrorToPostgres(async (pool) => {
@@ -1901,19 +1966,73 @@ var repo = new LorethosRepository();
 
 // server/wavespeed.ts
 var WAVESPEED_API_BASE = "https://api.wavespeed.ai/api/v3";
-var DEFAULT_WAVESPEED_VIDEO_MODEL = "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast";
+var DEFAULT_WAVESPEED_VIDEO_MODEL = "alibaba/wan-3.0/text-to-video";
 var VERCEL_SAFE_CHUNK_BYTES = 35e5;
 var CHUNK_DOWNLOAD_THRESHOLD_BYTES = 38e5;
 var WaveSpeedApiError = class extends Error {
-  constructor(status, message, code) {
+  constructor(status, message, code, upstreamDetail) {
     super(message);
     this.name = "WaveSpeedApiError";
     this.status = status;
     this.code = code;
+    this.upstreamDetail = upstreamDetail;
   }
 };
 function sanitizeWaveSpeedText(raw) {
   return raw.replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]").replace(/\b(ws|sk|pk|AIza)[A-Za-z0-9_-]{12,}\b/g, "[redacted]").replace(/\b[a-f0-9]{40,}\b/gi, "[redacted]").trim();
+}
+function parseVideoDurationSeconds(duration) {
+  switch (duration) {
+    case "6s":
+      return 6;
+    case "10s":
+      return 10;
+    case "15s":
+      return 15;
+    case "20s":
+      return 20;
+    case "30s":
+      return 30;
+    default:
+      return 15;
+  }
+}
+var MOOD_SUSPENSE_RE = /\b(suspense|whisper|shadow|ghost|blood|dread|ominous|crept|heartbeat|blade|dagger|poison|trap|secret|forbidden|catacomb|eerie|dark|midnight|eclipse|silence|fear|footsteps|tomb|crypt)\b/gi;
+var MOOD_ACTION_RE = /\b(sword|spear|arrow|strike|struck|slam|shatter|roar|charge|sprint|battle|clash|combat|attack|fire|flame|blaze|explode|pursuit|chase)\b/gi;
+var MOOD_STORM_RE = /\b(storm|tempest|hurricane|lightning|thunder|rain|downpour|gale|wind|monsoon)\b/gi;
+function classifyVideoSceneMood(text, preferredMood) {
+  if (preferredMood && preferredMood !== "auto") {
+    return preferredMood;
+  }
+  const clean = String(text || "").trim();
+  if (!clean) return "neutral";
+  const suspenseHits = clean.match(MOOD_SUSPENSE_RE)?.length ?? 0;
+  const actionHits = clean.match(MOOD_ACTION_RE)?.length ?? 0;
+  const stormHits = clean.match(MOOD_STORM_RE)?.length ?? 0;
+  if (actionHits >= 2 && actionHits >= suspenseHits && actionHits >= stormHits) {
+    return "action";
+  }
+  if (stormHits >= 2 && stormHits > suspenseHits) {
+    return "storm";
+  }
+  if (suspenseHits >= 2) {
+    return "suspense";
+  }
+  if (stormHits === 1 && actionHits === 0) return "storm";
+  if (actionHits === 1 && suspenseHits === 0) return "action";
+  if (suspenseHits === 1) return "suspense";
+  return "neutral";
+}
+function buildMoodCinematicPrompt(options) {
+  const { scenePrompt, storyTitle, storyGenre, mood, durationSeconds } = options;
+  const moodMotionCue = {
+    storm: "Mood & camera motion: tempestuous sweeping crane pull-back, wind-whipped rain, lightning flashes, urgent dolly push-in; synchronized audible rolling thunder, rain ambience, and expressive spoken storytelling voiceover explaining the scene.",
+    action: "Mood & camera motion: kinetic low-angle tracking shot, dynamic whip-pans, flying embers and crisp swift movement; synchronized audible dramatic percussion impacts and urgent spoken narrator explanation.",
+    suspense: "Mood & camera motion: slow creeping steadicam glide, shifting chiaroscuro shadows, tense atmospheric close-up; subtle low heartbeat pulse and hushed, expressive spoken voiceover explaining the hidden tension.",
+    neutral: "Mood & camera motion: fluid cinematic crane reveal, gentle golden-hour light drift, expressive character movement; warm audible atmospheric soundscape and clear spoken narrator voiceover explaining the scene."
+  };
+  const storyLead = storyTitle ? `Literary scene trailer (${durationSeconds}s) for "${storyTitle}"${storyGenre ? ` (${storyGenre})` : ""}: ` : `Cinematic story trailer (${durationSeconds}s): `;
+  return `${storyLead}${scenePrompt}. ${moodMotionCue[mood]}`.slice(0, 1200);
 }
 function getWaveSpeedApiKey(explicitKey) {
   const apiKey = (explicitKey ?? process.env.WAVESPEED_API_KEY ?? "").trim();
@@ -1933,7 +2052,7 @@ function resolveWaveSpeedVideoModel(rawModel) {
   if (candidate.includes("..") || !/^[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+){1,3}$/.test(candidate)) {
     throw new WaveSpeedApiError(
       500,
-      "Configured WAVESPEED_VIDEO_MODEL identifier is invalid. Expected a WaveSpeedAI slug such as wavespeed-ai/wan-2.2/t2v-480p-ultra-fast."
+      "Configured WAVESPEED_VIDEO_MODEL identifier is invalid. Expected a WaveSpeedAI slug such as alibaba/wan-3.0/text-to-video."
     );
   }
   return candidate;
@@ -1948,14 +2067,29 @@ function resolveWaveSpeedResolution(rawResolution) {
 function buildWaveSpeedVideoPayload(options) {
   const { model, prompt, aspectRatio, duration, resolution } = options;
   const lowerModel = model.toLowerCase();
+  const durationSeconds = parseVideoDurationSeconds(duration);
   if (lowerModel.includes("wan-3.0")) {
     const targetRes = resolution ?? (lowerModel.includes("720p") ? "720p" : "480p");
+    const clampedSeconds = Math.max(2, Math.min(30, durationSeconds));
     return {
       prompt,
       aspect_ratio: aspectRatio,
       resolution: targetRes,
-      duration: duration === "6s" ? 6 : 10,
-      enable_prompt_expansion: false
+      duration: clampedSeconds,
+      generate_audio: true,
+      enable_prompt_expansion: true
+    };
+  }
+  if (lowerModel.includes("wan-2.6")) {
+    const use720 = resolution === "720p" || !resolution || lowerModel.includes("720p");
+    const size2 = use720 ? aspectRatio === "9:16" ? "720*1280" : "1280*720" : aspectRatio === "9:16" ? "480*832" : "832*480";
+    const wan26Duration = durationSeconds <= 6 ? 5 : durationSeconds <= 10 ? 10 : 15;
+    return {
+      prompt,
+      size: size2,
+      duration: wan26Duration,
+      shot_type: wan26Duration >= 10 ? "multi" : "single",
+      enable_prompt_expansion: true
     };
   }
   if (lowerModel.includes("wan-2.2")) {
@@ -1965,7 +2099,7 @@ function buildWaveSpeedVideoPayload(options) {
       prompt,
       size: size2,
       // Wan 2.2 endpoints support 5s or 8s clips
-      duration: duration === "6s" ? 5 : 8
+      duration: durationSeconds <= 6 ? 5 : 8
     };
   }
   const use480 = lowerModel.includes("480p") || !lowerModel.includes("720p") && !lowerModel.includes("1080p") && resolution === "480p";
@@ -1973,7 +2107,7 @@ function buildWaveSpeedVideoPayload(options) {
   return {
     prompt,
     size,
-    duration: duration === "6s" ? 5 : 10
+    duration: durationSeconds <= 6 ? 5 : 10
   };
 }
 function assertSafeHttpsVideoUrl(rawUrl) {
@@ -1997,69 +2131,79 @@ function mapWaveSpeedHttpError(httpStatus, envelope, rawText) {
     return new WaveSpeedApiError(
       402,
       "WaveSpeedAI account has insufficient credits for video generation. Please top up your WaveSpeedAI balance.",
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
   if (httpStatus === 401) {
     return new WaveSpeedApiError(
       401,
       "WaveSpeedAI rejected WAVESPEED_API_KEY. Verify your API key configuration on the server.",
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
   if (httpStatus === 403) {
     return new WaveSpeedApiError(
       403,
       cleanMessage || "WaveSpeedAI denied access to this video model or prediction. Check your API key permissions.",
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
   if (httpStatus === 404) {
     return new WaveSpeedApiError(
       404,
       "The requested video rendering job or model endpoint was not found, or temporary results have expired.",
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
   if (httpStatus === 410) {
     return new WaveSpeedApiError(
       410,
       "This generated video link has expired. Please generate a fresh trailer clip.",
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
   if (httpStatus === 422 || lower.includes("nsfw") || lower.includes("safety") || lower.includes("moderation") || lower.includes("policy")) {
     return new WaveSpeedApiError(
       422,
       cleanMessage || "The scene prompt did not pass WaveSpeedAI content safety checks.",
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
   if (httpStatus === 429) {
     return new WaveSpeedApiError(
       429,
-      "WaveSpeedAI rate limit reached. Please wait a moment and try again.",
-      upstreamCode
+      cleanMessage ? `WaveSpeedAI rate limit reached (${cleanMessage}). Please wait a moment and try again.` : "WaveSpeedAI rate limit reached. Please wait a moment and try again.",
+      upstreamCode,
+      cleanMessage
     );
   }
   if (httpStatus === 400) {
     return new WaveSpeedApiError(
       400,
       cleanMessage || "WaveSpeedAI rejected the video generation request parameters.",
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
   if (httpStatus === 504) {
     return new WaveSpeedApiError(
       504,
       "WaveSpeedAI took too long to respond. Please try again.",
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
   return new WaveSpeedApiError(
     502,
     cleanMessage || `WaveSpeedAI request failed (HTTP ${httpStatus}).`,
-    upstreamCode
+    upstreamCode,
+    cleanMessage
   );
 }
 async function fetchWithTimeout(url, init, timeoutMs, fetchImpl = fetch) {
@@ -2097,13 +2241,23 @@ async function callWaveSpeedJson(url, init, timeoutMs, config) {
     }
   }
   if (!res.ok || typeof parsed?.code === "number" && parsed.code >= 400) {
-    throw mapWaveSpeedHttpError(
-      res.ok && typeof parsed?.code === "number" ? parsed.code : res.status,
-      parsed,
-      rawText
-    );
+    const effectiveStatus = res.ok && typeof parsed?.code === "number" ? parsed.code : res.status;
+    console.error("[WaveSpeedAI upstream error]", {
+      endpoint: url,
+      method: (init.method || "GET").toUpperCase(),
+      httpStatus: res.status,
+      upstreamCode: parsed?.code ?? null,
+      effectiveStatus,
+      responseBody: sanitizeWaveSpeedText(rawText).slice(0, 600)
+    });
+    throw mapWaveSpeedHttpError(effectiveStatus, parsed, rawText);
   }
   if (!parsed || typeof parsed !== "object") {
+    console.error("[WaveSpeedAI invalid JSON]", {
+      endpoint: url,
+      httpStatus: res.status,
+      responseBody: sanitizeWaveSpeedText(rawText).slice(0, 300)
+    });
     throw new WaveSpeedApiError(502, "WaveSpeedAI returned an unreadable JSON response.");
   }
   return parsed;
@@ -2159,12 +2313,25 @@ async function submitWaveSpeedVideoJob(params, config) {
   const apiBase = (config?.apiBase ?? WAVESPEED_API_BASE).replace(/\/+$/, "");
   const model = resolveWaveSpeedVideoModel(config?.model);
   const resolution = resolveWaveSpeedResolution(config?.resolution);
+  const mood = params.mood ?? classifyVideoSceneMood(params.prompt);
   const payload = buildWaveSpeedVideoPayload({
     model,
     prompt: params.prompt,
     aspectRatio: params.aspectRatio,
     duration: params.duration,
     resolution
+  });
+  console.info("[WaveSpeedAI submit]", {
+    endpoint: `${apiBase}/${model}`,
+    model,
+    mood,
+    aspectRatio: params.aspectRatio,
+    requestedDuration: params.duration,
+    payloadKeys: Object.keys(payload),
+    payloadDuration: payload.duration,
+    generateAudio: Boolean(payload.generate_audio),
+    promptLength: params.prompt.length,
+    apiKeySource: config?.apiKey ? "explicit-config" : "process.env.WAVESPEED_API_KEY"
   });
   const envelope = await callWaveSpeedJson(
     `${apiBase}/${model}`,
@@ -2190,6 +2357,7 @@ async function submitWaveSpeedVideoJob(params, config) {
       aspectRatio: params.aspectRatio,
       duration: params.duration,
       model,
+      mood,
       mimeType: meta.mimeType,
       sizeBytes: meta.sizeBytes,
       chunkDownload: meta.sizeBytes !== null && meta.sizeBytes > CHUNK_DOWNLOAD_THRESHOLD_BYTES
@@ -2201,6 +2369,7 @@ async function submitWaveSpeedVideoJob(params, config) {
     aspectRatio: params.aspectRatio,
     duration: params.duration,
     model,
+    mood,
     mimeType: "video/mp4",
     sizeBytes: null,
     chunkDownload: false
@@ -2365,6 +2534,12 @@ async function streamWaveSpeedVideoAsset(taskId, rangeHeader, config) {
 }
 function formatWaveSpeedError(err) {
   if (err instanceof WaveSpeedApiError) {
+    console.error("[WaveSpeedAI API error]", {
+      status: err.status,
+      code: err.code ?? null,
+      message: sanitizeWaveSpeedText(err.message),
+      upstreamDetail: err.upstreamDetail ? sanitizeWaveSpeedText(err.upstreamDetail) : null
+    });
     return { status: err.status, message: err.message };
   }
   const rawMessage = err instanceof Error ? err.message : String(err);
@@ -2658,6 +2833,8 @@ async function createApp(options) {
     res.json({
       ok: true,
       db,
+      videoProvider: "wavespeed",
+      waveSpeedConfigured: Boolean(process.env.WAVESPEED_API_KEY?.trim()),
       paystackConfigured: Boolean(process.env.PAYSTACK_SECRET_KEY),
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
       timestamp: (/* @__PURE__ */ new Date()).toISOString()
@@ -2673,12 +2850,17 @@ async function createApp(options) {
   });
   app.post("/api/auth/register", authLimiter, async (req, res) => {
     try {
-      const { name, email, password } = req.body;
+      const { name, nickname, email, password } = req.body;
       const trimmedName = String(name || "").trim();
+      const trimmedNickname = typeof nickname === "string" ? nickname.trim() : "";
       const trimmedEmail = String(email || "").trim().toLowerCase();
       const rawPassword = String(password || "");
       if (trimmedName.length < 2 || trimmedName.length > 80) {
         res.status(400).json({ error: "Name must be between 2 and 80 characters." });
+        return;
+      }
+      if (trimmedNickname && (trimmedNickname.length < 2 || trimmedNickname.length > 40)) {
+        res.status(400).json({ error: "Nickname must be between 2 and 40 characters." });
         return;
       }
       if (!EMAIL_REGEX.test(trimmedEmail)) {
@@ -2693,7 +2875,7 @@ async function createApp(options) {
         res.status(409).json({ error: "An account with this email already exists. Please sign in." });
         return;
       }
-      const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword);
+      const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword, trimmedNickname || void 0);
       const token = setSessionCookie(req, res, user.id);
       res.status(201).json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
@@ -2928,7 +3110,7 @@ async function createApp(options) {
         id: `cmt_${crypto2.randomUUID()}`,
         storyId,
         chapterId,
-        authorName: req.currentUser.name,
+        authorName: req.currentUser.nickname?.trim() || req.currentUser.name,
         tag: safeTag,
         body: cleanedBody,
         createdAt: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "numeric" })
@@ -2938,9 +3120,13 @@ async function createApp(options) {
     res.status(201).json({ comment });
   });
   app.delete("/api/comments/:id", requireAuth, (req, res) => {
+    const authorAliases = [
+      req.currentUser.name,
+      ...req.currentUser.nickname?.trim() ? [req.currentUser.nickname.trim()] : []
+    ];
     const ok = repo.deleteComment(
       req.params.id,
-      req.currentUser.name,
+      authorAliases,
       req.currentUser.role === "owner"
     );
     if (!ok) {
@@ -3493,9 +3679,12 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
       res.status(formatted.status).json({ error: formatted.message });
     }
   });
+  const ALLOWED_VIDEO_DURATIONS = /* @__PURE__ */ new Set(["6s", "10s", "15s", "20s", "30s"]);
+  const ALLOWED_VIDEO_MOODS = /* @__PURE__ */ new Set(["auto", "neutral", "suspense", "action", "storm"]);
   app.post("/api/ai/video", aiLimiter, async (req, res) => {
+    res.setHeader("X-Video-Provider", "wavespeed");
     try {
-      const { prompt, aspectRatio, duration, storySlug } = req.body;
+      const { prompt, aspectRatio, duration, storySlug, mood } = req.body;
       const cleanPrompt = String(prompt || "").trim().slice(0, 600);
       if (cleanPrompt.length < 6) {
         res.status(400).json({ error: "Please describe the video scene in at least 6 characters." });
@@ -3505,25 +3694,48 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
         res.status(400).json({ error: "Aspect ratio must be either 16:9 or 9:16." });
         return;
       }
+      if (duration && !ALLOWED_VIDEO_DURATIONS.has(duration)) {
+        res.status(400).json({ error: "Duration must be one of 6s, 10s, 15s, 20s, or 30s." });
+        return;
+      }
+      if (mood && !ALLOWED_VIDEO_MOODS.has(mood)) {
+        res.status(400).json({ error: "Mood must be one of auto, neutral, suspense, action, or storm." });
+        return;
+      }
       const safeAspectRatio = aspectRatio === "9:16" ? "9:16" : "16:9";
-      const safeDuration = duration === "6s" ? "6s" : "10s";
+      const safeDuration = duration && ALLOWED_VIDEO_DURATIONS.has(duration) ? duration : "15s";
+      const safeMoodPref = mood && ALLOWED_VIDEO_MOODS.has(mood) ? mood : "auto";
       const user = await getAuthenticatedUserAsync(req);
       const story = storySlug ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === "owner" }) : void 0;
       if (storySlug && !story) {
         res.status(404).json({ error: "Referenced story was not found." });
         return;
       }
-      const cinematicInput = story ? `Atmospheric literary book trailer inspired by "${story.title}" (${story.genre}): ${cleanPrompt}` : cleanPrompt;
+      const detectedMood = classifyVideoSceneMood(
+        `${story ? `${story.title} ${story.genre} ` : ""}${cleanPrompt}`,
+        safeMoodPref
+      );
+      const cinematicInput = buildMoodCinematicPrompt({
+        scenePrompt: cleanPrompt,
+        storyTitle: story?.title,
+        storyGenre: story?.genre,
+        mood: detectedMood,
+        durationSeconds: parseVideoDurationSeconds(safeDuration)
+      });
       const job = await submitWaveSpeedVideoJob(
         {
           prompt: cinematicInput,
           aspectRatio: safeAspectRatio,
-          duration: safeDuration
+          duration: safeDuration,
+          mood: detectedMood
         },
         options?.waveSpeedConfig
       );
       if (job.status === "completed") {
         res.json({
+          provider: "wavespeed",
+          model: job.model,
+          mood: job.mood,
           status: "completed",
           interactionId: job.taskId,
           videoUrl: `/api/ai/video/${encodeURIComponent(job.taskId)}/stream`,
@@ -3536,6 +3748,9 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
         return;
       }
       res.status(202).json({
+        provider: "wavespeed",
+        model: job.model,
+        mood: job.mood,
         status: "in_progress",
         interactionId: job.taskId,
         aspectRatio: job.aspectRatio,
@@ -3546,7 +3761,122 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
       res.status(formatted.status).json({ error: formatted.message });
     }
   });
+  app.post("/api/ai/video/narration", aiLimiter, async (req, res) => {
+    try {
+      const { prompt, storySlug, duration, mood, voiceName } = req.body;
+      const cleanPrompt = String(prompt || "").trim().slice(0, 600);
+      if (cleanPrompt.length < 6) {
+        res.status(400).json({ error: "Please describe the video scene in at least 6 characters." });
+        return;
+      }
+      const safeDuration = duration && ALLOWED_VIDEO_DURATIONS.has(duration) ? duration : "15s";
+      const safeMoodPref = mood && ALLOWED_VIDEO_MOODS.has(mood) ? mood : "auto";
+      const durationSeconds = parseVideoDurationSeconds(safeDuration);
+      const user = await getAuthenticatedUserAsync(req);
+      const story = storySlug ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === "owner" }) : void 0;
+      if (storySlug && !story) {
+        res.status(404).json({ error: "Referenced story was not found." });
+        return;
+      }
+      const detectedMood = classifyVideoSceneMood(
+        `${story ? `${story.title} ${story.genre} ` : ""}${cleanPrompt}`,
+        safeMoodPref
+      );
+      const allowedVoices = /* @__PURE__ */ new Set(["Kore", "Charon", "Puck", "Zephyr", "Fenrir"]);
+      const selectedVoice = voiceName && allowedVoices.has(voiceName) ? voiceName : "Kore";
+      const moodMotionSummary = {
+        storm: "sweeping tempest cameras and flashes of lightning across drenched stone",
+        action: "fast kinetic tracking shots, flying embers, and urgent momentum",
+        suspense: "slow, creeping shadows and tense, hushed close-ups",
+        neutral: "fluid golden-hour sweeps and atmospheric cinematic focus"
+      };
+      const fallbackWordTarget = Math.max(22, Math.round(durationSeconds * 2.3));
+      const fallbackScript = `${story ? `From ${story.title}, watch as ` : "Watch as "}${cleanPrompt.replace(/[.!?]+$/, "")}. Guided by ${moodMotionSummary[detectedMood]}, every frame unfolds the story's tension and invites you deeper into the chapter ahead.`.slice(
+        0,
+        Math.max(180, fallbackWordTarget * 8)
+      );
+      let script = fallbackScript;
+      let audioBase64 = null;
+      let mimeType = null;
+      let source = "browser-speech-fallback";
+      const targetWords = Math.max(20, Math.min(85, Math.round(durationSeconds * 2.4)));
+      const speechStyleByMood = {
+        storm: "Dramatic, urgent, atmospheric cinema trailer narrator speaking clearly through a storm",
+        action: "Energetic, bold, fast-paced literary trailer narrator explaining intense motion",
+        suspense: "Low, tense, mysterious, captivating literary narrator building quiet dread",
+        neutral: "Warm, expressive, cinematic literary narrator explaining a vivid story scene"
+      };
+      if (process.env.GEMINI_API_KEY?.trim()) {
+        try {
+          const ai = getGeminiClient();
+          const scriptRes = await withTimeout(
+            ai.models.generateContent({
+              model: MODEL_NAME,
+              contents: `Write a single spoken voiceover narration script (about ${targetWords} words, paced for a ${durationSeconds}-second trailer video) that clearly explains what is happening in this scene and its ${detectedMood} mood/motion. No stage directions, no brackets, no markdown\u2014only natural spoken sentences.
+
+Story: ${story ? `${story.title} (${story.genre})` : "Lorethos Original"}
+Scene: ${cleanPrompt}`
+            }),
+            15e3
+          );
+          const generatedText = scriptRes.text?.trim();
+          if (generatedText && generatedText.length >= 20) {
+            script = generatedText.replace(/\[[^\]]*\]|\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
+          }
+          const ttsInteraction = await withTimeout(
+            ai.interactions.create({
+              model: "gemini-3.8-flash-lite-tts",
+              input: [
+                {
+                  type: "text",
+                  text: script,
+                  annotations: [
+                    {
+                      type: "speech_metadata",
+                      style: speechStyleByMood[detectedMood]
+                    }
+                  ]
+                }
+              ],
+              response_format: { type: "audio" },
+              generation_config: {
+                speech_config: [
+                  {
+                    language: "en-US",
+                    voice: selectedVoice
+                  }
+                ]
+              }
+            }),
+            3e4
+          );
+          const audioPart = ttsInteraction.output_audio;
+          if (audioPart?.data) {
+            audioBase64 = audioPart.data;
+            mimeType = audioPart.mime_type || "audio/wav";
+            source = "gemini-tts";
+          }
+        } catch (ttsErr) {
+          const formatted = formatGeminiError(ttsErr);
+          console.warn("[Video Narration TTS fallback]", formatted.status, formatted.message);
+        }
+      }
+      res.json({
+        script,
+        mood: detectedMood,
+        duration: safeDuration,
+        voiceName: selectedVoice,
+        audioBase64,
+        mimeType,
+        source
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to prepare scene narration.";
+      res.status(500).json({ error: message });
+    }
+  });
   app.get("/api/ai/video/:interactionId", videoPollLimiter, async (req, res) => {
+    res.setHeader("X-Video-Provider", "wavespeed");
     try {
       const interactionId = String(req.params.interactionId || "").trim();
       if (!/^[a-zA-Z0-9._:-]{4,200}$/.test(interactionId)) {
@@ -3556,6 +3886,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
       const job = await getWaveSpeedVideoJob(interactionId, options?.waveSpeedConfig);
       if (job.status === "completed") {
         res.json({
+          provider: "wavespeed",
           status: "completed",
           interactionId: job.taskId,
           videoUrl: `/api/ai/video/${encodeURIComponent(job.taskId)}/stream`,
@@ -3566,6 +3897,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
         return;
       }
       res.json({
+        provider: "wavespeed",
         status: "in_progress",
         interactionId: job.taskId
       });
@@ -3575,6 +3907,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
     }
   });
   app.get("/api/ai/video/:interactionId/stream", videoPollLimiter, async (req, res) => {
+    res.setHeader("X-Video-Provider", "wavespeed");
     try {
       const interactionId = String(req.params.interactionId || "").trim();
       if (!/^[a-zA-Z0-9._:-]{4,200}$/.test(interactionId)) {

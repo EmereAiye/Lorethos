@@ -1,7 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { apiFetch, parseJsonSafe } from '../lib/apiClient';
-import { Search, Filter, BookOpen, ArrowUpDown, Sparkles, Loader2, ArrowRight, X } from 'lucide-react';
+import { Search, Filter, BookOpen, ArrowUpDown, Sparkles, Loader2, ArrowRight, X, Film } from 'lucide-react';
+import { StoryTrailerPlayer } from '../components/StoryTrailerPlayer';
+import type { Story } from '../types';
 
 interface AIRecommendation {
   slug: string;
@@ -25,6 +27,16 @@ export const LibraryView: React.FC = () => {
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiCuratorNote, setAiCuratorNote] = useState<string | null>(null);
   const [aiMatches, setAiMatches] = useState<AIRecommendation[]>([]);
+  const [activeTrailerStory, setActiveTrailerStory] = useState<Story | null>(null);
+
+  useEffect(() => {
+    if (!activeTrailerStory) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setActiveTrailerStory(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeTrailerStory]);
 
   // Synchronize filter state with /stories URL query parameters
   useEffect(() => {
@@ -466,18 +478,28 @@ export const LibraryView: React.FC = () => {
                     )}
                   </div>
 
-                  <div className="pt-3 border-t border-[#2D142C]/10 dark:border-white/10 flex items-center justify-between text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
-                    <span>
+                  <div className="pt-3 border-t border-[#2D142C]/10 dark:border-white/10 flex items-center justify-between gap-2 text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                    <span className="truncate">
                       {story.author} &middot; Ch. 1&ndash;{story.freeChaptersCount} Free
                     </span>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      {story.trailerVideoUrl && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setActiveTrailerStory(story);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#C85A32]/10 hover:bg-[#C85A32] text-[#C85A32] hover:text-white font-semibold text-[11px] transition-colors cursor-pointer"
+                        >
+                          <Film className="w-3 h-3" />
+                          <span>Trailer</span>
+                        </button>
+                      )}
                       <span className="tabular-nums font-medium text-[#2D142C] dark:text-white">
                         {story.chapters.length} Chs
-                      </span>
-                      <span>&middot;</span>
-                      <span className="text-[#C85A32] font-medium group-hover:underline">
-                        Overview &rarr;
                       </span>
                     </div>
                   </div>
@@ -488,6 +510,42 @@ export const LibraryView: React.FC = () => {
         )}
 
       </div>
+
+      {activeTrailerStory && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${activeTrailerStory.title} official trailer`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setActiveTrailerStory(null);
+          }}
+        >
+          <div className="w-full max-w-3xl relative">
+            <button
+              type="button"
+              onClick={() => setActiveTrailerStory(null)}
+              aria-label="Close trailer dialog"
+              className="absolute -top-3 -right-3 z-10 w-9 h-9 rounded-full bg-[#2D142C] text-white border border-white/20 flex items-center justify-center shadow-lg hover:bg-[#C85A32] transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <StoryTrailerPlayer
+              story={activeTrailerStory}
+              storyHref={buildHref('story-detail', { slug: activeTrailerStory.slug })}
+              readerHref={buildHref('reader', { slug: activeTrailerStory.slug, chapterNumber: 1 })}
+              onNavigateStory={() => {
+                setActiveTrailerStory(null);
+                navigate('story-detail', { slug: activeTrailerStory.slug });
+              }}
+              onNavigateReader={() => {
+                setActiveTrailerStory(null);
+                navigate('reader', { slug: activeTrailerStory.slug, chapterNumber: 1 });
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

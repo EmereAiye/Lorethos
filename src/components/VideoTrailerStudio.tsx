@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Film, Loader2, Download } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Film, Loader2, Download, Volume2, VolumeX, Sparkles } from 'lucide-react';
 import { VoiceDictationButton } from './VoiceDictationButton';
 import { apiFetch, parseJsonSafe } from '../lib/apiClient';
+import { ambientAudio } from '../utils/ambientAudio';
 
 interface VideoTrailerStudioProps {
   storySlug?: string;
@@ -11,7 +12,15 @@ interface VideoTrailerStudioProps {
   description?: string;
 }
 
+type VideoDurationChoice = '15s' | '20s' | '30s';
+type VideoMoodChoice = 'auto' | 'neutral' | 'suspense' | 'action' | 'storm';
+type DetectedMood = 'neutral' | 'suspense' | 'action' | 'storm';
+type NarratorVoice = 'Kore' | 'Charon' | 'Puck' | 'Zephyr' | 'Fenrir';
+
 interface VideoApiResponse {
+  provider?: string;
+  model?: string;
+  mood?: DetectedMood;
   status?: string;
   interactionId?: string;
   videoUrl?: string;
@@ -19,39 +28,132 @@ interface VideoApiResponse {
   videoUri?: string;
   mimeType?: string;
   aspectRatio?: string;
+  duration?: string;
   sizeBytes?: number | null;
   chunkDownload?: boolean;
   error?: string;
 }
+
+interface NarrationApiResponse {
+  script?: string;
+  mood?: DetectedMood;
+  duration?: string;
+  voiceName?: string;
+  audioBase64?: string | null;
+  mimeType?: string | null;
+  source?: 'gemini-tts' | 'browser-speech-fallback';
+  error?: string;
+}
+
+const MOOD_LABELS: Record<DetectedMood, string> = {
+  neutral: 'Cinematic Drift Motion',
+  suspense: 'Suspense Creeping Motion',
+  action: 'Kinetic Action Motion',
+  storm: 'Tempest Storm Motion',
+};
 
 export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
   storySlug,
   storyTitle,
   defaultPrompt = '',
   heading = 'Story Trailer & Scene Visualizer',
-  description = 'Generate a short animated literary trailer from a scene description in 16:9 widescreen or 9:16 portrait.'
+  description = 'Generate a 15–30 second narrated literary trailer with mood-driven camera motions, scene-explaining voiceover, and atmospheric audio.'
 }) => {
   const [prompt, setPrompt] = useState(defaultPrompt);
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
-  const [duration, setDuration] = useState<'6s' | '10s'>('6s');
+  const [duration, setDuration] = useState<VideoDurationChoice>('15s');
+  const [moodPreference, setMoodPreference] = useState<VideoMoodChoice>('auto');
+  const [voiceName, setVoiceName] = useState<NarratorVoice>('Kore');
+  const [audioOverlayEnabled, setAudioOverlayEnabled] = useState(true);
+
   const [generating, setGenerating] = useState(false);
   const [renderStatus, setRenderStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [renderedRatio, setRenderedRatio] = useState<'16:9' | '9:16'>('16:9');
+  const [renderedDuration, setRenderedDuration] = useState<string>('15s');
+  const [activeMood, setActiveMood] = useState<DetectedMood>('neutral');
+
+  const [narrationScript, setNarrationScript] = useState<string | null>(null);
+  const [narrationAudioSrc, setNarrationAudioSrc] = useState<string | null>(null);
+  const [narrationSource, setNarrationSource] = useState<'gemini-tts' | 'browser-speech-fallback' | null>(null);
 
   const activeRunIdRef = useRef(0);
   const blobUrlRef = useRef<string | null>(null);
+  const narrationBlobUrlRef = useRef<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const narrationAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const stopSyncedAudio = useCallback(() => {
+    if (narrationAudioRef.current) {
+      narrationAudioRef.current.pause();
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    ambientAudio.stop();
+  }, []);
 
   useEffect(() => {
     return () => {
       activeRunIdRef.current += 1;
+      stopSyncedAudio();
       if (blobUrlRef.current) {
         URL.revokeObjectURL(blobUrlRef.current);
         blobUrlRef.current = null;
       }
+      if (narrationBlobUrlRef.current) {
+        URL.revokeObjectURL(narrationBlobUrlRef.current);
+        narrationBlobUrlRef.current = null;
+      }
     };
-  }, []);
+  }, [stopSyncedAudio]);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.volume = audioOverlayEnabled && (narrationAudioSrc || narrationScript) ? 0.38 : 1.0;
+    }
+  }, [audioOverlayEnabled, narrationAudioSrc, narrationScript, videoSrc]);
+
+  const startSyncedAudio = useCallback(
+    (fromStart = false) => {
+      if (!audioOverlayEnabled) return;
+
+      ambientAudio.unlock();
+      if (activeMood === 'neutral') {
+        ambientAudio.start('mythic_drone', 0.35);
+      } else {
+        ambientAudio.setSceneMood(activeMood, 0.42);
+      }
+
+      if (narrationAudioRef.current && narrationAudioSrc) {
+        if (fromStart) {
+          narrationAudioRef.current.currentTime = 0;
+        }
+        void narrationAudioRef.current.play().catch(() => {});
+        return;
+      }
+
+      if (narrationScript && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(narrationScript);
+        utterance.rate = activeMood === 'action' ? 1.04 : activeMood === 'suspense' ? 0.92 : 0.98;
+        utterance.pitch = activeMood === 'suspense' ? 0.92 : 1.0;
+        window.speechSynthesis.speak(utterance);
+      }
+    },
+    [activeMood, audioOverlayEnabled, narrationAudioSrc, narrationScript]
+  );
+
+  const handleToggleAudioOverlay = () => {
+    const next = !audioOverlayEnabled;
+    setAudioOverlayEnabled(next);
+    if (!next) {
+      stopSyncedAudio();
+    } else if (videoRef.current && !videoRef.current.paused) {
+      startSyncedAudio(true);
+    }
+  };
 
   const downloadVideoInChunks = async (
     url: string,
@@ -89,6 +191,57 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
     return nextUrl;
   };
 
+  const prepareNarrationTrack = async (
+    cleanedPrompt: string,
+    selectedDuration: VideoDurationChoice,
+    selectedMood: VideoMoodChoice,
+    selectedVoice: NarratorVoice,
+    runId: number
+  ) => {
+    try {
+      const res = await apiFetch('/api/ai/video/narration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: cleanedPrompt,
+          storySlug,
+          duration: selectedDuration,
+          mood: selectedMood,
+          voiceName: selectedVoice,
+        })
+      });
+      const data = await parseJsonSafe<NarrationApiResponse>(res);
+      if (activeRunIdRef.current !== runId || !res.ok || !data) return;
+
+      if (data.mood) {
+        setActiveMood(data.mood);
+      }
+      if (data.script) {
+        setNarrationScript(data.script);
+      }
+      setNarrationSource(data.source || 'browser-speech-fallback');
+
+      if (data.audioBase64) {
+        const binary = atob(data.audioBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        const audioBlob = new Blob([bytes], { type: data.mimeType || 'audio/wav' });
+        if (narrationBlobUrlRef.current) {
+          URL.revokeObjectURL(narrationBlobUrlRef.current);
+        }
+        const audioUrl = URL.createObjectURL(audioBlob);
+        narrationBlobUrlRef.current = audioUrl;
+        setNarrationAudioSrc(audioUrl);
+      } else {
+        setNarrationAudioSrc(null);
+      }
+    } catch {
+      // Narration fallback never blocks or replaces WaveSpeedAI video errors
+    }
+  };
+
   const handleGenerateVideo = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleaned = prompt.trim();
@@ -98,9 +251,17 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
     }
 
     const runId = ++activeRunIdRef.current;
+    stopSyncedAudio();
+    ambientAudio.unlock();
+
     setGenerating(true);
-    setRenderStatus('Starting video render...');
+    setRenderStatus(`Starting ${duration} talking trailer render...`);
     setError(null);
+    setNarrationScript(null);
+    setNarrationAudioSrc(null);
+    setNarrationSource(null);
+
+    const narrationPromise = prepareNarrationTrack(cleaned, duration, moodPreference, voiceName, runId);
 
     try {
       const res = await apiFetch('/api/ai/video', {
@@ -110,7 +271,8 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
           prompt: cleaned,
           aspectRatio,
           duration,
-          storySlug
+          storySlug,
+          mood: moodPreference,
         })
       });
       const initialData = await parseJsonSafe<VideoApiResponse>(res);
@@ -123,6 +285,10 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
         );
       }
 
+      if (initialData.mood) {
+        setActiveMood(initialData.mood);
+      }
+
       let completedData = initialData;
       const targetRatio: '16:9' | '9:16' =
         initialData.aspectRatio === '9:16' || aspectRatio === '9:16' ? '9:16' : '16:9';
@@ -133,18 +299,18 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
         }
 
         const startedAt = Date.now();
-        const maxWaitMs = 300_000;
+        const maxWaitMs = 360_000;
         let transientFailures = 0;
 
         while (activeRunIdRef.current === runId) {
           const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-          setRenderStatus(`Rendering ${duration} trailer clip (${elapsedSec}s)...`);
+          setRenderStatus(`Rendering ${duration} trailer with audio & mood motion (${elapsedSec}s)...`);
 
           await new Promise((resolve) => window.setTimeout(resolve, 3500));
           if (activeRunIdRef.current !== runId) return;
 
           if (Date.now() - startedAt > maxWaitMs) {
-            throw new Error('Video generation timed out after 5 minutes. Please try again.');
+            throw new Error('Video generation timed out after 6 minutes. Please try again.');
           }
 
           const pollRes = await apiFetch(
@@ -172,6 +338,9 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
 
       if (activeRunIdRef.current !== runId) return;
 
+      await narrationPromise;
+      if (activeRunIdRef.current !== runId) return;
+
       if (completedData.videoUrl) {
         if (completedData.chunkDownload && completedData.sizeBytes) {
           setRenderStatus('Loading rendered video stream...');
@@ -191,12 +360,15 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
           setVideoSrc(completedData.videoUrl);
         }
         setRenderedRatio(targetRatio);
+        setRenderedDuration(completedData.duration || duration);
       } else if (completedData.videoBase64) {
         setVideoSrc(`data:${completedData.mimeType || 'video/mp4'};base64,${completedData.videoBase64}`);
         setRenderedRatio(targetRatio);
+        setRenderedDuration(completedData.duration || duration);
       } else if (completedData.videoUri) {
         setVideoSrc(completedData.videoUri);
         setRenderedRatio(targetRatio);
+        setRenderedDuration(completedData.duration || duration);
       } else {
         throw new Error('No playable video stream was returned.');
       }
@@ -236,7 +408,7 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
         <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-2">
             <label htmlFor={`video-prompt-${storySlug || 'desk'}`} className="font-semibold">
-              Scene Visual Prompt
+              Enter Your Words to Turn Into Video
             </label>
             <VoiceDictationButton
               compact
@@ -250,7 +422,7 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
             rows={3}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Describe camera movement, lighting, atmosphere, and action (e.g., Candlelit brass observatory overlooking Benin rainstorms at dusk)..."
+            placeholder="Describe what happens, who speaks, mood lighting, and camera movement (e.g., Candlelit brass observatory overlooking Benin rainstorms as the chronicler whispers the ancient prophecy)..."
             className="w-full px-3.5 py-2.5 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32] font-reader text-sm"
           />
         </div>
@@ -298,7 +470,7 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
                 aria-label="Video clip duration"
                 className="inline-flex items-center p-0.5 rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-[#F9F6F0] dark:bg-[#160C16]"
               >
-                {(['6s', '10s'] as const).map((len) => (
+                {(['15s', '20s', '30s'] as const).map((len) => (
                   <button
                     key={len}
                     type="button"
@@ -315,6 +487,42 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
                 ))}
               </div>
             </div>
+
+            <div className="flex items-center gap-2">
+              <label htmlFor={`video-mood-${storySlug || 'desk'}`} className="font-semibold text-[#2D142C]/75 dark:text-white/75">
+                Mood Motion
+              </label>
+              <select
+                id={`video-mood-${storySlug || 'desk'}`}
+                value={moodPreference}
+                onChange={(e) => setMoodPreference(e.target.value as VideoMoodChoice)}
+                className="px-2.5 py-1.5 rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-[#F9F6F0] dark:bg-[#160C16] font-medium focus:outline-none focus:border-[#C85A32]"
+              >
+                <option value="auto">Auto-Detect Mood</option>
+                <option value="suspense">Suspense (Slow Creep)</option>
+                <option value="action">Action (Kinetic)</option>
+                <option value="storm">Storm (Tempest Sweep)</option>
+                <option value="neutral">Cinematic Drift</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label htmlFor={`video-voice-${storySlug || 'desk'}`} className="font-semibold text-[#2D142C]/75 dark:text-white/75">
+                Explainer Voice
+              </label>
+              <select
+                id={`video-voice-${storySlug || 'desk'}`}
+                value={voiceName}
+                onChange={(e) => setVoiceName(e.target.value as NarratorVoice)}
+                className="px-2.5 py-1.5 rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-[#F9F6F0] dark:bg-[#160C16] font-medium focus:outline-none focus:border-[#C85A32]"
+              >
+                <option value="Kore">Kore (Warm)</option>
+                <option value="Charon">Charon (Deep)</option>
+                <option value="Fenrir">Fenrir (Dramatic)</option>
+                <option value="Zephyr">Zephyr (Calm)</option>
+                <option value="Puck">Puck (Expressive)</option>
+              </select>
+            </div>
           </div>
 
           <button
@@ -330,7 +538,7 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
             ) : (
               <>
                 <Film className="w-4 h-4" />
-                <span>Generate Video Trailer</span>
+                <span>Generate {duration} Talking Trailer</span>
               </>
             )}
           </button>
@@ -348,25 +556,76 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
 
       {videoSrc && (
         <div className="space-y-3 pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#2D142C]/8 dark:bg-white/10 text-[#2D142C] dark:text-[#F9F6F0] font-medium">
+              <Sparkles className="w-3.5 h-3.5 text-[#C85A32]" />
+              <span>{MOOD_LABELS[activeMood]} · {renderedDuration}</span>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleToggleAudioOverlay}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32] font-medium cursor-pointer transition-colors"
+            >
+              {audioOverlayEnabled ? (
+                <>
+                  <Volume2 className="w-3.5 h-3.5 text-[#C85A32]" />
+                  <span>Scene Explainer & Mood Audio: On</span>
+                </>
+              ) : (
+                <>
+                  <VolumeX className="w-3.5 h-3.5 text-[#2D142C]/60 dark:text-white/60" />
+                  <span>Native Video Audio Only</span>
+                </>
+              )}
+            </button>
+          </div>
+
           <div
             className={`mx-auto rounded-xl overflow-hidden border border-[#2D142C]/15 dark:border-white/15 bg-black ${
               renderedRatio === '9:16' ? 'max-w-xs aspect-[9/16]' : 'w-full aspect-video'
             }`}
           >
             <video
+              ref={videoRef}
               src={videoSrc}
               controls
               playsInline
-              loop
+              onPlay={() => startSyncedAudio(true)}
+              onPause={() => stopSyncedAudio()}
+              onEnded={() => stopSyncedAudio()}
               className="w-full h-full object-cover"
             />
           </div>
 
+          {narrationAudioSrc && (
+            <audio
+              ref={narrationAudioRef}
+              src={narrationAudioSrc}
+              preload="auto"
+              className="hidden"
+            />
+          )}
+
+          {narrationScript && (
+            <div className="p-3 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] border border-[#2D142C]/10 dark:border-white/10 text-xs space-y-1">
+              <div className="flex items-center justify-between text-[11px] font-semibold text-[#2D142C]/70 dark:text-white/70">
+                <span>Spoken Scene Explanation ({voiceName})</span>
+                <span className="font-mono uppercase text-[10px] opacity-75">
+                  {narrationSource === 'gemini-tts' ? 'Studio Voice + Mood Mix' : 'Voice Synthesis + Mood Mix'}
+                </span>
+              </div>
+              <p className="font-reader text-sm text-[#2D142C] dark:text-[#F9F6F0] leading-relaxed">
+                “{narrationScript}”
+              </p>
+            </div>
+          )}
+
           <div className="flex items-center justify-between text-[11px] text-[#2D142C]/65 dark:text-white/65">
-            <span>Rendered format: {renderedRatio} MP4</span>
+            <span>Rendered format: {renderedRatio} MP4 · {renderedDuration}</span>
             <a
               href={videoSrc}
-              download={`${storySlug || 'lorethos-scene'}-${renderedRatio.replace(':', 'x')}.mp4`}
+              download={`${storySlug || 'lorethos-scene'}-${renderedDuration}-${renderedRatio.replace(':', 'x')}.mp4`}
               className="inline-flex items-center gap-1.5 font-semibold text-[#C85A32] hover:underline"
             >
               <Download className="w-3.5 h-3.5" />

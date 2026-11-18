@@ -15,11 +15,12 @@ import type {
   CommunityInquiry,
   ReadingGoal
 } from '../src/types/index.js';
-import { AUTHORITATIVE_STORIES } from './catalog.js';
+import { AUTHORITATIVE_STORIES, withOfficialTrailerMetadata } from './catalog.js';
 
 export interface StoredUserRecord {
   id: string;
   name: string;
+  nickname?: string;
   email: string;
   passwordHash: string;
   role: 'reader' | 'owner';
@@ -159,11 +160,13 @@ class LorethosRepository {
         if (Array.isArray(parsed.stories) && parsed.stories.length > 0) {
           return {
             users: parsed.users || [],
-            stories: parsed.stories.map((s) => ({
-              ...s,
-              publicationStatus: s.publicationStatus || 'published',
-              totalChapters: s.chapters.length
-            })),
+            stories: parsed.stories.map((s) =>
+              withOfficialTrailerMetadata({
+                ...s,
+                publicationStatus: s.publicationStatus || 'published',
+                totalChapters: s.chapters.length
+              })
+            ),
             orders: parsed.orders || [],
             processedEventIds: parsed.processedEventIds || [],
             highlights: parsed.highlights || {},
@@ -220,6 +223,7 @@ class LorethosRepository {
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
+        nickname TEXT,
         email TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('reader', 'owner')),
@@ -227,6 +231,7 @@ class LorethosRepository {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS reading_goal JSONB;
       CREATE TABLE IF NOT EXISTS stories (
         id TEXT PRIMARY KEY,
@@ -490,7 +495,7 @@ class LorethosRepository {
 
         this.state.stories = storiesRes.rows.map((row) => {
           const chs = chaptersByStory.get(row.id) || [];
-          return {
+          return withOfficialTrailerMetadata({
             id: row.id,
             slug: row.slug,
             title: row.title,
@@ -515,7 +520,7 @@ class LorethosRepository {
             spotlightOrder: row.spotlight_order !== null ? Number(row.spotlight_order) : undefined,
             updatedAt: row.updated_at_label,
             chapters: chs
-          };
+          });
         });
       }
 
@@ -561,6 +566,7 @@ class LorethosRepository {
       this.state.users = usersRes.rows.map((u) => ({
         id: u.id,
         name: u.name,
+        nickname: u.nickname || undefined,
         email: u.email,
         passwordHash: u.password_hash,
         role: u.role,
@@ -688,6 +694,7 @@ class LorethosRepository {
     return {
       id: user.id,
       name: user.name,
+      nickname: user.nickname || undefined,
       email: user.email,
       role: user.role,
       subscription: user.subscription,
@@ -746,6 +753,7 @@ class LorethosRepository {
       const hydrated: StoredUserRecord = {
         id: u.id,
         name: u.name,
+        nickname: u.nickname || undefined,
         email: String(u.email).trim().toLowerCase(),
         passwordHash: u.password_hash,
         role: u.role === 'owner' || String(u.email).trim().toLowerCase() === getOwnerEmail() ? 'owner' : 'reader',
@@ -782,12 +790,14 @@ class LorethosRepository {
     return this.hydrateSingleUserFromPostgres('LOWER(email) = $1', normalized);
   }
 
-  public async createUser(name: string, email: string, password: string): Promise<StoredUserRecord> {
+  public async createUser(name: string, email: string, password: string, nickname?: string): Promise<StoredUserRecord> {
     const normalizedEmail = email.trim().toLowerCase();
+    const trimmedNickname = nickname?.trim() || undefined;
     const isOwner = normalizedEmail === getOwnerEmail();
     const record: StoredUserRecord = {
       id: `usr_${crypto.randomUUID()}`,
       name: name.trim(),
+      nickname: trimmedNickname,
       email: normalizedEmail,
       passwordHash: hashPassword(password),
       role: isOwner ? 'owner' : 'reader',
@@ -802,9 +812,9 @@ class LorethosRepository {
     if (this.pool) {
       try {
         await this.pool.query(
-          `INSERT INTO users (id, name, email, password_hash, role, reading_goal, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
-          [record.id, record.name, record.email, record.passwordHash, record.role, JSON.stringify(record.readingGoal)]
+          `INSERT INTO users (id, name, nickname, email, password_hash, role, reading_goal, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
+          [record.id, record.name, record.nickname || null, record.email, record.passwordHash, record.role, JSON.stringify(record.readingGoal)]
         );
         await this.pool.query(
           `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
@@ -1479,10 +1489,11 @@ class LorethosRepository {
     return comment;
   }
 
-  public deleteComment(commentId: string, authorName: string, isOwner: boolean): boolean {
+  public deleteComment(commentId: string, authorNames: string | string[], isOwner: boolean): boolean {
     const target = this.state.comments.find((c) => c.id === commentId);
     if (!target) return false;
-    if (!isOwner && target.authorName !== authorName) return false;
+    const allowedNames = Array.isArray(authorNames) ? authorNames : [authorNames];
+    if (!isOwner && !allowedNames.includes(target.authorName)) return false;
     this.state.comments = this.state.comments.filter((c) => c.id !== commentId);
     this.persistSnapshot();
 

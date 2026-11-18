@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
+import { getDisplayName } from '../utils/readerProfile';
 import { BookOpen, Feather, Sparkles, Compass, ScrollText, Clock, Check, X, ArrowRight } from 'lucide-react';
 
 interface GenreOption {
@@ -151,7 +152,7 @@ export const ReadingPreferencesModal: React.FC = () => {
     }
   };
 
-  const firstName = user.name.trim().split(/\s+/)[0] || 'Reader';
+  const firstName = getDisplayName(user);
 
   return (
     <div

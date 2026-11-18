@@ -68,6 +68,15 @@ export const Footer: React.FC = () => {
               </li>
               <li>
                 <a
+                  href={buildHref('studio')}
+                  onClick={(e) => handleLink(e, 'studio')}
+                  className="hover:text-[#C85A32] transition-colors"
+                >
+                  Words to Video Studio
+                </a>
+              </li>
+              <li>
+                <a
                   href={buildHref('account')}
                   onClick={(e) => handleLink(e, 'account')}
                   className="hover:text-[#C85A32] transition-colors"

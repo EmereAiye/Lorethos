@@ -1,6 +1,8 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
-import { BookOpen, Sparkles, ArrowRight, Check, MessageSquare, Headphones } from 'lucide-react';
+import { getDisplayName, computeReaderRank } from '../utils/readerProfile';
+import { BookOpen, Sparkles, ArrowRight, Check, MessageSquare, Headphones, Film, Award, Play } from 'lucide-react';
+import { StoryTrailerPlayer } from '../components/StoryTrailerPlayer';
 
 export const HomeView: React.FC = () => {
   const {
@@ -16,6 +18,12 @@ export const HomeView: React.FC = () => {
 
   const flagshipStory = stories.find(s => s.id === 'story-obsidian-throne') || stories[0];
   const featuredStories = stories.filter(s => s.featured);
+  const trailerStories = React.useMemo(() => stories.filter((s) => Boolean(s.trailerVideoUrl)), [stories]);
+  const [selectedTrailerSlug, setSelectedTrailerSlug] = React.useState<string>('');
+  const activeTrailerStory =
+    trailerStories.find((s) => s.slug === selectedTrailerSlug) || trailerStories[0] || null;
+  const displayName = getDisplayName(user);
+  const readerRank = React.useMemo(() => computeReaderRank(user, stories), [user, stories]);
   const personalizedRecommendations = React.useMemo(() => {
     if (!isAuthenticated || preferredGenres.length === 0) return [];
     const normalizedPrefs = preferredGenres.map((g) => g.toLowerCase());
@@ -133,6 +141,15 @@ export const HomeView: React.FC = () => {
                     <span>Explore Chapter Directory</span>
                     <ArrowRight className="w-4 h-4" />
                   </a>
+
+                  <a
+                    href={buildHref('studio')}
+                    onClick={(e) => handleNav(e, 'studio')}
+                    className="px-5 py-3.5 text-sm font-semibold text-[#C85A32] bg-[#C85A32]/10 hover:bg-[#C85A32]/15 border border-[#C85A32]/35 rounded-lg transition-colors flex items-center gap-2"
+                  >
+                    <Film className="w-4 h-4" />
+                    <span>Turn Words into Video</span>
+                  </a>
                 </div>
 
                 <div className="pt-6 border-t border-[#2D142C]/10 dark:border-white/10">
@@ -183,8 +200,12 @@ export const HomeView: React.FC = () => {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
               <div>
-                <div className="text-xs tracking-wider uppercase text-[#C85A32] font-semibold font-sans-ui mb-1">
-                  Recommended for {user.name.trim().split(/\s+/)[0] || 'You'} &middot; {preferredGenres.join(', ')}
+                <div className="text-xs tracking-wider uppercase text-[#C85A32] font-semibold font-sans-ui mb-1 flex flex-wrap items-center gap-2">
+                  <span>Recommended for {displayName} &middot; {preferredGenres.join(', ')}</span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#2D142C] text-[#F9F6F0] text-[10px]">
+                    <Award className="w-3 h-3 text-[#C85A32]" />
+                    <span>Rank {readerRank.roman} &middot; {readerRank.title}</span>
+                  </span>
                 </div>
                 <h2 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight">
                   Your Personalized Reading Feed
@@ -251,11 +272,13 @@ export const HomeView: React.FC = () => {
         <section className="py-8 border-b border-[#2D142C]/10 dark:border-white/10 bg-[#C85A32]/[0.04]">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="space-y-1">
-              <div className="text-[11px] uppercase tracking-wider font-semibold text-[#C85A32] font-sans-ui">
-                Personalize Your Feed
+              <div className="text-[11px] uppercase tracking-wider font-semibold text-[#C85A32] font-sans-ui flex items-center gap-2">
+                <span>Personalize Your Feed</span>
+                <span>&middot;</span>
+                <span>Rank {readerRank.roman}: {readerRank.title}</span>
               </div>
               <p className="font-display text-xl font-semibold">
-                What do you want to read next, {user.name.trim().split(/\s+/)[0] || 'Reader'}?
+                What do you want to read next, {displayName}?
               </p>
               <p className="text-xs opacity-75 font-reader">
                 Choose poetry, literary fiction, myth, or fantasy to save recommendations to your profile.
@@ -368,6 +391,89 @@ export const HomeView: React.FC = () => {
 
         </div>
       </section>
+
+      {/* Official Story Trailers Theater (All Catalog Titles) */}
+      {trailerStories.length > 0 && activeTrailerStory && (
+        <section id="story-trailers" className="py-16 border-b border-[#2D142C]/10 dark:border-white/10 bg-[#2D142C]/[0.03] dark:bg-white/[0.02]">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+              <div>
+                <div className="text-xs tracking-wider uppercase text-[#C85A32] font-semibold font-sans-ui mb-1">
+                  Story Trailers ({trailerStories.length} Titles)
+                </div>
+                <h2 className="font-display text-3xl sm:text-4xl font-semibold tracking-tight">
+                  Watch the Official Story Trailers
+                </h2>
+                <p className="font-reader text-sm text-[#2D142C]/70 dark:text-[#F9F6F0]/70 mt-1 max-w-2xl">
+                  Every serialized work in the Lorethos library features a narrated video trailer with mood-driven visuals and ambient soundscapes.
+                </p>
+              </div>
+              <a
+                href={buildHref('studio')}
+                onClick={(e) => handleNav(e, 'studio')}
+                className="text-xs font-semibold text-[#C85A32] hover:underline flex items-center gap-1.5 self-start sm:self-auto"
+              >
+                <Film className="w-3.5 h-3.5" />
+                <span>Create Custom Scene Video &rarr;</span>
+              </a>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+              <div className="lg:col-span-7">
+                <StoryTrailerPlayer
+                  story={activeTrailerStory}
+                  storyHref={buildHref('story-detail', { slug: activeTrailerStory.slug })}
+                  readerHref={buildHref('reader', { slug: activeTrailerStory.slug, chapterNumber: 1 })}
+                  onNavigateStory={() => navigate('story-detail', { slug: activeTrailerStory.slug })}
+                  onNavigateReader={() => navigate('reader', { slug: activeTrailerStory.slug, chapterNumber: 1 })}
+                />
+              </div>
+
+              <div className="lg:col-span-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
+                {trailerStories.map((story) => {
+                  const isActive = story.slug === activeTrailerStory.slug;
+                  return (
+                    <button
+                      key={story.id}
+                      type="button"
+                      onClick={() => setSelectedTrailerSlug(story.slug)}
+                      aria-pressed={isActive}
+                      className={`w-full text-left p-3 rounded-xl border transition-all flex items-center gap-3.5 cursor-pointer ${
+                        isActive
+                          ? 'bg-white dark:bg-[#1E111E] border-[#C85A32] shadow-sm'
+                          : 'bg-white/70 dark:bg-[#1E111E]/60 border-[#2D142C]/10 dark:border-white/10 hover:border-[#C85A32]/50'
+                      }`}
+                    >
+                      <div className="relative w-24 aspect-video rounded-lg overflow-hidden shrink-0 bg-[#160C16] border border-current/10">
+                        <img
+                          src={story.trailerPosterUrl || story.coverImage}
+                          alt=""
+                          loading="lazy"
+                          className="w-full h-full object-cover"
+                        />
+                        <div className={`absolute inset-0 flex items-center justify-center ${isActive ? 'bg-[#C85A32]/30' : 'bg-black/35'}`}>
+                          <Play className="w-4 h-4 text-white fill-white" />
+                        </div>
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-0.5 font-sans-ui">
+                        <div className="text-[11px] text-[#C85A32] font-semibold truncate">
+                          {story.genre} &middot; {story.trailerDuration || '16s'}
+                        </div>
+                        <div className="font-display text-base font-bold truncate text-[#2D142C] dark:text-[#F9F6F0]">
+                          {story.title}
+                        </div>
+                        <div className="text-[11px] text-[#2D142C]/65 dark:text-white/65 truncate">
+                          By {story.author}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Latest Chapters & Membership */}
       <section className="py-16 border-b border-[#2D142C]/10 dark:border-white/10 bg-[#2D142C]/[0.02] dark:bg-white/[0.01]">

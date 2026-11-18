@@ -15,7 +15,13 @@ import {
   getWaveSpeedVideoJob,
   streamWaveSpeedVideoAsset,
   formatWaveSpeedError,
+  classifyVideoSceneMood,
+  buildMoodCinematicPrompt,
+  parseVideoDurationSeconds,
   type WaveSpeedConfig,
+  type VideoDurationOption,
+  type VideoMoodPreference,
+  type VideoSceneMood,
 } from './server/wavespeed.js';
 import type { AccessTier, CommentTag, HighlightColor, PublicationStatus } from './src/types/index.js';
 
@@ -370,6 +376,8 @@ export async function createApp(options?: {
     res.json({
       ok: true,
       db,
+      videoProvider: 'wavespeed',
+      waveSpeedConfigured: Boolean(process.env.WAVESPEED_API_KEY?.trim()),
       paystackConfigured: Boolean(process.env.PAYSTACK_SECRET_KEY),
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
       timestamp: new Date().toISOString(),
@@ -390,18 +398,24 @@ export async function createApp(options?: {
 
   app.post('/api/auth/register', authLimiter, async (req, res) => {
     try {
-      const { name, email, password } = req.body as {
+      const { name, nickname, email, password } = req.body as {
         name?: string;
+        nickname?: string;
         email?: string;
         password?: string;
       };
 
       const trimmedName = String(name || '').trim();
+      const trimmedNickname = typeof nickname === 'string' ? nickname.trim() : '';
       const trimmedEmail = String(email || '').trim().toLowerCase();
       const rawPassword = String(password || '');
 
       if (trimmedName.length < 2 || trimmedName.length > 80) {
         res.status(400).json({ error: 'Name must be between 2 and 80 characters.' });
+        return;
+      }
+      if (trimmedNickname && (trimmedNickname.length < 2 || trimmedNickname.length > 40)) {
+        res.status(400).json({ error: 'Nickname must be between 2 and 40 characters.' });
         return;
       }
       if (!EMAIL_REGEX.test(trimmedEmail)) {
@@ -418,7 +432,7 @@ export async function createApp(options?: {
         return;
       }
 
-      const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword);
+      const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword, trimmedNickname || undefined);
       const token = setSessionCookie(req, res, user.id);
       res.status(201).json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
@@ -745,7 +759,7 @@ export async function createApp(options?: {
         id: `cmt_${crypto.randomUUID()}`,
         storyId,
         chapterId,
-        authorName: req.currentUser!.name,
+        authorName: req.currentUser!.nickname?.trim() || req.currentUser!.name,
         tag: safeTag,
         body: cleanedBody,
         createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
@@ -756,9 +770,13 @@ export async function createApp(options?: {
   });
 
   app.delete('/api/comments/:id', requireAuth, (req: AuthedRequest, res) => {
+    const authorAliases = [
+      req.currentUser!.name,
+      ...(req.currentUser!.nickname?.trim() ? [req.currentUser!.nickname.trim()] : []),
+    ];
     const ok = repo.deleteComment(
       req.params.id,
-      req.currentUser!.name,
+      authorAliases,
       req.currentUser!.role === 'owner'
     );
     if (!ok) {
@@ -1466,15 +1484,20 @@ export async function createApp(options?: {
   });
 
   // 6. Text-to-Video Story Trailer / Scene Visualizer via WaveSpeedAI API v3 (Wan series)
-  // Uses asynchronous prediction submission + polling so Vercel serverless functions never hit the
-  // 60s timeout, and streams MP4 bytes via /stream with Range clamping under the 4.5MB payload limit.
+  // Supports 15-30s talking trailers with mood-driven motions, asynchronous polling under
+  // Vercel's 60s timeout, and Range-clamped MP4 streaming under the 4.5MB payload ceiling.
+  const ALLOWED_VIDEO_DURATIONS = new Set<VideoDurationOption>(['6s', '10s', '15s', '20s', '30s']);
+  const ALLOWED_VIDEO_MOODS = new Set<VideoMoodPreference>(['auto', 'neutral', 'suspense', 'action', 'storm']);
+
   app.post('/api/ai/video', aiLimiter, async (req, res) => {
+    res.setHeader('X-Video-Provider', 'wavespeed');
     try {
-      const { prompt, aspectRatio, duration, storySlug } = req.body as {
+      const { prompt, aspectRatio, duration, storySlug, mood } = req.body as {
         prompt?: string;
         aspectRatio?: '16:9' | '9:16';
-        duration?: '6s' | '10s';
+        duration?: VideoDurationOption;
         storySlug?: string;
+        mood?: VideoMoodPreference;
       };
 
       const cleanPrompt = String(prompt || '').trim().slice(0, 600);
@@ -1488,8 +1511,19 @@ export async function createApp(options?: {
         return;
       }
 
+      if (duration && !ALLOWED_VIDEO_DURATIONS.has(duration)) {
+        res.status(400).json({ error: 'Duration must be one of 6s, 10s, 15s, 20s, or 30s.' });
+        return;
+      }
+
+      if (mood && !ALLOWED_VIDEO_MOODS.has(mood)) {
+        res.status(400).json({ error: 'Mood must be one of auto, neutral, suspense, action, or storm.' });
+        return;
+      }
+
       const safeAspectRatio: '16:9' | '9:16' = aspectRatio === '9:16' ? '9:16' : '16:9';
-      const safeDuration: '6s' | '10s' = duration === '6s' ? '6s' : '10s';
+      const safeDuration: VideoDurationOption = duration && ALLOWED_VIDEO_DURATIONS.has(duration) ? duration : '15s';
+      const safeMoodPref: VideoMoodPreference = mood && ALLOWED_VIDEO_MOODS.has(mood) ? mood : 'auto';
 
       const user = await getAuthenticatedUserAsync(req);
       const story = storySlug
@@ -1500,21 +1534,33 @@ export async function createApp(options?: {
         return;
       }
 
-      const cinematicInput = story
-        ? `Atmospheric literary book trailer inspired by "${story.title}" (${story.genre}): ${cleanPrompt}`
-        : cleanPrompt;
+      const detectedMood = classifyVideoSceneMood(
+        `${story ? `${story.title} ${story.genre} ` : ''}${cleanPrompt}`,
+        safeMoodPref
+      );
+      const cinematicInput = buildMoodCinematicPrompt({
+        scenePrompt: cleanPrompt,
+        storyTitle: story?.title,
+        storyGenre: story?.genre,
+        mood: detectedMood,
+        durationSeconds: parseVideoDurationSeconds(safeDuration),
+      });
 
       const job = await submitWaveSpeedVideoJob(
         {
           prompt: cinematicInput,
           aspectRatio: safeAspectRatio,
           duration: safeDuration,
+          mood: detectedMood,
         },
         options?.waveSpeedConfig
       );
 
       if (job.status === 'completed') {
         res.json({
+          provider: 'wavespeed',
+          model: job.model,
+          mood: job.mood,
           status: 'completed',
           interactionId: job.taskId,
           videoUrl: `/api/ai/video/${encodeURIComponent(job.taskId)}/stream`,
@@ -1528,6 +1574,9 @@ export async function createApp(options?: {
       }
 
       res.status(202).json({
+        provider: 'wavespeed',
+        model: job.model,
+        mood: job.mood,
         status: 'in_progress',
         interactionId: job.taskId,
         aspectRatio: job.aspectRatio,
@@ -1539,7 +1588,148 @@ export async function createApp(options?: {
     }
   });
 
+  // Spoken scene-explainer script + TTS audio synchronized with 15-30s video playback & mood motions
+  app.post('/api/ai/video/narration', aiLimiter, async (req, res) => {
+    try {
+      const { prompt, storySlug, duration, mood, voiceName } = req.body as {
+        prompt?: string;
+        storySlug?: string;
+        duration?: VideoDurationOption;
+        mood?: VideoMoodPreference;
+        voiceName?: string;
+      };
+
+      const cleanPrompt = String(prompt || '').trim().slice(0, 600);
+      if (cleanPrompt.length < 6) {
+        res.status(400).json({ error: 'Please describe the video scene in at least 6 characters.' });
+        return;
+      }
+
+      const safeDuration: VideoDurationOption =
+        duration && ALLOWED_VIDEO_DURATIONS.has(duration) ? duration : '15s';
+      const safeMoodPref: VideoMoodPreference =
+        mood && ALLOWED_VIDEO_MOODS.has(mood) ? mood : 'auto';
+      const durationSeconds = parseVideoDurationSeconds(safeDuration);
+
+      const user = await getAuthenticatedUserAsync(req);
+      const story = storySlug
+        ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === 'owner' })
+        : undefined;
+      if (storySlug && !story) {
+        res.status(404).json({ error: 'Referenced story was not found.' });
+        return;
+      }
+
+      const detectedMood: VideoSceneMood = classifyVideoSceneMood(
+        `${story ? `${story.title} ${story.genre} ` : ''}${cleanPrompt}`,
+        safeMoodPref
+      );
+
+      const allowedVoices = new Set(['Kore', 'Charon', 'Puck', 'Zephyr', 'Fenrir']);
+      const selectedVoice = voiceName && allowedVoices.has(voiceName) ? voiceName : 'Kore';
+
+      const moodMotionSummary: Record<VideoSceneMood, string> = {
+        storm: 'sweeping tempest cameras and flashes of lightning across drenched stone',
+        action: 'fast kinetic tracking shots, flying embers, and urgent momentum',
+        suspense: 'slow, creeping shadows and tense, hushed close-ups',
+        neutral: 'fluid golden-hour sweeps and atmospheric cinematic focus',
+      };
+
+      const fallbackWordTarget = Math.max(22, Math.round(durationSeconds * 2.3));
+      const fallbackScript = `${
+        story ? `From ${story.title}, watch as ` : 'Watch as '
+      }${cleanPrompt.replace(/[.!?]+$/, '')}. Guided by ${moodMotionSummary[detectedMood]}, every frame unfolds the story's tension and invites you deeper into the chapter ahead.`.slice(
+        0,
+        Math.max(180, fallbackWordTarget * 8)
+      );
+
+      let script = fallbackScript;
+      let audioBase64: string | null = null;
+      let mimeType: string | null = null;
+      let source: 'gemini-tts' | 'browser-speech-fallback' = 'browser-speech-fallback';
+
+      const targetWords = Math.max(20, Math.min(85, Math.round(durationSeconds * 2.4)));
+      const speechStyleByMood: Record<VideoSceneMood, string> = {
+        storm: 'Dramatic, urgent, atmospheric cinema trailer narrator speaking clearly through a storm',
+        action: 'Energetic, bold, fast-paced literary trailer narrator explaining intense motion',
+        suspense: 'Low, tense, mysterious, captivating literary narrator building quiet dread',
+        neutral: 'Warm, expressive, cinematic literary narrator explaining a vivid story scene',
+      };
+
+      if (process.env.GEMINI_API_KEY?.trim()) {
+        try {
+          const ai = getGeminiClient();
+          const scriptRes = await withTimeout(
+            ai.models.generateContent({
+              model: MODEL_NAME,
+              contents: `Write a single spoken voiceover narration script (about ${targetWords} words, paced for a ${durationSeconds}-second trailer video) that clearly explains what is happening in this scene and its ${detectedMood} mood/motion. No stage directions, no brackets, no markdown—only natural spoken sentences.\n\nStory: ${
+                story ? `${story.title} (${story.genre})` : 'Lorethos Original'
+              }\nScene: ${cleanPrompt}`,
+            }),
+            15000
+          );
+          const generatedText = scriptRes.text?.trim();
+          if (generatedText && generatedText.length >= 20) {
+            script = generatedText.replace(/\[[^\]]*\]|\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
+          }
+
+          const ttsInteraction = await withTimeout(
+            ai.interactions.create({
+              model: 'gemini-3.8-flash-lite-tts',
+              input: [
+                {
+                  type: 'text',
+                  text: script,
+                  annotations: [
+                    {
+                      type: 'speech_metadata',
+                      style: speechStyleByMood[detectedMood],
+                    },
+                  ],
+                },
+              ],
+              response_format: { type: 'audio' },
+              generation_config: {
+                speech_config: [
+                  {
+                    language: 'en-US',
+                    voice: selectedVoice,
+                  },
+                ],
+              },
+            }),
+            30000
+          );
+
+          const audioPart = ttsInteraction.output_audio;
+          if (audioPart?.data) {
+            audioBase64 = audioPart.data;
+            mimeType = audioPart.mime_type || 'audio/wav';
+            source = 'gemini-tts';
+          }
+        } catch (ttsErr) {
+          const formatted = formatGeminiError(ttsErr);
+          console.warn('[Video Narration TTS fallback]', formatted.status, formatted.message);
+        }
+      }
+
+      res.json({
+        script,
+        mood: detectedMood,
+        duration: safeDuration,
+        voiceName: selectedVoice,
+        audioBase64,
+        mimeType,
+        source,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to prepare scene narration.';
+      res.status(500).json({ error: message });
+    }
+  });
+
   app.get('/api/ai/video/:interactionId', videoPollLimiter, async (req, res) => {
+    res.setHeader('X-Video-Provider', 'wavespeed');
     try {
       const interactionId = String(req.params.interactionId || '').trim();
       if (!/^[a-zA-Z0-9._:-]{4,200}$/.test(interactionId)) {
@@ -1551,6 +1741,7 @@ export async function createApp(options?: {
 
       if (job.status === 'completed') {
         res.json({
+          provider: 'wavespeed',
           status: 'completed',
           interactionId: job.taskId,
           videoUrl: `/api/ai/video/${encodeURIComponent(job.taskId)}/stream`,
@@ -1562,6 +1753,7 @@ export async function createApp(options?: {
       }
 
       res.json({
+        provider: 'wavespeed',
         status: 'in_progress',
         interactionId: job.taskId,
       });
@@ -1572,6 +1764,7 @@ export async function createApp(options?: {
   });
 
   app.get('/api/ai/video/:interactionId/stream', videoPollLimiter, async (req, res) => {
+    res.setHeader('X-Video-Provider', 'wavespeed');
     try {
       const interactionId = String(req.params.interactionId || '').trim();
       if (!/^[a-zA-Z0-9._:-]{4,200}$/.test(interactionId)) {

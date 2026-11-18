@@ -1,10 +1,12 @@
 export const WAVESPEED_API_BASE = 'https://api.wavespeed.ai/api/v3';
-export const DEFAULT_WAVESPEED_VIDEO_MODEL = 'wavespeed-ai/wan-2.2/t2v-480p-ultra-fast';
+export const DEFAULT_WAVESPEED_VIDEO_MODEL = 'alibaba/wan-3.0/text-to-video';
 export const VERCEL_SAFE_CHUNK_BYTES = 3_500_000;
 export const CHUNK_DOWNLOAD_THRESHOLD_BYTES = 3_800_000;
 
 export type VideoAspectRatio = '16:9' | '9:16';
-export type VideoDurationOption = '6s' | '10s';
+export type VideoDurationOption = '6s' | '10s' | '15s' | '20s' | '30s';
+export type VideoSceneMood = 'neutral' | 'suspense' | 'action' | 'storm';
+export type VideoMoodPreference = 'auto' | VideoSceneMood;
 
 export interface WaveSpeedConfig {
   apiKey?: string;
@@ -37,6 +39,7 @@ export interface WaveSpeedSubmitResult {
   aspectRatio: VideoAspectRatio;
   duration: VideoDurationOption;
   model: string;
+  mood: VideoSceneMood;
   mimeType: string;
   sizeBytes: number | null;
   chunkDownload: boolean;
@@ -62,12 +65,14 @@ export interface WaveSpeedStreamResult {
 export class WaveSpeedApiError extends Error {
   status: number;
   code?: string | number;
+  upstreamDetail?: string;
 
-  constructor(status: number, message: string, code?: string | number) {
+  constructor(status: number, message: string, code?: string | number, upstreamDetail?: string) {
     super(message);
     this.name = 'WaveSpeedApiError';
     this.status = status;
     this.code = code;
+    this.upstreamDetail = upstreamDetail;
   }
 }
 
@@ -77,6 +82,80 @@ export function sanitizeWaveSpeedText(raw: string): string {
     .replace(/\b(ws|sk|pk|AIza)[A-Za-z0-9_-]{12,}\b/g, '[redacted]')
     .replace(/\b[a-f0-9]{40,}\b/gi, '[redacted]')
     .trim();
+}
+
+export function parseVideoDurationSeconds(duration: VideoDurationOption): number {
+  switch (duration) {
+    case '6s':
+      return 6;
+    case '10s':
+      return 10;
+    case '15s':
+      return 15;
+    case '20s':
+      return 20;
+    case '30s':
+      return 30;
+    default:
+      return 15;
+  }
+}
+
+const MOOD_SUSPENSE_RE = /\b(suspense|whisper|shadow|ghost|blood|dread|ominous|crept|heartbeat|blade|dagger|poison|trap|secret|forbidden|catacomb|eerie|dark|midnight|eclipse|silence|fear|footsteps|tomb|crypt)\b/gi;
+const MOOD_ACTION_RE = /\b(sword|spear|arrow|strike|struck|slam|shatter|roar|charge|sprint|battle|clash|combat|attack|fire|flame|blaze|explode|pursuit|chase)\b/gi;
+const MOOD_STORM_RE = /\b(storm|tempest|hurricane|lightning|thunder|rain|downpour|gale|wind|monsoon)\b/gi;
+
+export function classifyVideoSceneMood(text: string, preferredMood?: VideoMoodPreference): VideoSceneMood {
+  if (preferredMood && preferredMood !== 'auto') {
+    return preferredMood;
+  }
+  const clean = String(text || '').trim();
+  if (!clean) return 'neutral';
+
+  const suspenseHits = clean.match(MOOD_SUSPENSE_RE)?.length ?? 0;
+  const actionHits = clean.match(MOOD_ACTION_RE)?.length ?? 0;
+  const stormHits = clean.match(MOOD_STORM_RE)?.length ?? 0;
+
+  if (actionHits >= 2 && actionHits >= suspenseHits && actionHits >= stormHits) {
+    return 'action';
+  }
+  if (stormHits >= 2 && stormHits > suspenseHits) {
+    return 'storm';
+  }
+  if (suspenseHits >= 2) {
+    return 'suspense';
+  }
+  if (stormHits === 1 && actionHits === 0) return 'storm';
+  if (actionHits === 1 && suspenseHits === 0) return 'action';
+  if (suspenseHits === 1) return 'suspense';
+  return 'neutral';
+}
+
+export function buildMoodCinematicPrompt(options: {
+  scenePrompt: string;
+  storyTitle?: string;
+  storyGenre?: string;
+  mood: VideoSceneMood;
+  durationSeconds: number;
+}): string {
+  const { scenePrompt, storyTitle, storyGenre, mood, durationSeconds } = options;
+
+  const moodMotionCue: Record<VideoSceneMood, string> = {
+    storm:
+      'Mood & camera motion: tempestuous sweeping crane pull-back, wind-whipped rain, lightning flashes, urgent dolly push-in; synchronized audible rolling thunder, rain ambience, and expressive spoken storytelling voiceover explaining the scene.',
+    action:
+      'Mood & camera motion: kinetic low-angle tracking shot, dynamic whip-pans, flying embers and crisp swift movement; synchronized audible dramatic percussion impacts and urgent spoken narrator explanation.',
+    suspense:
+      'Mood & camera motion: slow creeping steadicam glide, shifting chiaroscuro shadows, tense atmospheric close-up; subtle low heartbeat pulse and hushed, expressive spoken voiceover explaining the hidden tension.',
+    neutral:
+      'Mood & camera motion: fluid cinematic crane reveal, gentle golden-hour light drift, expressive character movement; warm audible atmospheric soundscape and clear spoken narrator voiceover explaining the scene.',
+  };
+
+  const storyLead = storyTitle
+    ? `Literary scene trailer (${durationSeconds}s) for "${storyTitle}"${storyGenre ? ` (${storyGenre})` : ''}: `
+    : `Cinematic story trailer (${durationSeconds}s): `;
+
+  return `${storyLead}${scenePrompt}. ${moodMotionCue[mood]}`.slice(0, 1200);
 }
 
 export function getWaveSpeedApiKey(explicitKey?: string): string {
@@ -101,7 +180,7 @@ export function resolveWaveSpeedVideoModel(rawModel?: string): string {
   if (candidate.includes('..') || !/^[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+){1,3}$/.test(candidate)) {
     throw new WaveSpeedApiError(
       500,
-      'Configured WAVESPEED_VIDEO_MODEL identifier is invalid. Expected a WaveSpeedAI slug such as wavespeed-ai/wan-2.2/t2v-480p-ultra-fast.'
+      'Configured WAVESPEED_VIDEO_MODEL identifier is invalid. Expected a WaveSpeedAI slug such as alibaba/wan-3.0/text-to-video.'
     );
   }
   return candidate;
@@ -124,15 +203,38 @@ export function buildWaveSpeedVideoPayload(options: {
 }): Record<string, string | number | boolean> {
   const { model, prompt, aspectRatio, duration, resolution } = options;
   const lowerModel = model.toLowerCase();
+  const durationSeconds = parseVideoDurationSeconds(duration);
 
   if (lowerModel.includes('wan-3.0')) {
     const targetRes = resolution ?? (lowerModel.includes('720p') ? '720p' : '480p');
+    const clampedSeconds = Math.max(2, Math.min(30, durationSeconds));
     return {
       prompt,
       aspect_ratio: aspectRatio,
       resolution: targetRes,
-      duration: duration === '6s' ? 6 : 10,
-      enable_prompt_expansion: false,
+      duration: clampedSeconds,
+      generate_audio: true,
+      enable_prompt_expansion: true,
+    };
+  }
+
+  if (lowerModel.includes('wan-2.6')) {
+    const use720 = resolution === '720p' || !resolution || lowerModel.includes('720p');
+    const size = use720
+      ? aspectRatio === '9:16'
+        ? '720*1280'
+        : '1280*720'
+      : aspectRatio === '9:16'
+        ? '480*832'
+        : '832*480';
+    // Wan 2.6 supports 5, 10, or 15s clips with multi-shot narrative support
+    const wan26Duration = durationSeconds <= 6 ? 5 : durationSeconds <= 10 ? 10 : 15;
+    return {
+      prompt,
+      size,
+      duration: wan26Duration,
+      shot_type: wan26Duration >= 10 ? 'multi' : 'single',
+      enable_prompt_expansion: true,
     };
   }
 
@@ -150,11 +252,11 @@ export function buildWaveSpeedVideoPayload(options: {
       prompt,
       size,
       // Wan 2.2 endpoints support 5s or 8s clips
-      duration: duration === '6s' ? 5 : 8,
+      duration: durationSeconds <= 6 ? 5 : 8,
     };
   }
 
-  // Wan 2.1, Wan 2.5, Wan 2.6, and other Wan T2V endpoints use width*height + 5/10s duration
+  // Wan 2.1, Wan 2.5, and other Wan T2V endpoints use width*height + 5/10s duration
   const use480 =
     lowerModel.includes('480p') ||
     (!lowerModel.includes('720p') && !lowerModel.includes('1080p') && resolution === '480p');
@@ -170,7 +272,7 @@ export function buildWaveSpeedVideoPayload(options: {
   return {
     prompt,
     size,
-    duration: duration === '6s' ? 5 : 10,
+    duration: durationSeconds <= 6 ? 5 : 10,
   };
 }
 
@@ -213,7 +315,8 @@ export function mapWaveSpeedHttpError(
     return new WaveSpeedApiError(
       402,
       'WaveSpeedAI account has insufficient credits for video generation. Please top up your WaveSpeedAI balance.',
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
 
@@ -221,7 +324,8 @@ export function mapWaveSpeedHttpError(
     return new WaveSpeedApiError(
       401,
       'WaveSpeedAI rejected WAVESPEED_API_KEY. Verify your API key configuration on the server.',
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
 
@@ -229,7 +333,8 @@ export function mapWaveSpeedHttpError(
     return new WaveSpeedApiError(
       403,
       cleanMessage || 'WaveSpeedAI denied access to this video model or prediction. Check your API key permissions.',
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
 
@@ -237,7 +342,8 @@ export function mapWaveSpeedHttpError(
     return new WaveSpeedApiError(
       404,
       'The requested video rendering job or model endpoint was not found, or temporary results have expired.',
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
 
@@ -245,7 +351,8 @@ export function mapWaveSpeedHttpError(
     return new WaveSpeedApiError(
       410,
       'This generated video link has expired. Please generate a fresh trailer clip.',
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
 
@@ -259,15 +366,19 @@ export function mapWaveSpeedHttpError(
     return new WaveSpeedApiError(
       422,
       cleanMessage || 'The scene prompt did not pass WaveSpeedAI content safety checks.',
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
 
   if (httpStatus === 429) {
     return new WaveSpeedApiError(
       429,
-      'WaveSpeedAI rate limit reached. Please wait a moment and try again.',
-      upstreamCode
+      cleanMessage
+        ? `WaveSpeedAI rate limit reached (${cleanMessage}). Please wait a moment and try again.`
+        : 'WaveSpeedAI rate limit reached. Please wait a moment and try again.',
+      upstreamCode,
+      cleanMessage
     );
   }
 
@@ -275,7 +386,8 @@ export function mapWaveSpeedHttpError(
     return new WaveSpeedApiError(
       400,
       cleanMessage || 'WaveSpeedAI rejected the video generation request parameters.',
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
 
@@ -283,14 +395,16 @@ export function mapWaveSpeedHttpError(
     return new WaveSpeedApiError(
       504,
       'WaveSpeedAI took too long to respond. Please try again.',
-      upstreamCode
+      upstreamCode,
+      cleanMessage
     );
   }
 
   return new WaveSpeedApiError(
     502,
     cleanMessage || `WaveSpeedAI request failed (HTTP ${httpStatus}).`,
-    upstreamCode
+    upstreamCode,
+    cleanMessage
   );
 }
 
@@ -344,14 +458,24 @@ async function callWaveSpeedJson(
   }
 
   if (!res.ok || (typeof parsed?.code === 'number' && parsed.code >= 400)) {
-    throw mapWaveSpeedHttpError(
-      res.ok && typeof parsed?.code === 'number' ? parsed.code : res.status,
-      parsed,
-      rawText
-    );
+    const effectiveStatus = res.ok && typeof parsed?.code === 'number' ? parsed.code : res.status;
+    console.error('[WaveSpeedAI upstream error]', {
+      endpoint: url,
+      method: (init.method || 'GET').toUpperCase(),
+      httpStatus: res.status,
+      upstreamCode: parsed?.code ?? null,
+      effectiveStatus,
+      responseBody: sanitizeWaveSpeedText(rawText).slice(0, 600),
+    });
+    throw mapWaveSpeedHttpError(effectiveStatus, parsed, rawText);
   }
 
   if (!parsed || typeof parsed !== 'object') {
+    console.error('[WaveSpeedAI invalid JSON]', {
+      endpoint: url,
+      httpStatus: res.status,
+      responseBody: sanitizeWaveSpeedText(rawText).slice(0, 300),
+    });
     throw new WaveSpeedApiError(502, 'WaveSpeedAI returned an unreadable JSON response.');
   }
 
@@ -422,18 +546,33 @@ export async function submitWaveSpeedVideoJob(
     prompt: string;
     aspectRatio: VideoAspectRatio;
     duration: VideoDurationOption;
+    mood?: VideoSceneMood;
   },
   config?: WaveSpeedConfig
 ): Promise<WaveSpeedSubmitResult> {
   const apiBase = (config?.apiBase ?? WAVESPEED_API_BASE).replace(/\/+$/, '');
   const model = resolveWaveSpeedVideoModel(config?.model);
   const resolution = resolveWaveSpeedResolution(config?.resolution);
+  const mood = params.mood ?? classifyVideoSceneMood(params.prompt);
   const payload = buildWaveSpeedVideoPayload({
     model,
     prompt: params.prompt,
     aspectRatio: params.aspectRatio,
     duration: params.duration,
     resolution,
+  });
+
+  console.info('[WaveSpeedAI submit]', {
+    endpoint: `${apiBase}/${model}`,
+    model,
+    mood,
+    aspectRatio: params.aspectRatio,
+    requestedDuration: params.duration,
+    payloadKeys: Object.keys(payload),
+    payloadDuration: payload.duration,
+    generateAudio: Boolean(payload.generate_audio),
+    promptLength: params.prompt.length,
+    apiKeySource: config?.apiKey ? 'explicit-config' : 'process.env.WAVESPEED_API_KEY',
   });
 
   const envelope = await callWaveSpeedJson(
@@ -465,6 +604,7 @@ export async function submitWaveSpeedVideoJob(
       aspectRatio: params.aspectRatio,
       duration: params.duration,
       model,
+      mood,
       mimeType: meta.mimeType,
       sizeBytes: meta.sizeBytes,
       chunkDownload: meta.sizeBytes !== null && meta.sizeBytes > CHUNK_DOWNLOAD_THRESHOLD_BYTES,
@@ -477,6 +617,7 @@ export async function submitWaveSpeedVideoJob(
     aspectRatio: params.aspectRatio,
     duration: params.duration,
     model,
+    mood,
     mimeType: 'video/mp4',
     sizeBytes: null,
     chunkDownload: false,
@@ -689,6 +830,12 @@ export async function streamWaveSpeedVideoAsset(
 
 export function formatWaveSpeedError(err: unknown): { status: number; message: string } {
   if (err instanceof WaveSpeedApiError) {
+    console.error('[WaveSpeedAI API error]', {
+      status: err.status,
+      code: err.code ?? null,
+      message: sanitizeWaveSpeedText(err.message),
+      upstreamDetail: err.upstreamDetail ? sanitizeWaveSpeedText(err.upstreamDetail) : null,
+    });
     return { status: err.status, message: err.message };
   }
   const rawMessage = err instanceof Error ? err.message : String(err);

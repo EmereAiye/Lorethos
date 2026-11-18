@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { Chapter, HighlightColor, CommentTag, SceneMood } from '../types';
 import { ambientAudio, AmbientTrackId, detectSceneMood } from '../utils/ambientAudio';
+import { getDisplayName, computeReaderRank } from '../utils/readerProfile';
 import { VoiceDictationButton } from '../components/VoiceDictationButton';
 
 const TRACK_LABELS: Record<AmbientTrackId, string> = {
@@ -68,6 +69,7 @@ const HIGHLIGHT_STYLES: Record<HighlightColor, { border: string; bg: string; lab
 
 export const ReaderView: React.FC = () => {
   const {
+    stories,
     routeParams,
     getChapter,
     fetchChapterContent,
@@ -1832,7 +1834,9 @@ export const ReaderView: React.FC = () => {
                     className="p-4 rounded-xl border border-current/15 bg-current/[0.03] space-y-3 text-xs"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold">Posting as {user.name}</span>
+                      <span className="font-semibold">
+                        Posting as {getDisplayName(user)} &middot; Rank {computeReaderRank(user, stories).roman}
+                      </span>
                       <div className="flex items-center gap-1.5">
                         {(['Reaction', 'Lore', 'Theory'] as const).map(tag => (
                           <button
@@ -1908,7 +1912,7 @@ export const ReaderView: React.FC = () => {
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-[11px] opacity-60">{cmt.createdAt}</span>
-                            {(cmt.authorName === user.name || user.role === 'owner') && isAuthenticated && (
+                            {((cmt.authorName === getDisplayName(user) || cmt.authorName === user.name) || user.role === 'owner') && isAuthenticated && (
                               <button
                                 type="button"
                                 onClick={() => deleteChapterComment(cmt.id)}

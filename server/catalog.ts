@@ -25,6 +25,11 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     featured: true,
     spotlightOrder: 1,
     updatedAt: 'Oct 2026',
+    trailerVideoUrl: '/assets/trailers/the-obsidian-throne.mp4',
+    trailerPosterUrl: '/assets/images/trailers/the-obsidian-throne.jpg',
+    trailerDuration: '16s',
+    trailerMood: 'action',
+    trailerNarration: 'Beneath a blackened solar eclipse, the High Citadels of Ostraka tremble. King Vane faces betrayal behind velvet banners, bound by an ancient obsidian pact. Read The Obsidian Throne, free opening chapters now on Lorethos.',
     chapters: [
       {
         id: 'ch-obsidian-1',
@@ -149,6 +154,11 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     featured: true,
     spotlightOrder: 2,
     updatedAt: 'Sep 2026',
+    trailerVideoUrl: '/assets/trailers/whisper-of-the-baobab.mp4',
+    trailerPosterUrl: '/assets/images/trailers/whisper-of-the-baobab.jpg',
+    trailerDuration: '16s',
+    trailerMood: 'neutral',
+    trailerNarration: 'Under the cosmic expanse of the Sahel night, young navigator Boma carries an ancestral brass compass across the singing sands. When the colossal baobab awakens with luminous runes, the stars reveal forgotten highways. Explore Whisper of the Baobab on Lorethos.',
     chapters: [
       {
         id: 'ch-baobab-1',
@@ -250,6 +260,11 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     featured: true,
     spotlightOrder: 3,
     updatedAt: 'Jul 2026',
+    trailerVideoUrl: '/assets/trailers/chronicles-of-the-sunken-epoch.mp4',
+    trailerPosterUrl: '/assets/images/trailers/chronicles-of-the-sunken-epoch.jpg',
+    trailerDuration: '16s',
+    trailerMood: 'storm',
+    trailerNarration: 'Four thousand fathoms beneath storm-torn waters lies the sunken city of Atal-Mor. Diver Captain Kaelen uncovers a glowing golden reliquary holding the living memory of a drowned council, and a warning that the sea is rising again.',
     chapters: [
       {
         id: 'ch-sunken-1',
@@ -345,6 +360,11 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     featured: true,
     spotlightOrder: 4,
     updatedAt: 'Sep 2026',
+    trailerVideoUrl: '/assets/trailers/the-crimson-scribe.mp4',
+    trailerPosterUrl: '/assets/images/trailers/the-crimson-scribe.jpg',
+    trailerDuration: '16s',
+    trailerMood: 'suspense',
+    trailerNarration: 'Inside the royal scriptorium of House Valerius, every decree is written in crimson ink. When apprentice copyist Lucien uncovers a hidden cipher between illuminated pages, he learns why three kings never survived the quill. Discover The Crimson Scribe.',
     chapters: [
       {
         id: 'ch-scribe-1',
@@ -440,6 +460,11 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     featured: false,
     spotlightOrder: 5,
     updatedAt: 'Nov 2026',
+    trailerVideoUrl: '/assets/trailers/verses-of-the-harmattan.mp4',
+    trailerPosterUrl: '/assets/images/trailers/verses-of-the-harmattan.jpg',
+    trailerDuration: '16s',
+    trailerMood: 'neutral',
+    trailerNarration: 'Tracing the warm northern wind from Sahelian courtyards to Atlantic harbors, Verses of the Harmattan gathers luminous poems of brass lanterns, longing, and light surviving dust. Listen and read all cantos free on Lorethos.',
     chapters: [
       {
         id: 'ch-harmattan-1',
@@ -520,6 +545,11 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     featured: false,
     spotlightOrder: 6,
     updatedAt: 'Nov 2026',
+    trailerVideoUrl: '/assets/trailers/letters-across-the-lagoon.mp4',
+    trailerPosterUrl: '/assets/images/trailers/letters-across-the-lagoon.jpg',
+    trailerDuration: '16s',
+    trailerMood: 'neutral',
+    trailerNarration: 'Separated by a decade of silence, two former partners exchange handwritten letters folded inside waterfront blueprints, uncovering the truth behind the fire that claimed the old lagoon reading hall. Read Letters Across the Lagoon free on Lorethos.',
     chapters: [
       {
         id: 'ch-lagoon-1',
@@ -577,11 +607,38 @@ export const AUTHORITATIVE_STORIES: Story[] = [
   }
 ];
 
-export function sanitizeStoryForPublic(story: Story): Story {
+const TRAILER_DEFAULTS_BY_ID = new Map(
+  AUTHORITATIVE_STORIES.map((story) => [
+    story.id,
+    {
+      trailerVideoUrl: story.trailerVideoUrl,
+      trailerPosterUrl: story.trailerPosterUrl,
+      trailerDuration: story.trailerDuration,
+      trailerMood: story.trailerMood,
+      trailerNarration: story.trailerNarration,
+    },
+  ])
+);
+
+export function withOfficialTrailerMetadata(story: Story): Story {
+  const defaults = TRAILER_DEFAULTS_BY_ID.get(story.id);
+  if (!defaults) return story;
   return {
     ...story,
-    totalChapters: story.chapters.length,
-    chapters: story.chapters.map((ch): Chapter => ({
+    trailerVideoUrl: story.trailerVideoUrl || defaults.trailerVideoUrl,
+    trailerPosterUrl: story.trailerPosterUrl || defaults.trailerPosterUrl,
+    trailerDuration: story.trailerDuration || defaults.trailerDuration,
+    trailerMood: story.trailerMood || defaults.trailerMood,
+    trailerNarration: story.trailerNarration || defaults.trailerNarration,
+  };
+}
+
+export function sanitizeStoryForPublic(story: Story): Story {
+  const hydrated = withOfficialTrailerMetadata(story);
+  return {
+    ...hydrated,
+    totalChapters: hydrated.chapters.length,
+    chapters: hydrated.chapters.map((ch): Chapter => ({
       ...ch,
       // Never leak paid chapter prose to unauthenticated public catalog responses
       content: ch.isFree ? ch.content : []

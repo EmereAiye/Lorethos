@@ -15,10 +15,12 @@ import {
   LogOut,
   XCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  Award
 } from 'lucide-react';
 import { ReadingActivityChart } from '../components/ReadingActivityChart';
 import { ReadingGoal } from '../components/ReadingGoal';
+import { getDisplayName, computeReaderRank, READER_RANK_TIERS } from '../utils/readerProfile';
 
 export const AccountView: React.FC = () => {
   const {
@@ -52,6 +54,7 @@ export const AccountView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'library' | 'goals' | 'highlights' | 'bookmarks' | 'subscription' | 'settings'>('library');
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [authName, setAuthName] = useState('');
+  const [authNickname, setAuthNickname] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -70,6 +73,8 @@ export const AccountView: React.FC = () => {
 
   const isPatron = isAuthenticated && user.subscription.status === 'active';
   const goal = user.readingGoal;
+  const displayName = getDisplayName(user);
+  const rank = computeReaderRank(user, stories);
 
   const dailyTargetForChart = goal.frequency === 'weekly'
     ? Math.max(1, Math.ceil(goal.targetChapters / 7))
@@ -114,9 +119,14 @@ export const AccountView: React.FC = () => {
 
     const trimmedEmail = authEmail.trim();
     const trimmedName = authName.trim();
+    const trimmedNickname = authNickname.trim();
 
     if (authMode === 'signup' && trimmedName.length < 2) {
       setAuthError('Full name must be at least 2 characters.');
+      return;
+    }
+    if (authMode === 'signup' && (trimmedNickname.length < 2 || trimmedNickname.length > 40)) {
+      setAuthError('Nickname must be between 2 and 40 characters.');
       return;
     }
     if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
@@ -138,7 +148,7 @@ export const AccountView: React.FC = () => {
       const res =
         authMode === 'signin'
           ? await login(trimmedEmail, authPassword)
-          : await register(trimmedName, trimmedEmail, authPassword);
+          : await register(trimmedName, trimmedEmail, authPassword, trimmedNickname);
 
       if (res.error) {
         setAuthError(res.error);
@@ -217,20 +227,39 @@ export const AccountView: React.FC = () => {
               </div>
 
               {authMode === 'signup' && (
-                <div>
-                  <label htmlFor="auth-name" className="block font-semibold mb-1">
-                    Full Name
-                  </label>
-                  <input
-                    id="auth-name"
-                    type="text"
-                    required
-                    autoComplete="name"
-                    value={authName}
-                    onChange={(e) => setAuthName(e.target.value)}
-                    placeholder="Your full name"
-                    className="w-full px-3 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="auth-name" className="block font-semibold mb-1">
+                      Full Name
+                    </label>
+                    <input
+                      id="auth-name"
+                      type="text"
+                      required
+                      autoComplete="name"
+                      value={authName}
+                      onChange={(e) => setAuthName(e.target.value)}
+                      placeholder="Your full name"
+                      className="w-full px-3 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="auth-nickname" className="block font-semibold mb-1">
+                      Nickname <span className="font-normal opacity-65">(Displayed publicly)</span>
+                    </label>
+                    <input
+                      id="auth-nickname"
+                      type="text"
+                      required
+                      minLength={2}
+                      maxLength={40}
+                      autoComplete="nickname"
+                      value={authNickname}
+                      onChange={(e) => setAuthNickname(e.target.value)}
+                      placeholder="e.g. BronzeScribe"
+                      className="w-full px-3 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -314,11 +343,15 @@ export const AccountView: React.FC = () => {
           <div className="p-8 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 rounded-full bg-[#2D142C] text-[#F9F6F0] flex items-center justify-center font-display text-2xl font-bold border-2 border-[#C85A32]">
-                {user.name.charAt(0).toUpperCase()}
+                {displayName.charAt(0).toUpperCase()}
               </div>
               <div className="space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className="font-display text-2xl font-bold">{user.name}</h1>
+                  <h1 className="font-display text-2xl font-bold">{displayName}</h1>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-[#C85A32]/15 text-[#C85A32] border border-[#C85A32]/30 px-2 py-0.5 rounded font-sans-ui">
+                    <Award className="w-3 h-3" />
+                    <span>Rank {rank.roman} &middot; {rank.title}</span>
+                  </span>
                   {user.role === 'owner' && (
                     <span className="text-[11px] font-semibold bg-[#2D142C] text-white px-2 py-0.5 rounded font-sans-ui">
                       Publisher (Owner)
@@ -335,7 +368,9 @@ export const AccountView: React.FC = () => {
                   )}
                 </div>
                 <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
-                  {user.email}
+                  {user.nickname && user.nickname.trim() !== user.name.trim()
+                    ? `${user.name} · ${user.email}`
+                    : user.email}
                 </p>
                 {preferredGenres.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px] font-sans-ui">
@@ -400,6 +435,79 @@ export const AccountView: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* Reader Rank & Completion Progress */}
+        <section className="p-6 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs space-y-4 font-sans-ui">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-xl bg-[#C85A32]/15 text-[#C85A32] border border-[#C85A32]/30 flex items-center justify-center font-display text-lg font-bold shrink-0">
+                {rank.roman}
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-wider font-semibold text-[#C85A32]">
+                  Reader Rank &amp; Completion
+                </div>
+                <h2 className="font-display text-xl font-bold">
+                  {rank.title}
+                </h2>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 text-xs">
+              <div>
+                <span className="font-mono font-bold text-base text-[#C85A32]">{rank.completedChapters}</span>
+                <span className="opacity-70 ml-1">
+                  / {rank.totalCatalogChapters} chapters completed ({rank.completionPercent}%)
+                </span>
+              </div>
+              <div className="px-2.5 py-1 rounded bg-[#2D142C]/5 dark:bg-white/5 font-medium">
+                {rank.completedStories} {rank.completedStories === 1 ? 'series' : 'series'} finished
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-medium opacity-75">
+                {rank.nextTitle
+                  ? `${rank.remainingToNext} more ${rank.remainingToNext === 1 ? 'chapter' : 'chapters'} to unlock Rank ${READER_RANK_TIERS.find((t) => t.title === rank.nextTitle)?.roman}: ${rank.nextTitle}`
+                  : 'Highest Lorethos Reader Rank unlocked'}
+              </span>
+              <span className="font-mono font-semibold text-[#C85A32]">{rank.progressToNextPercent}%</span>
+            </div>
+            <div className="w-full h-2 rounded-full bg-[#2D142C]/10 dark:bg-white/10 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-[#C85A32] transition-all duration-300"
+                style={{ width: `${rank.progressToNextPercent}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-1">
+            {READER_RANK_TIERS.map((tier) => {
+              const unlocked = rank.completedChapters >= tier.minChapters;
+              const isCurrent = rank.level === tier.level;
+              return (
+                <div
+                  key={tier.level}
+                  className={`p-2.5 rounded-lg border text-[11px] transition-colors ${
+                    isCurrent
+                      ? 'border-[#C85A32] bg-[#C85A32]/10'
+                      : unlocked
+                      ? 'border-emerald-600/30 bg-emerald-600/5'
+                      : 'border-current/10 opacity-55'
+                  }`}
+                >
+                  <div className="flex items-center justify-between font-mono font-bold">
+                    <span>Rank {tier.roman}</span>
+                    <span>{tier.minChapters}+ ch</span>
+                  </div>
+                  <div className="font-semibold truncate mt-0.5">{tier.title}</div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
 
         {/* Reading Goal Banner */}
         <ReadingGoal variant="banner" onOpenSettings={() => setActiveTab('goals')} />

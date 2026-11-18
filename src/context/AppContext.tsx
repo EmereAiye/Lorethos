@@ -133,7 +133,7 @@ interface AppContextType {
     message?: string;
     requiresEmailVerification?: boolean;
   }>;
-  register: (name: string, email: string, password: string) => Promise<{
+  register: (name: string, email: string, password: string, nickname?: string) => Promise<{
     error?: string;
     message?: string;
     requiresEmailVerification?: boolean;
@@ -444,6 +444,8 @@ export function buildHref(route: string, params?: RouteParams): string {
     }
     case 'contact':
       return '/contact';
+    case 'studio':
+      return '/studio';
     case 'admin':
       return '/admin';
     default:
@@ -525,6 +527,7 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
     };
   }
   if (cleanPath === '/contact') return { route: 'contact', params: {} };
+  if (cleanPath === '/studio') return { route: 'studio', params: {} };
   if (cleanPath === '/admin') return { route: 'admin', params: {} };
 
   return { route: 'home', params: {} };
@@ -920,13 +923,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const register = async (
     name: string,
     email: string,
-    password: string
+    password: string,
+    nickname?: string
   ): Promise<{ error?: string; message?: string; requiresEmailVerification?: boolean }> => {
     try {
       const res = await apiFetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), password })
+        body: JSON.stringify({
+          name: name.trim(),
+          nickname: nickname?.trim() || undefined,
+          email: email.trim(),
+          password
+        })
       });
       const data = await parseJsonSafe<{
         user?: UserProfile;

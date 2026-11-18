@@ -49,6 +49,11 @@ export interface Story {
   featured: boolean;
   spotlightOrder?: number;
   updatedAt: string;
+  trailerVideoUrl?: string;
+  trailerPosterUrl?: string;
+  trailerDuration?: string;
+  trailerMood?: SceneMood;
+  trailerNarration?: string;
   chapters: Chapter[];
 }
 
@@ -138,6 +143,7 @@ export interface CommunityInquiry {
 export interface UserProfile {
   id: string;
   name: string;
+  nickname?: string;
   email: string;
   avatar?: string;
   role: 'reader' | 'owner';

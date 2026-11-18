@@ -4,6 +4,7 @@
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   name text not null default 'Lorethos Reader',
+  nickname text,
   email text not null,
   role text not null default 'reader' check (role in ('reader', 'owner')),
   subscription jsonb not null default '{"plan":"free","status":"none","amountNgn":0}'::jsonb,
