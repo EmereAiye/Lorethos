@@ -148,6 +148,8 @@ export interface PaymentTransaction {
   date: string;
 }
 
+export type SceneMood = 'neutral' | 'suspense' | 'action' | 'storm';
+
 export interface ReaderSettings {
   theme: ReaderTheme;
   font: ReaderFont;
@@ -155,7 +157,7 @@ export interface ReaderSettings {
   lineHeight: 'normal' | 'relaxed' | 'loose';
   readingWidth: 'compact' | 'standard' | 'wide';
   ambientSound: boolean;
-  ambientTrack: 'fireplace' | 'rain' | 'mythic_drone' | 'silence';
+  ambientTrack: 'adaptive' | 'fireplace' | 'rain' | 'mythic_drone' | 'silence';
   ambientVolume: number;
   adaptiveAudio?: boolean;
 }

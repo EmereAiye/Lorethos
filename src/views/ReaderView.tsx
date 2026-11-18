@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { apiFetch, parseJsonSafe } from '../lib/apiClient';
+import { apiFetch } from '../lib/apiClient';
 import {
   ArrowLeft,
   ChevronLeft,
@@ -26,16 +26,23 @@ import {
   Square,
   Trash2
 } from 'lucide-react';
-import { Chapter, HighlightColor, CommentTag } from '../types';
-import { ambientAudio, AmbientTrackId } from '../utils/ambientAudio';
-import { NarrativeAudioMiddleware, MoodCueAnalysis } from '../utils/narrativeAudioMiddleware';
+import { Chapter, HighlightColor, CommentTag, SceneMood } from '../types';
+import { ambientAudio, AmbientTrackId, detectSceneMood } from '../utils/ambientAudio';
 import { VoiceDictationButton } from '../components/VoiceDictationButton';
 
 const TRACK_LABELS: Record<AmbientTrackId, string> = {
+  adaptive: 'Scene Mood (Auto)',
   fireplace: 'Hearth Fire',
   rain: 'Night Rain',
   mythic_drone: 'Ambient Drone',
   silence: 'Muted'
+};
+
+const MOOD_LABELS: Record<SceneMood, string> = {
+  neutral: 'Normal Scene (Silent)',
+  suspense: 'Suspense Spot (Playing)',
+  action: 'Tense Action (Playing)',
+  storm: 'Storm Scene (Playing)'
 };
 
 const HIGHLIGHT_STYLES: Record<HighlightColor, { border: string; bg: string; label: string; dot: string }> = {
@@ -58,8 +65,6 @@ const HIGHLIGHT_STYLES: Record<HighlightColor, { border: string; bg: string; lab
     dot: 'bg-emerald-600'
   }
 };
-
-const EMPTY_PARAGRAPHS: string[] = [];
 
 export const ReaderView: React.FC = () => {
   const {
@@ -121,21 +126,10 @@ export const ReaderView: React.FC = () => {
   const [commentDraft, setCommentDraft] = useState('');
   const [commentError, setCommentError] = useState<string | null>(null);
 
-  // Narrative Audio Middleware state
+  // Scene-adaptive mood tracking state
   const [activeParagraphIdx, setActiveParagraphIdx] = useState(0);
-  const [currentMoodAnalysis, setCurrentMoodAnalysis] = useState<MoodCueAnalysis>({
-    mood: 'calm',
-    intensity: 0.2,
-    label: 'Calm',
-    soundCue: 'Warm baseline ambience',
-    matchedCues: [],
-    paragraphIndex: 0
-  });
-  const paragraphRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const audioMiddlewareRef = useRef<NarrativeAudioMiddleware | null>(null);
-  const lastScrollPctRef = useRef(-1);
-  const latestVolumeRef = useRef(readerSettings.ambientVolume);
-  latestVolumeRef.current = readerSettings.ambientVolume;
+  const [detectedMood, setDetectedMood] = useState<SceneMood>('neutral');
+  const [moodPreviewActive, setMoodPreviewActive] = useState(false);
 
   const chapterData = getChapter(routeParams.slug || '', routeParams.chapterNumber || 1);
   const storySlug = routeParams.slug || '';
@@ -176,12 +170,19 @@ export const ReaderView: React.FC = () => {
     chapterId && user.readingGoal.completedChapterIds?.includes(chapterId)
   );
 
-  // Sync Web Audio Ambient Soundscape (do not restart graph on volume slider change)
+  // Sync Web Audio Ambient Soundscape (separate start/track from volume ticks)
   useEffect(() => {
-    if (readerSettings.ambientSound && readerSettings.ambientTrack !== 'silence') {
-      ambientAudio.start(readerSettings.ambientTrack, latestVolumeRef.current);
-    } else {
+    if (!readerSettings.ambientSound || readerSettings.ambientTrack === 'silence') {
       ambientAudio.stop();
+      setMoodPreviewActive(false);
+      return;
+    }
+
+    if (readerSettings.ambientTrack === 'adaptive') {
+      ambientAudio.start('adaptive', readerSettings.ambientVolume);
+    } else {
+      setMoodPreviewActive(false);
+      ambientAudio.start(readerSettings.ambientTrack, readerSettings.ambientVolume);
     }
   }, [readerSettings.ambientSound, readerSettings.ambientTrack]);
 
@@ -192,27 +193,20 @@ export const ReaderView: React.FC = () => {
   useEffect(() => {
     return () => {
       ambientAudio.stop();
-      audioMiddlewareRef.current?.dispose();
       if (ttsAudioRef.current) {
         ttsAudioRef.current.pause();
       }
     };
   }, []);
 
-  // Scroll depth tracking (rAF-throttled & quantized to integer % to prevent scroll stutters)
+  // Scroll depth tracking
   useEffect(() => {
-    let rafId: number | null = null;
-
-    const measureScroll = () => {
-      rafId = null;
+    const handleScroll = () => {
       const totalHeight = document.documentElement.scrollHeight - window.innerHeight;
       if (totalHeight > 0 && chapterData) {
         const current = (window.scrollY / totalHeight) * 100;
-        const rounded = Math.round(Math.min(100, Math.max(0, current)));
-        if (rounded !== lastScrollPctRef.current) {
-          lastScrollPctRef.current = rounded;
-          setScrollProgress(rounded);
-        }
+        const bounded = Math.min(100, Math.max(0, current));
+        setScrollProgress(bounded);
 
         const accessible = !chapterLocked && hasAccessToChapter(chapterData.story, chapterData.chapter);
         if (accessible) {
@@ -220,10 +214,10 @@ export const ReaderView: React.FC = () => {
             chapterData.story.id,
             chapterData.chapter.id,
             chapterData.chapter.chapterNumber,
-            rounded
+            Math.round(bounded)
           );
           if (
-            rounded >= 92 &&
+            bounded >= 92 &&
             !user.readingGoal.completedChapterIds?.includes(chapterData.chapter.id)
           ) {
             const newlyLogged = logChapterCompleted(chapterData.chapter.id);
@@ -236,17 +230,8 @@ export const ReaderView: React.FC = () => {
       }
     };
 
-    const handleScroll = () => {
-      if (rafId === null) {
-        rafId = window.requestAnimationFrame(measureScroll);
-      }
-    };
-
     window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => {
-      if (rafId !== null) window.cancelAnimationFrame(rafId);
-      window.removeEventListener('scroll', handleScroll);
-    };
+    return () => window.removeEventListener('scroll', handleScroll);
   }, [
     chapterData,
     chapterLocked,
@@ -261,17 +246,17 @@ export const ReaderView: React.FC = () => {
     setCompanionError(null);
     setEditingParagraphIdx(null);
     setAutoCompletedToast(false);
+    setActiveParagraphIdx(0);
+    setMoodPreviewActive(false);
     setTtsError(null);
+    setTtsCurrentTime(0);
+    setTtsDuration(0);
     setTtsAudioSrc((prev) => {
       if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
       return null;
     });
     setTtsPlaying(false);
-    lastScrollPctRef.current = 0;
     setScrollProgress(0);
-    setActiveParagraphIdx(0);
-    paragraphRefs.current = [];
-    audioMiddlewareRef.current?.reset();
     window.scrollTo({ top: 0 });
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
@@ -308,11 +293,11 @@ export const ReaderView: React.FC = () => {
           chapterNumber: chapter.chapterNumber
         })
       });
-      const data = await parseJsonSafe<{ reply?: string; error?: string }>(res);
-      if (!res.ok || !data) {
-        throw new Error(data?.error || 'Could not reach chapter companion.');
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not reach chapter companion.');
       }
-      setCompanionReply(data.reply || '');
+      setCompanionReply(data.reply);
       if (mode === 'ask') setLoreQuestion('');
     } catch (err) {
       setCompanionError(err instanceof Error ? err.message : 'Something went wrong.');
@@ -364,9 +349,9 @@ export const ReaderView: React.FC = () => {
           voiceName: ttsVoice
         })
       });
-      const data = await parseJsonSafe<{ audioBase64?: string; mimeType?: string; error?: string }>(res);
-      if (!res.ok || !data) {
-        throw new Error(data?.error || 'Unable to generate chapter narration.');
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Unable to generate chapter narration.');
       }
       if (!data.audioBase64) {
         throw new Error('No audio stream returned for this chapter.');
@@ -415,106 +400,7 @@ export const ReaderView: React.FC = () => {
     navigate(route, params);
   };
 
-  const story = chapterData?.story;
-  const fallbackChapter = chapterData?.chapter;
-  const chapter = serverChapter || fallbackChapter;
-  const isAccessible = Boolean(story && chapter && !chapterLocked && hasAccessToChapter(story, chapter));
-  const paragraphs = chapter?.content || EMPTY_PARAGRAPHS;
-  const isBookmarked = Boolean(chapter && user.bookmarkedChapterIds.includes(chapter.id));
-  const chapterHighlights = chapter ? highlights.filter(h => h.chapterId === chapter.id) : [];
-  const activeComments = chapter ? chapterComments.filter(c => c.chapterId === chapter.id) : [];
-  const adaptiveAudioEnabled = readerSettings.adaptiveAudio ?? true;
-
-  // Observe visible reader paragraphs cleanly without per-scroll layout thrashing
-  useEffect(() => {
-    if (!isAccessible || chapterLoading || paragraphs.length === 0) return;
-
-    let rafId: number | null = null;
-
-    const updateFocusedParagraph = () => {
-      rafId = null;
-      const focalY = window.innerHeight * 0.38;
-      let bestIdx = 0;
-      let bestDist = Infinity;
-
-      for (let i = 0; i < paragraphs.length; i++) {
-        const el = paragraphRefs.current[i];
-        if (!el) continue;
-        const rect = el.getBoundingClientRect();
-        const center = rect.top + rect.height / 2;
-        const dist = Math.abs(center - focalY);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestIdx = i;
-        }
-      }
-      setActiveParagraphIdx((prev) => (prev === bestIdx ? prev : bestIdx));
-    };
-
-    const scheduleFocalCheck = () => {
-      if (rafId === null) {
-        rafId = window.requestAnimationFrame(updateFocusedParagraph);
-      }
-    };
-
-    updateFocusedParagraph();
-
-    let observer: IntersectionObserver | null = null;
-    if (typeof IntersectionObserver !== 'undefined') {
-      observer = new IntersectionObserver(scheduleFocalCheck, {
-        rootMargin: '-20% 0px -40% 0px',
-        threshold: [0, 0.5]
-      });
-      for (let i = 0; i < paragraphs.length; i++) {
-        const el = paragraphRefs.current[i];
-        if (el) observer.observe(el);
-      }
-    }
-
-    window.addEventListener('scroll', scheduleFocalCheck, { passive: true });
-    return () => {
-      if (rafId !== null) window.cancelAnimationFrame(rafId);
-      observer?.disconnect();
-      window.removeEventListener('scroll', scheduleFocalCheck);
-    };
-  }, [isAccessible, chapterLoading, paragraphs.length, chapterId]);
-
-  // Run debounced narrative audio middleware whenever active paragraph or ambient settings update
-  useEffect(() => {
-    if (!audioMiddlewareRef.current) {
-      audioMiddlewareRef.current = new NarrativeAudioMiddleware();
-    }
-    const enabled =
-      isAccessible &&
-      readerSettings.ambientSound &&
-      readerSettings.ambientTrack !== 'silence' &&
-      adaptiveAudioEnabled &&
-      paragraphs.length > 0;
-
-    audioMiddlewareRef.current.evaluate(paragraphs, activeParagraphIdx, {
-      enabled,
-      immediate: activeParagraphIdx === 0 || !enabled,
-      debounceMs: 550,
-      minIntensityDelta: 0.22,
-      onApply: (analysis) => {
-        setCurrentMoodAnalysis(analysis);
-        if (enabled) {
-          ambientAudio.applyMoodCue(analysis.mood, analysis.intensity);
-        } else {
-          ambientAudio.resetMood();
-        }
-      }
-    });
-  }, [
-    isAccessible,
-    paragraphs,
-    activeParagraphIdx,
-    readerSettings.ambientSound,
-    readerSettings.ambientTrack,
-    adaptiveAudioEnabled
-  ]);
-
-  if (!chapterData || !story || !chapter) {
+  if (!chapterData) {
     return (
       <div className="min-h-screen bg-[#F9F6F0] dark:bg-[#160C16] text-[#2D142C] dark:text-[#F9F6F0] py-24 text-center space-y-4">
         <h2 className="font-display text-2xl font-bold">Chapter Not Found</h2>
@@ -528,6 +414,87 @@ export const ReaderView: React.FC = () => {
       </div>
     );
   }
+
+  const { story, chapter: fallbackChapter } = chapterData;
+  const chapter = serverChapter || fallbackChapter;
+  const isAccessible = !chapterLocked && hasAccessToChapter(story, chapter);
+  const paragraphs = chapter.content || [];
+  const isBookmarked = user.bookmarkedChapterIds.includes(chapter.id);
+  const chapterHighlights = highlights.filter(h => h.chapterId === chapter.id);
+  const activeComments = chapterComments.filter(c => c.chapterId === chapter.id);
+
+  // Observe visible paragraph so Scene Mood (Auto) activates only on tense/suspense spots
+  useEffect(() => {
+    if (!isAccessible || paragraphs.length === 0) {
+      setDetectedMood('neutral');
+      return;
+    }
+
+    const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-paragraph-idx]'));
+    if (elements.length === 0 || typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const visibleScores = new Map<number, number>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const idx = Number(entry.target.getAttribute('data-paragraph-idx'));
+          if (!Number.isFinite(idx)) continue;
+          if (entry.isIntersecting) {
+            visibleScores.set(idx, entry.intersectionRatio);
+          } else {
+            visibleScores.delete(idx);
+          }
+        }
+        if (visibleScores.size > 0) {
+          let bestIdx = activeParagraphIdx;
+          let bestRatio = -1;
+          for (const [idx, ratio] of visibleScores.entries()) {
+            if (ratio > bestRatio) {
+              bestRatio = ratio;
+              bestIdx = idx;
+            }
+          }
+          setActiveParagraphIdx(bestIdx);
+        }
+      },
+      {
+        rootMargin: '-22% 0px -42% 0px',
+        threshold: [0.1, 0.35, 0.65, 0.9]
+      }
+    );
+
+    elements.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [isAccessible, chapter.id, paragraphs.length]);
+
+  // Compute & apply active paragraph mood when Adaptive Mood Audio is allowed
+  useEffect(() => {
+    if (!isAccessible || paragraphs.length === 0) {
+      setDetectedMood('neutral');
+      if (readerSettings.ambientSound && readerSettings.ambientTrack === 'adaptive' && !moodPreviewActive) {
+        ambientAudio.setSceneMood('neutral', readerSettings.ambientVolume);
+      }
+      return;
+    }
+
+    const currentText = paragraphs[Math.min(activeParagraphIdx, paragraphs.length - 1)] || '';
+    const mood = moodPreviewActive ? 'suspense' : detectSceneMood(currentText);
+    setDetectedMood(mood);
+
+    if (readerSettings.ambientSound && readerSettings.ambientTrack === 'adaptive') {
+      ambientAudio.setSceneMood(mood, readerSettings.ambientVolume);
+    }
+  }, [
+    isAccessible,
+    paragraphs,
+    activeParagraphIdx,
+    moodPreviewActive,
+    readerSettings.ambientSound,
+    readerSettings.ambientTrack,
+    readerSettings.ambientVolume
+  ]);
 
   const themeStyles = {
     day: {
@@ -701,7 +668,7 @@ export const ReaderView: React.FC = () => {
                 setCompanionOpen(false);
               }}
               aria-expanded={audioDrawerOpen}
-              aria-label="Audio narration and ambient soundscapes"
+              aria-label="Audio narration and adaptive scene mood audio"
               className={`flex items-center gap-1 px-2 py-1 rounded transition-colors cursor-pointer ${
                 audioDrawerOpen || readerSettings.ambientSound || ttsPlaying
                   ? 'text-[#C85A32] bg-[#C85A32]/15 font-semibold'
@@ -710,7 +677,11 @@ export const ReaderView: React.FC = () => {
             >
               <Headphones className="w-4 h-4" />
               <span className="hidden lg:inline">
-                {ttsPlaying ? 'Narrating' : 'Audio'}
+                {ttsPlaying
+                  ? 'Narrating'
+                  : readerSettings.ambientSound && readerSettings.ambientTrack === 'adaptive' && detectedMood !== 'neutral'
+                  ? 'Mood Active'
+                  : 'Audio'}
               </span>
             </button>
 
@@ -879,22 +850,22 @@ export const ReaderView: React.FC = () => {
             </div>
 
             <div className="space-y-2.5 p-3.5 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] sepia:bg-[#F4ECE1] border border-current/10">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <span className="font-semibold flex items-center gap-1.5">
                   {readerSettings.ambientSound && readerSettings.ambientTrack !== 'silence' ? (
                     <Volume2 className="w-3.5 h-3.5 text-[#C85A32]" />
                   ) : (
                     <VolumeX className="w-3.5 h-3.5 opacity-60" />
                   )}
-                  <span>Ambient Soundscape</span>
+                  <span>Scene Mood &amp; Ambient Audio</span>
                 </span>
                 <span className="text-[11px] font-mono text-[#C85A32]">
                   {readerSettings.ambientSound ? TRACK_LABELS[readerSettings.ambientTrack] : 'Muted'}
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {(['fireplace', 'rain', 'mythic_drone', 'silence'] as const).map(track => {
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                {(['adaptive', 'fireplace', 'rain', 'mythic_drone', 'silence'] as const).map(track => {
                   const isActive =
                     track === 'silence'
                       ? !readerSettings.ambientSound || readerSettings.ambientTrack === 'silence'
@@ -903,13 +874,17 @@ export const ReaderView: React.FC = () => {
                     <button
                       key={track}
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
+                        if (track !== 'silence') {
+                          ambientAudio.unlock();
+                        }
+                        setMoodPreviewActive(false);
                         updateReaderSettings({
                           ambientTrack: track,
                           ambientSound: track !== 'silence'
-                        })
-                      }
-                      className={`py-1.5 px-2.5 rounded-lg border text-center font-medium cursor-pointer transition-all ${
+                        });
+                      }}
+                      className={`py-1.5 px-2 rounded-lg border text-center font-medium cursor-pointer transition-all text-[11px] ${
                         isActive ? 'bg-[#C85A32] text-white border-[#C85A32]' : 'border-current/15 hover:border-[#C85A32]'
                       }`}
                     >
@@ -918,6 +893,34 @@ export const ReaderView: React.FC = () => {
                   );
                 })}
               </div>
+
+              {readerSettings.ambientSound && readerSettings.ambientTrack === 'adaptive' && (
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 pb-0.5 text-[11px] border-t border-current/10">
+                  <div className="space-y-0.5">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <span
+                        className={`inline-block w-2 h-2 rounded-full ${
+                          detectedMood === 'neutral' ? 'bg-slate-400' : 'bg-[#C85A32] animate-pulse'
+                        }`}
+                      />
+                      <span>{MOOD_LABELS[detectedMood]}</span>
+                    </div>
+                    <p className="opacity-70 text-[10px]">
+                      Stays silent on normal prose; swells softly during suspense, action, or storm spots.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      ambientAudio.unlock();
+                      setMoodPreviewActive((prev) => !prev);
+                    }}
+                    className="px-2.5 py-1 rounded border border-[#C85A32]/40 text-[#C85A32] hover:bg-[#C85A32] hover:text-white transition-colors font-semibold text-[10px] cursor-pointer shrink-0"
+                  >
+                    {moodPreviewActive ? 'End Preview' : 'Preview Suspense'}
+                  </button>
+                </div>
+              )}
 
               <div className="flex items-center gap-3 pt-1">
                 <label htmlFor="ambient-volume-slider" className="text-[11px] opacity-70 w-14">
@@ -937,43 +940,6 @@ export const ReaderView: React.FC = () => {
                 <span className="text-[11px] font-mono w-9 text-right">
                   {Math.round(readerSettings.ambientVolume * 100)}%
                 </span>
-              </div>
-
-              <div className="pt-2 mt-1 border-t border-current/10 flex flex-wrap items-center justify-between gap-2">
-                <div className="space-y-0.5 min-w-0">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-                    <Sparkles className="w-3 h-3 text-[#C85A32] shrink-0" />
-                    <span>Adaptive Narrative Mood</span>
-                    <span className="px-1.5 py-0.5 rounded bg-[#C85A32]/15 text-[#C85A32] font-mono text-[10px]">
-                      {adaptiveAudioEnabled ? currentMoodAnalysis.label : 'Off'}
-                    </span>
-                  </div>
-                  <p className="text-[10px] opacity-65 truncate">
-                    {adaptiveAudioEnabled
-                      ? readerSettings.ambientSound && readerSettings.ambientTrack !== 'silence'
-                        ? `${currentMoodAnalysis.soundCue}${
-                            currentMoodAnalysis.matchedCues.length > 0
-                              ? ` (${currentMoodAnalysis.matchedCues.join(', ')})`
-                              : ''
-                          }`
-                        : 'Select a soundscape above to enable dynamic mood cues'
-                      : 'Plays steady ambient soundscape without scene modulation'}
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={adaptiveAudioEnabled}
-                  onClick={() => updateReaderSettings({ adaptiveAudio: !adaptiveAudioEnabled })}
-                  className={`px-2.5 py-1 rounded-md border text-[11px] font-semibold cursor-pointer transition-colors shrink-0 ${
-                    adaptiveAudioEnabled
-                      ? 'bg-[#C85A32] text-white border-[#C85A32]'
-                      : 'border-current/20 opacity-75 hover:opacity-100'
-                  }`}
-                >
-                  {adaptiveAudioEnabled ? 'Auto-Sync On' : 'Auto-Sync Off'}
-                </button>
               </div>
             </div>
 
@@ -995,8 +961,17 @@ export const ReaderView: React.FC = () => {
                       type="button"
                       onClick={() => {
                         setTtsVoice(voice);
-                        setTtsAudioSrc(null);
+                        setTtsAudioSrc((prev) => {
+                          if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+                          return null;
+                        });
+                        setTtsCurrentTime(0);
+                        setTtsDuration(0);
                         stopTtsNarration();
+                        if (ttsAudioRef.current) {
+                          ttsAudioRef.current.removeAttribute('src');
+                          ttsAudioRef.current.load();
+                        }
                       }}
                       className={`px-2 py-1 rounded border text-[11px] cursor-pointer transition-colors ${
                         ttsVoice === voice
@@ -1211,14 +1186,7 @@ export const ReaderView: React.FC = () => {
                 const isEditing = editingParagraphIdx === index;
 
                 return (
-                  <div
-                    key={index}
-                    ref={(el) => {
-                      paragraphRefs.current[index] = el;
-                    }}
-                    data-paragraph-index={index}
-                    className="group relative space-y-2"
-                  >
+                  <div key={index} data-paragraph-idx={index} className="group relative space-y-2">
                     <div
                       className={`rounded-r-lg transition-all ${
                         hlStyle
@@ -1441,14 +1409,8 @@ export const ReaderView: React.FC = () => {
                   <div className="p-4 rounded-xl border border-current/15 bg-current/[0.03] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                     <span>Sign in to post a comment or theory on this chapter.</span>
                     <a
-                      href={buildHref('account', {
-                        redirect: buildHref('reader', { slug: story.slug, chapterNumber: chapter.chapterNumber })
-                      })}
-                      onClick={(e) =>
-                        handleLink(e, 'account', {
-                          redirect: buildHref('reader', { slug: story.slug, chapterNumber: chapter.chapterNumber })
-                        })
-                      }
+                      href={buildHref('account')}
+                      onClick={(e) => handleLink(e, 'account')}
                       className="px-4 py-2 rounded-lg bg-[#C85A32] text-white font-semibold self-start sm:self-auto"
                     >
                       Sign In &rarr;

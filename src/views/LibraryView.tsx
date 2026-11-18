@@ -1,7 +1,7 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { apiFetch, parseJsonSafe } from '../lib/apiClient';
-import { Search, Filter, BookOpen, ArrowUpDown, Sparkles, Loader2, ArrowRight, X, SlidersHorizontal } from 'lucide-react';
+import { Search, Filter, BookOpen, ArrowUpDown, Sparkles, Loader2, ArrowRight, X } from 'lucide-react';
 
 interface AIRecommendation {
   slug: string;
@@ -10,16 +10,7 @@ interface AIRecommendation {
 }
 
 export const LibraryView: React.FC = () => {
-  const {
-    stories,
-    navigate,
-    buildHref,
-    routeParams,
-    user,
-    isAuthenticated,
-    preferredGenres,
-    openReadingPrompt
-  } = useApp();
+  const { stories, navigate, buildHref, routeParams, user } = useApp();
 
   const [searchQuery, setSearchQuery] = useState(routeParams.q || '');
   const [selectedGenre, setSelectedGenre] = useState<string>(routeParams.genre || 'All');
@@ -28,7 +19,6 @@ export const LibraryView: React.FC = () => {
   const [sortBy, setSortBy] = useState<'popular' | 'chapters'>(
     routeParams.sort === 'chapters' ? 'chapters' : 'popular'
   );
-  const [onlyMyPicks, setOnlyMyPicks] = useState(false);
 
   const [moodPrompt, setMoodPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
@@ -36,35 +26,20 @@ export const LibraryView: React.FC = () => {
   const [aiCuratorNote, setAiCuratorNote] = useState<string | null>(null);
   const [aiMatches, setAiMatches] = useState<AIRecommendation[]>([]);
 
-  const hasLocalFilterChangeRef = useRef(false);
-
-  // Sync incoming external URL / routeParams changes (e.g. Navbar global search, ReadingPreferencesModal)
+  // Synchronize filter state with /stories URL query parameters
   useEffect(() => {
-    setSearchQuery(routeParams.q || '');
-    setSelectedGenre(routeParams.genre || 'All');
-    setSelectedStatus(routeParams.status || 'All');
-    setSelectedTier(routeParams.tier || 'All');
-    setSortBy(routeParams.sort === 'chapters' ? 'chapters' : 'popular');
-    setOnlyMyPicks(routeParams.interests === '1');
-  }, [routeParams.q, routeParams.genre, routeParams.interests, routeParams.status, routeParams.tier, routeParams.sort]);
-
-  // Synchronize local filter changes back to /stories URL query parameters
-  useEffect(() => {
-    if (!hasLocalFilterChangeRef.current) return;
-    hasLocalFilterChangeRef.current = false;
     navigate(
       'stories',
       {
         q: searchQuery || undefined,
         genre: selectedGenre !== 'All' ? selectedGenre : undefined,
-        interests: onlyMyPicks ? '1' : undefined,
         status: selectedStatus !== 'All' ? selectedStatus : undefined,
         tier: selectedTier !== 'All' ? selectedTier : undefined,
         sort: sortBy !== 'popular' ? sortBy : undefined
       },
       { replace: true }
     );
-  }, [searchQuery, selectedGenre, onlyMyPicks, selectedStatus, selectedTier, sortBy, navigate]);
+  }, [searchQuery, selectedGenre, selectedStatus, selectedTier, sortBy, navigate]);
 
   const handleCurateStories = async (customPrompt?: string) => {
     const query = (customPrompt ?? moodPrompt).trim();
@@ -102,26 +77,17 @@ export const LibraryView: React.FC = () => {
     return ['All', ...list];
   }, [stories]);
 
-  const interestStories = useMemo(() => {
-    if (!isAuthenticated || preferredGenres.length === 0) return [];
-    return stories.filter(s => preferredGenres.includes(s.genre));
-  }, [stories, isAuthenticated, preferredGenres]);
-
   const filteredStories = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
     return stories
       .filter(story => {
         const matchesSearch =
-          !q ||
-          story.title.toLowerCase().includes(q) ||
-          story.subtitle.toLowerCase().includes(q) ||
-          story.author.toLowerCase().includes(q) ||
-          story.genre.toLowerCase().includes(q) ||
-          story.synopsis.toLowerCase().includes(q) ||
-          story.tags.some(t => t.toLowerCase().includes(q));
+          !searchQuery ||
+          story.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          story.subtitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          story.author.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          story.synopsis.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          story.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
 
-        const matchesInterests =
-          !onlyMyPicks || preferredGenres.length === 0 || preferredGenres.includes(story.genre);
         const matchesGenre = selectedGenre === 'All' || story.genre === selectedGenre;
         const matchesStatus = selectedStatus === 'All' || story.status === selectedStatus;
         const matchesTier =
@@ -130,13 +96,13 @@ export const LibraryView: React.FC = () => {
           (selectedTier === 'Subscription' && story.accessTier === 'subscription') ||
           (selectedTier === 'Purchase' && story.accessTier === 'purchase');
 
-        return matchesSearch && matchesInterests && matchesGenre && matchesStatus && matchesTier;
+        return matchesSearch && matchesGenre && matchesStatus && matchesTier;
       })
       .sort((a, b) => {
         if (sortBy === 'chapters') return b.chapters.length - a.chapters.length;
         return (a.spotlightOrder ?? 99) - (b.spotlightOrder ?? 99);
       });
-  }, [stories, searchQuery, selectedGenre, selectedStatus, selectedTier, sortBy, onlyMyPicks, preferredGenres]);
+  }, [stories, searchQuery, selectedGenre, selectedStatus, selectedTier, sortBy]);
 
   const handleLink = (
     e: React.MouseEvent<HTMLAnchorElement>,
@@ -161,100 +127,30 @@ export const LibraryView: React.FC = () => {
             The Lorethos Story Library
           </h1>
           <p className="font-reader text-base text-[#2D142C]/70 dark:text-[#F9F6F0]/70 max-w-2xl">
-            Explore our catalog of original poetry, literary fiction, high fantasy, mythological realism, and historical chronicles. Every work includes complimentary opening chapters.
+            Explore our catalog of original high fantasy, mythological realism, and historical chronicles. Every story includes complimentary opening chapters.
           </p>
         </div>
-
-        {/* Personalized Reading Interests Bar (Signed-in Users) */}
-        {isAuthenticated && (
-          <div className="p-4 sm:p-5 rounded-xl bg-white dark:bg-[#1E111E] border border-[#C85A32]/25 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs font-sans-ui">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold text-[#C85A32]">
-                <SlidersHorizontal className="w-3.5 h-3.5" />
-                <span>Your Reading Mood</span>
-              </div>
-              {preferredGenres.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                  <span className="opacity-70 mr-1">Selected:</span>
-                  {preferredGenres.map((genre) => (
-                    <button
-                      key={genre}
-                      type="button"
-                      onClick={() => {
-                        hasLocalFilterChangeRef.current = true;
-                        setOnlyMyPicks(false);
-                        setSelectedGenre(selectedGenre === genre ? 'All' : genre);
-                      }}
-                      className={`px-2.5 py-0.5 rounded-md border text-[11px] font-medium cursor-pointer transition-colors ${
-                        selectedGenre === genre
-                          ? 'bg-[#C85A32] text-white border-[#C85A32]'
-                          : 'border-[#C85A32]/30 text-[#C85A32] hover:bg-[#C85A32]/10'
-                      }`}
-                    >
-                      {genre}
-                    </button>
-                  ))}
-                  {preferredGenres.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        hasLocalFilterChangeRef.current = true;
-                        setSelectedGenre('All');
-                        setOnlyMyPicks((prev) => !prev);
-                      }}
-                      className={`px-2.5 py-0.5 rounded-md border text-[11px] font-semibold cursor-pointer transition-colors ${
-                        onlyMyPicks
-                          ? 'bg-[#2D142C] text-white border-[#2D142C] dark:bg-white dark:text-[#160C16]'
-                          : 'border-current/20 opacity-80 hover:opacity-100'
-                      }`}
-                    >
-                      {onlyMyPicks ? `Showing My Picks (${interestStories.length})` : `Filter All My Picks (${interestStories.length})`}
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs opacity-75">
-                  Tell us what genres you enjoy (poetry, literary fiction, fantasy, mystery) to tailor your library.
-                </p>
-              )}
-            </div>
-
-            <button
-              type="button"
-              onClick={openReadingPrompt}
-              className="px-3.5 py-2 rounded-lg border border-[#C85A32]/35 text-xs font-semibold text-[#C85A32] hover:bg-[#C85A32] hover:text-white transition-colors cursor-pointer shrink-0 self-start sm:self-auto"
-            >
-              {preferredGenres.length > 0 ? 'Change Reading Preferences' : 'Choose What to Read'}
-            </button>
-          </div>
-        )}
 
         {/* Filter & Search Bar */}
         <div className="space-y-4 bg-white dark:bg-[#1E111E] p-6 rounded-xl border border-[#2D142C]/10 dark:border-white/10 shadow-2xs">
 
           <div className="relative">
             <label htmlFor="library-search" className="sr-only">
-              Search stories by title, author, genre, keyword, or tag
+              Search stories by title, author, keyword, or tag
             </label>
             <Search className="w-4 h-4 absolute left-3.5 top-3.5 text-[#2D142C]/40 dark:text-white/40" />
             <input
               id="library-search"
               type="text"
               value={searchQuery}
-              onChange={(e) => {
-                hasLocalFilterChangeRef.current = true;
-                setSearchQuery(e.target.value);
-              }}
-              placeholder="Search by title, author, genre, keyword, or theme..."
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by title, author, keyword, or theme..."
               className="w-full pl-10 pr-16 py-2.5 text-xs sm:text-sm rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-transparent focus:outline-none focus:border-[#C85A32] text-[#2D142C] dark:text-white font-sans-ui"
             />
             {searchQuery && (
               <button
                 type="button"
-                onClick={() => {
-                  hasLocalFilterChangeRef.current = true;
-                  setSearchQuery('');
-                }}
+                onClick={() => setSearchQuery('')}
                 className="absolute right-3 top-2.5 text-xs text-[#2D142C]/60 dark:text-white/60 hover:text-[#C85A32] cursor-pointer"
               >
                 Clear
@@ -274,13 +170,9 @@ export const LibraryView: React.FC = () => {
                 <button
                   key={genre}
                   type="button"
-                  onClick={() => {
-                    hasLocalFilterChangeRef.current = true;
-                    setOnlyMyPicks(false);
-                    setSelectedGenre(genre);
-                  }}
+                  onClick={() => setSelectedGenre(genre)}
                   className={`px-3 py-1.5 rounded transition-all cursor-pointer ${
-                    selectedGenre === genre && !onlyMyPicks
+                    selectedGenre === genre
                       ? 'bg-[#2D142C] text-[#F9F6F0] dark:bg-white dark:text-[#160C16] font-semibold shadow-xs'
                       : 'text-[#2D142C]/75 dark:text-white/75 hover:bg-[#2D142C]/5 dark:hover:bg-white/5'
                   }`}
@@ -299,10 +191,7 @@ export const LibraryView: React.FC = () => {
                 <select
                   id="filter-tier"
                   value={selectedTier}
-                  onChange={(e) => {
-                    hasLocalFilterChangeRef.current = true;
-                    setSelectedTier(e.target.value);
-                  }}
+                  onChange={(e) => setSelectedTier(e.target.value)}
                   className="bg-transparent border border-[#2D142C]/15 dark:border-white/15 rounded px-2.5 py-1 text-xs text-[#2D142C] dark:text-white focus:outline-none focus:border-[#C85A32]"
                 >
                   <option value="All" className="bg-white dark:bg-[#1E111E]">All Access Tiers</option>
@@ -319,10 +208,7 @@ export const LibraryView: React.FC = () => {
                 <select
                   id="filter-status"
                   value={selectedStatus}
-                  onChange={(e) => {
-                    hasLocalFilterChangeRef.current = true;
-                    setSelectedStatus(e.target.value);
-                  }}
+                  onChange={(e) => setSelectedStatus(e.target.value)}
                   className="bg-transparent border border-[#2D142C]/15 dark:border-white/15 rounded px-2.5 py-1 text-xs text-[#2D142C] dark:text-white focus:outline-none focus:border-[#C85A32]"
                 >
                   <option value="All" className="bg-white dark:bg-[#1E111E]">All Statuses</option>
@@ -339,10 +225,7 @@ export const LibraryView: React.FC = () => {
                 <select
                   id="filter-sort"
                   value={sortBy}
-                  onChange={(e) => {
-                    hasLocalFilterChangeRef.current = true;
-                    setSortBy(e.target.value as 'popular' | 'chapters');
-                  }}
+                  onChange={(e) => setSortBy(e.target.value as 'popular' | 'chapters')}
                   className="bg-transparent border border-[#2D142C]/15 dark:border-white/15 rounded px-2.5 py-1 text-xs text-[#2D142C] dark:text-white focus:outline-none focus:border-[#C85A32]"
                 >
                   <option value="popular" className="bg-white dark:bg-[#1E111E]">Featured Order</option>
@@ -502,10 +385,8 @@ export const LibraryView: React.FC = () => {
             <button
               type="button"
               onClick={() => {
-                hasLocalFilterChangeRef.current = true;
                 setSearchQuery('');
                 setSelectedGenre('All');
-                setOnlyMyPicks(false);
                 setSelectedStatus('All');
                 setSelectedTier('All');
               }}

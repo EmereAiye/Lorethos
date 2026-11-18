@@ -1,4 +1,4 @@
-import { Story, Chapter } from '../src/types';
+import type { Story, Chapter } from '../src/types/index.js';
 
 export const AUTHORITATIVE_STORIES: Story[] = [
   {

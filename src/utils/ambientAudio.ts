@@ -1,95 +1,112 @@
-import type { NarrativeMood } from './narrativeAudioMiddleware';
+import { SceneMood } from '../types';
 
-export type AmbientTrackId = 'fireplace' | 'rain' | 'mythic_drone' | 'silence';
+export type AmbientTrackId = 'adaptive' | 'fireplace' | 'rain' | 'mythic_drone' | 'silence';
+export type { SceneMood };
 
-interface MoodSynthProfile {
-  padGain: number;
-  cutoffHz: number;
-  q: number;
-  lfoHz: number;
-  lfoDepth: number;
-  freqs: [number, number, number, number]; // sub + 3 pad voices
-  wave: OscillatorType;
+const SUSPENSE_STRONG_PATTERNS = [
+  /\bsuspense\b/i,
+  /\btrembl(?:e|ed|ing)\b/i,
+  /\bwhisper(?:s|ed|ing)?\b/i,
+  /\bshadow(?:s|ed|y)?\b/i,
+  /\bghost(?:s|ly)?\b/i,
+  /\bblood(?:-pact|ied|y)?\b/i,
+  /\bdread(?:ed|ful)?\b/i,
+  /\bominous(?:ly)?\b/i,
+  /\bcrept\b|\bcreep(?:s|ing)?\b/i,
+  /\bvanished\b|\bdisappear(?:ed|s)?\b/i,
+  /\bheartbeat\b|\bpuls(?:e|ed|ing)\b/i,
+  /\bblade\b|\bdagger\b|\bpoison(?:ed)?\b|\btrap\b/i,
+  /\bwatch(?:er|ers|ing)\b|\bstalk(?:ed|ing)?\b/i,
+  /\bdeadly\b|\bdying\b|\bdoom\b|\bcurse(?:d)?\b/i,
+  /\bsuddenly\b|\ball at once\b/i,
+  /\bbetrayal\b|\bsecret(?:ly)?\b|\bforbidden\b/i,
+  /\bbreath misting\b|\bheld (?:his|her|their) breath\b/i,
+  /\bcatacombs\b|\bsubterranean\b|\beerie\b|\bchill\b/i
+];
+
+const SUSPENSE_SOFT_PATTERNS = [
+  /\bdark(?:ness|ened)?\b/i,
+  /\bnight\b|\bmidnight\b|\beclipse\b/i,
+  /\bsilen(?:t|ce)\b|\bhushed\b/i,
+  /\bfear\b|\bafraid\b|\bterror\b/i,
+  /\bfootsteps\b|\becho(?:ed|es|ing)?\b/i,
+  /\bchant(?:ed|ing)?\b|\bmurmur(?:ed|s)?\b/i,
+  /\bwound(?:ed)?\b|\bscar(?:red)?\b|\bskull\b/i,
+  /\bgrave\b|\btomb\b|\bcrypt\b|\bruins\b/i
+];
+
+const ACTION_PATTERNS = [
+  /\bsword(?:s)?\b|\bspear(?:s)?\b|\barrow(?:s)?\b/i,
+  /\bstrike\b|\bstruck\b|\bslam(?:med|ming)?\b|\bshatter(?:ed|ing)?\b/i,
+  /\broar(?:ed|ing)?\b|\bcharg(?:e|ed|ing)\b|\bsprint(?:ed|ing)?\b/i,
+  /\bbattle\b|\bclash(?:ed|ing)?\b|\bcombat\b|\battack(?:ed|ing)?\b/i,
+  /\bfire\b|\bflame(?:s)?\b|\bblaze\b|\bexplod(?:e|ed|ing)\b/i,
+  /\brun(?:ning)? for\b|\bflee(?:ing)?\b|\bpursuit\b/i
+];
+
+const STORM_PATTERNS = [
+  /\bstorm(?:s|y|ing)?\b|\btempest\b|\bhurricane\b/i,
+  /\blightning\b|\bthunder(?:ed|ing|ous)?\b/i,
+  /\brain(?:s|ing|ed|fall)?\b|\bdownpour\b|\bgale\b/i,
+  /\bhowl(?:ed|ing)\b wind\b|\bwhipping across\b/i
+];
+
+/**
+ * Classifies a paragraph (or visible reading window) into a narrative mood.
+ * Normal/calm exposition & everyday dialogue deliberately return 'neutral'
+ * so normal scenes stay silent when Adaptive Scene Mood is enabled.
+ */
+export function detectSceneMood(text: string): SceneMood {
+  const clean = String(text || '').trim();
+  if (!clean) return 'neutral';
+
+  let suspenseScore = 0;
+  let actionScore = 0;
+  let stormScore = 0;
+
+  for (const re of SUSPENSE_STRONG_PATTERNS) {
+    if (re.test(clean)) suspenseScore += 2;
+  }
+  for (const re of SUSPENSE_SOFT_PATTERNS) {
+    if (re.test(clean)) suspenseScore += 1;
+  }
+  for (const re of ACTION_PATTERNS) {
+    if (re.test(clean)) actionScore += 2;
+  }
+  for (const re of STORM_PATTERNS) {
+    if (re.test(clean)) stormScore += 2;
+  }
+
+  // Ellipses or sharp dramatic exclamations nudge tension subtly
+  if (/\.{3}|—/.test(clean) && suspenseScore >= 1) {
+    suspenseScore += 1;
+  }
+
+  // Require a clear signal (>= 3) so normal descriptive scenes stay silent ('neutral')
+  if (actionScore >= 4 && actionScore >= suspenseScore && actionScore >= stormScore) {
+    return 'action';
+  }
+  if (stormScore >= 4 && stormScore > suspenseScore) {
+    return 'storm';
+  }
+  if (suspenseScore >= 3) {
+    return 'suspense';
+  }
+  if (actionScore >= 3 && suspenseScore >= 1) {
+    return 'action';
+  }
+  return 'neutral';
 }
-
-const MOOD_PROFILES: Record<NarrativeMood, MoodSynthProfile> = {
-  calm: {
-    padGain: 0,
-    cutoffHz: 340,
-    q: 0.7,
-    lfoHz: 0.12,
-    lfoDepth: 80,
-    freqs: [65.41, 130.81, 196.0, 261.63],
-    wave: 'sine',
-  },
-  tense: {
-    // Minor-second / tritone dark suspense pad (C2, C3, Eb3, F#3)
-    padGain: 0.24,
-    cutoffHz: 320,
-    q: 3.2,
-    lfoHz: 0.42,
-    lfoDepth: 220,
-    freqs: [65.41, 130.81, 155.56, 185.0],
-    wave: 'sawtooth',
-  },
-  action: {
-    // Urgent kinetic pulse (G2, D3, G3, Bb3)
-    padGain: 0.26,
-    cutoffHz: 540,
-    q: 2.6,
-    lfoHz: 2.2,
-    lfoDepth: 340,
-    freqs: [98.0, 146.83, 196.0, 233.08],
-    wave: 'sawtooth',
-  },
-  solemn: {
-    // Deep ritual organ drone (E2, B2, E3, G3)
-    padGain: 0.22,
-    cutoffHz: 250,
-    q: 1.1,
-    lfoHz: 0.14,
-    lfoDepth: 75,
-    freqs: [82.41, 123.47, 164.81, 196.0],
-    wave: 'triangle',
-  },
-  wonder: {
-    // Luminous harmonic shimmer (D3, A3, C#4, E4)
-    padGain: 0.2,
-    cutoffHz: 680,
-    q: 1.4,
-    lfoHz: 0.2,
-    lfoDepth: 240,
-    freqs: [146.83, 220.0, 277.18, 329.63],
-    wave: 'sine',
-  },
-};
 
 class AmbientSoundEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
   private activeNodes: AudioNode[] = [];
   private crackleTimer: number | null = null;
+  private fadeOutCleanupTimer: number | null = null;
   private currentTrack: AmbientTrackId = 'silence';
-
-  // Base track nodes modulated by mood cues
-  private baseFilter: BiquadFilterNode | null = null;
-  private baseSecondaryFilter: BiquadFilterNode | null = null;
-  private baseLfo: OscillatorNode | null = null;
-  private crackleChance = 0.45;
-
-  // Dynamic narrative mood synth pad layer
-  private padGain: GainNode | null = null;
-  private padFilter: BiquadFilterNode | null = null;
-  private padLfo: OscillatorNode | null = null;
-  private padLfoGain: GainNode | null = null;
-  private padOscillators: OscillatorNode[] = [];
-
-  private currentMood: NarrativeMood = 'calm';
-  private currentIntensity = 0.2;
-  private lastAppliedMood: NarrativeMood | null = null;
-  private lastAppliedIntensity = -1;
-  private cachedNoiseBuffers: Partial<Record<'brown' | 'pink', AudioBuffer>> = {};
-  private crackleBufferPool: AudioBuffer[] = [];
+  private currentMood: SceneMood = 'neutral';
+  private lastVolume = 0.6;
 
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -115,11 +132,15 @@ class AmbientSoundEngine {
     return this.ctx;
   }
 
-  private getNoiseBuffer(ctx: AudioContext, seconds: number, warmth: 'brown' | 'pink'): AudioBuffer {
-    const existing = this.cachedNoiseBuffers[warmth];
-    if (existing && existing.sampleRate === ctx.sampleRate) {
-      return existing;
+  /** Must be called synchronously inside a user click/tap to unlock browser Web Audio. */
+  public unlock(): void {
+    const ctx = this.ensureContext();
+    if (ctx && ctx.state === 'suspended') {
+      void ctx.resume().catch(() => {});
     }
+  }
+
+  private createNoiseBuffer(ctx: AudioContext, seconds: number, warmth: 'brown' | 'pink'): AudioBuffer {
     const sampleRate = ctx.sampleRate;
     const length = sampleRate * seconds;
     const buffer = ctx.createBuffer(1, length, sampleRate);
@@ -134,313 +155,37 @@ class AmbientSoundEngine {
         data[i] *= 3.2;
       }
     } else {
-      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+      let b0 = 0,
+        b1 = 0,
+        b2 = 0,
+        b3 = 0,
+        b4 = 0,
+        b5 = 0,
+        b6 = 0;
       for (let i = 0; i < length; i++) {
         const white = Math.random() * 2 - 1;
         b0 = 0.99886 * b0 + white * 0.0555179;
         b1 = 0.99332 * b1 + white * 0.0750759;
-        b2 = 0.96900 * b2 + white * 0.1538520;
-        b3 = 0.86650 * b3 + white * 0.3104856;
-        b4 = 0.55000 * b4 + white * 0.5329522;
-        b5 = -0.7616 * b5 - white * 0.0168980;
+        b2 = 0.969 * b2 + white * 0.153852;
+        b3 = 0.8665 * b3 + white * 0.3104856;
+        b4 = 0.55 * b4 + white * 0.5329522;
+        b5 = -0.7616 * b5 - white * 0.016898;
         data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.06;
         b6 = white * 0.115926;
       }
     }
-    this.cachedNoiseBuffers[warmth] = buffer;
     return buffer;
   }
 
-  private ensureCracklePool(ctx: AudioContext): AudioBuffer[] {
-    if (this.crackleBufferPool.length > 0 && this.crackleBufferPool[0].sampleRate === ctx.sampleRate) {
-      return this.crackleBufferPool;
-    }
-    const pool: AudioBuffer[] = [];
-    const sampleLen = Math.floor(ctx.sampleRate * 0.03);
-    for (let k = 0; k < 6; k++) {
-      const popBuf = ctx.createBuffer(1, sampleLen, ctx.sampleRate);
-      const ch = popBuf.getChannelData(0);
-      for (let i = 0; i < sampleLen; i++) {
-        ch[i] = (Math.random() * 2 - 1) * Math.exp(-i / (sampleLen * 0.25));
-      }
-      pool.push(popBuf);
-    }
-    this.crackleBufferPool = pool;
-    return pool;
-  }
-
-  private initMoodPadLayer(ctx: AudioContext, master: GainNode): void {
-    const padGain = ctx.createGain();
-    padGain.gain.setValueAtTime(0, ctx.currentTime);
-
-    const padFilter = ctx.createBiquadFilter();
-    padFilter.type = 'lowpass';
-    padFilter.frequency.setValueAtTime(340, ctx.currentTime);
-    padFilter.Q.setValueAtTime(1.5, ctx.currentTime);
-
-    const padLfo = ctx.createOscillator();
-    padLfo.type = 'sine';
-    padLfo.frequency.setValueAtTime(0.25, ctx.currentTime);
-
-    const padLfoGain = ctx.createGain();
-    padLfoGain.gain.setValueAtTime(120, ctx.currentTime);
-
-    padLfo.connect(padLfoGain);
-    padLfoGain.connect(padFilter.frequency);
-    padLfo.start();
-
-    padFilter.connect(padGain);
-    padGain.connect(master);
-
-    const oscs: OscillatorNode[] = [];
-    const defaultFreqs: [number, number, number, number] = [65.41, 130.81, 155.56, 185.0];
-    defaultFreqs.forEach((freq, idx) => {
-      const osc = ctx.createOscillator();
-      osc.type = idx === 0 ? 'sine' : 'triangle';
-      osc.frequency.setValueAtTime(freq, ctx.currentTime);
-      osc.detune.setValueAtTime(idx === 1 ? -6 : idx === 2 ? 7 : idx === 3 ? -4 : 0, ctx.currentTime);
-
-      const voiceGain = ctx.createGain();
-      voiceGain.gain.setValueAtTime(idx === 0 ? 0.34 : 0.22, ctx.currentTime);
-
-      osc.connect(voiceGain);
-      voiceGain.connect(padFilter);
-      osc.start();
-
-      oscs.push(osc);
-      this.activeNodes.push(osc, voiceGain);
-    });
-
-    this.padGain = padGain;
-    this.padFilter = padFilter;
-    this.padLfo = padLfo;
-    this.padLfoGain = padLfoGain;
-    this.padOscillators = oscs;
-
-    this.activeNodes.push(padGain, padFilter, padLfo, padLfoGain);
-  }
-
-  public start(track: AmbientTrackId, volume: number): void {
-    this.stop();
-    this.currentTrack = track;
-    if (track === 'silence') return;
-
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-
-    const master = ctx.createGain();
-    master.gain.setValueAtTime(Math.max(0, Math.min(1, volume)) * 0.35, ctx.currentTime);
-    master.connect(ctx.destination);
-    this.masterGain = master;
-    this.activeNodes.push(master);
-
-    if (track === 'fireplace') {
-      const rumbleSource = ctx.createBufferSource();
-      rumbleSource.buffer = this.getNoiseBuffer(ctx, 4, 'brown');
-      rumbleSource.loop = true;
-
-      const lowpass = ctx.createBiquadFilter();
-      lowpass.type = 'lowpass';
-      lowpass.frequency.value = 340;
-      this.baseFilter = lowpass;
-      this.crackleChance = 0.45;
-
-      rumbleSource.connect(lowpass);
-      lowpass.connect(master);
-      rumbleSource.start();
-      this.activeNodes.push(rumbleSource, lowpass);
-
-      const cracklePool = this.ensureCracklePool(ctx);
-
-      // Gentle random hearth crackle pops reusing precomputed buffers
-      this.crackleTimer = window.setInterval(() => {
-        if (!this.ctx || !this.masterGain || this.currentTrack !== 'fireplace') return;
-        if (typeof document !== 'undefined' && document.hidden) return;
-        if (Math.random() > this.crackleChance) return;
-
-        const now = this.ctx.currentTime;
-        const popSource = this.ctx.createBufferSource();
-        popSource.buffer = cracklePool[Math.floor(Math.random() * cracklePool.length)];
-
-        const highpass = this.ctx.createBiquadFilter();
-        highpass.type = 'bandpass';
-        highpass.frequency.value = 1800 + Math.random() * 2400;
-        highpass.Q.value = 1.6;
-
-        const popGain = this.ctx.createGain();
-        popGain.gain.setValueAtTime(0.18 + Math.random() * 0.22, now);
-        popGain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
-
-        popSource.connect(highpass);
-        highpass.connect(popGain);
-        popGain.connect(this.masterGain);
-        popSource.start(now);
-      }, 320);
-    } else if (track === 'rain') {
-      const rainSource = ctx.createBufferSource();
-      rainSource.buffer = this.getNoiseBuffer(ctx, 5, 'pink');
-      rainSource.loop = true;
-
-      const bandpass = ctx.createBiquadFilter();
-      bandpass.type = 'bandpass';
-      bandpass.frequency.value = 1100;
-      bandpass.Q.value = 0.55;
-
-      const highShelf = ctx.createBiquadFilter();
-      highShelf.type = 'lowpass';
-      highShelf.frequency.value = 3200;
-
-      this.baseFilter = bandpass;
-      this.baseSecondaryFilter = highShelf;
-
-      rainSource.connect(bandpass);
-      bandpass.connect(highShelf);
-      highShelf.connect(master);
-      rainSource.start();
-      this.activeNodes.push(rainSource, bandpass, highShelf);
-    } else if (track === 'mythic_drone') {
-      const freqs = [110, 164.81, 220];
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.value = 420;
-
-      const lfo = ctx.createOscillator();
-      lfo.type = 'sine';
-      lfo.frequency.value = 0.12;
-      const lfoGain = ctx.createGain();
-      lfoGain.gain.value = 160;
-      lfo.connect(lfoGain);
-      lfoGain.connect(filter.frequency);
-      lfo.start();
-
-      this.baseFilter = filter;
-      this.baseLfo = lfo;
-
-      filter.connect(master);
-      this.activeNodes.push(filter, lfo, lfoGain);
-
-      freqs.forEach((f, idx) => {
-        const osc = ctx.createOscillator();
-        osc.type = idx === 1 ? 'triangle' : 'sine';
-        osc.frequency.value = f;
-        osc.detune.value = idx === 0 ? -4 : idx === 2 ? 4 : 0;
-
-        const voiceGain = ctx.createGain();
-        voiceGain.gain.value = idx === 0 ? 0.28 : 0.14;
-
-        osc.connect(voiceGain);
-        voiceGain.connect(filter);
-        osc.start();
-        this.activeNodes.push(osc, voiceGain);
-      });
-    }
-
-    this.initMoodPadLayer(ctx, master);
-    this.applyMoodCue(this.currentMood, this.currentIntensity);
-  }
-
-  public applyMoodCue(mood: NarrativeMood, intensity: number): void {
-    const clampedIntensity = Math.max(0, Math.min(1, intensity));
-    this.currentMood = mood;
-    this.currentIntensity = clampedIntensity;
-
-    if (!this.ctx || !this.masterGain || this.currentTrack === 'silence') {
-      return;
-    }
-
-    const moodChanged = mood !== this.lastAppliedMood;
-    const intensityDelta = Math.abs(clampedIntensity - this.lastAppliedIntensity);
-    if (!moodChanged && intensityDelta < 0.12) {
-      return;
-    }
-    this.lastAppliedMood = mood;
-    this.lastAppliedIntensity = clampedIntensity;
-
-    const now = this.ctx.currentTime;
-    const profile = MOOD_PROFILES[mood];
-
-    // 1. Dynamically modulate the narrative synth pad layer with smooth time constants
-    if (this.padGain && this.padFilter && this.padLfo && this.padLfoGain) {
-      const targetPadGain =
-        mood === 'calm' ? 0 : profile.padGain * (0.55 + clampedIntensity * 0.65);
-      this.padGain.gain.setTargetAtTime(targetPadGain, now, 1.15);
-
-      const targetCutoff = profile.cutoffHz + clampedIntensity * 260;
-      this.padFilter.frequency.setTargetAtTime(targetCutoff, now, 1.05);
-      this.padFilter.Q.setTargetAtTime(profile.q, now, 0.9);
-
-      this.padLfo.frequency.setTargetAtTime(
-        profile.lfoHz * (0.85 + clampedIntensity * 0.4),
-        now,
-        0.9
-      );
-      this.padLfoGain.gain.setTargetAtTime(
-        profile.lfoDepth * (0.7 + clampedIntensity * 0.5),
-        now,
-        0.9
-      );
-
-      if (moodChanged) {
-        this.padOscillators.forEach((osc, idx) => {
-          const nextType = idx === 0 ? 'sine' : profile.wave;
-          if (osc.type !== nextType) {
-            osc.type = nextType;
-          }
-          osc.frequency.setTargetAtTime(profile.freqs[idx], now, 0.85);
-        });
-      }
-    }
-
-    // 2. Dynamically modulate the active base ambient track
-    if (this.currentTrack === 'fireplace' && this.baseFilter) {
-      const targetHz =
-        mood === 'tense'
-          ? 240
-          : mood === 'action'
-          ? 480 + clampedIntensity * 140
-          : mood === 'wonder'
-          ? 380
-          : 340;
-      this.baseFilter.frequency.setTargetAtTime(targetHz, now, 0.9);
-      this.crackleChance = mood === 'action' ? 0.72 : mood === 'tense' ? 0.25 : 0.45;
-    } else if (this.currentTrack === 'rain' && this.baseFilter && this.baseSecondaryFilter) {
-      const bandHz = mood === 'tense' || mood === 'action' ? 1450 + clampedIntensity * 350 : 1100;
-      const topHz = mood === 'action' ? 4200 : mood === 'tense' ? 3600 : 3000;
-      this.baseFilter.frequency.setTargetAtTime(bandHz, now, 0.9);
-      this.baseSecondaryFilter.frequency.setTargetAtTime(topHz, now, 0.9);
-    } else if (this.currentTrack === 'mythic_drone' && this.baseFilter && this.baseLfo) {
-      const droneCutoff =
-        mood === 'tense'
-          ? 640
-          : mood === 'action'
-          ? 760
-          : mood === 'solemn'
-          ? 300
-          : mood === 'wonder'
-          ? 560
-          : 420;
-      const droneLfoHz =
-        mood === 'action' ? 0.45 : mood === 'tense' ? 0.28 : 0.12;
-      this.baseFilter.frequency.setTargetAtTime(droneCutoff, now, 0.9);
-      this.baseLfo.frequency.setTargetAtTime(droneLfoHz, now, 0.9);
+  private clearFadeTimer(): void {
+    if (this.fadeOutCleanupTimer !== null) {
+      window.clearTimeout(this.fadeOutCleanupTimer);
+      this.fadeOutCleanupTimer = null;
     }
   }
 
-  public resetMood(): void {
-    this.applyMoodCue('calm', 0.2);
-  }
-
-  public setVolume(volume: number): void {
-    if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setTargetAtTime(
-        Math.max(0, Math.min(1, volume)) * 0.35,
-        this.ctx.currentTime,
-        0.05
-      );
-    }
-  }
-
-  public stop(): void {
+  private stopImmediate(): void {
+    this.clearFadeTimer();
     if (this.crackleTimer !== null) {
       window.clearInterval(this.crackleTimer);
       this.crackleTimer = null;
@@ -457,16 +202,317 @@ class AmbientSoundEngine {
     }
     this.activeNodes = [];
     this.masterGain = null;
-    this.baseFilter = null;
-    this.baseSecondaryFilter = null;
-    this.baseLfo = null;
-    this.padGain = null;
-    this.padFilter = null;
-    this.padLfo = null;
-    this.padLfoGain = null;
-    this.padOscillators = [];
-    this.lastAppliedMood = null;
-    this.lastAppliedIntensity = -1;
+  }
+
+  public start(track: AmbientTrackId, volume: number): void {
+    this.lastVolume = Math.max(0, Math.min(1, volume));
+    if (track === 'adaptive') {
+      // Adaptive mode waits for setSceneMood(); remain silent until a mood spot is active
+      if (this.currentTrack !== 'adaptive') {
+        this.stopImmediate();
+        this.currentTrack = 'adaptive';
+        this.currentMood = 'neutral';
+      }
+      return;
+    }
+
+    if (this.currentTrack === track && this.masterGain && this.ctx) {
+      this.setVolume(volume);
+      return;
+    }
+
+    this.stopImmediate();
+    this.currentTrack = track;
+    this.currentMood = 'neutral';
+    if (track === 'silence') return;
+
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, ctx.currentTime);
+    master.gain.setTargetAtTime(this.lastVolume * 0.35, ctx.currentTime, 0.25);
+    master.connect(ctx.destination);
+    this.masterGain = master;
+    this.activeNodes.push(master);
+
+    if (track === 'fireplace') {
+      this.buildFireplaceGraph(ctx, master);
+    } else if (track === 'rain') {
+      this.buildRainGraph(ctx, master);
+    } else if (track === 'mythic_drone') {
+      this.buildDroneGraph(ctx, master, [110, 164.81, 220], 420);
+    }
+  }
+
+  /**
+   * Dynamically drives soundscape from the active paragraph's mood.
+   * Neutral/normal scenes smoothly fade to silence (zero sound).
+   * Suspense/action/storm spots smoothly swell in atmospheric cues.
+   */
+  public setSceneMood(mood: SceneMood, volume: number): void {
+    this.lastVolume = Math.max(0, Math.min(1, volume));
+    this.currentTrack = 'adaptive';
+
+    if (mood === this.currentMood) {
+      if (mood !== 'neutral') {
+        this.setVolume(this.lastVolume);
+      }
+      return;
+    }
+
+    this.currentMood = mood;
+
+    if (mood === 'neutral') {
+      if (this.masterGain && this.ctx) {
+        const now = this.ctx.currentTime;
+        this.masterGain.gain.cancelScheduledValues(now);
+        this.masterGain.gain.setTargetAtTime(0.0001, now, 0.35);
+        this.clearFadeTimer();
+        this.fadeOutCleanupTimer = window.setTimeout(() => {
+          if (this.currentTrack === 'adaptive' && this.currentMood === 'neutral') {
+            this.stopImmediate();
+          }
+        }, 1400);
+      }
+      return;
+    }
+
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+
+    this.stopImmediate();
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, ctx.currentTime);
+    master.gain.setTargetAtTime(this.lastVolume * 0.38, ctx.currentTime, 0.45);
+    master.connect(ctx.destination);
+    this.masterGain = master;
+    this.activeNodes.push(master);
+
+    if (mood === 'suspense') {
+      this.buildSuspenseGraph(ctx, master);
+    } else if (mood === 'action') {
+      this.buildActionGraph(ctx, master);
+    } else if (mood === 'storm') {
+      this.buildRainGraph(ctx, master, true);
+    }
+  }
+
+  private buildFireplaceGraph(ctx: AudioContext, master: GainNode): void {
+    const rumbleSource = ctx.createBufferSource();
+    rumbleSource.buffer = this.createNoiseBuffer(ctx, 4, 'brown');
+    rumbleSource.loop = true;
+
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = 340;
+
+    rumbleSource.connect(lowpass);
+    lowpass.connect(master);
+    rumbleSource.start();
+    this.activeNodes.push(rumbleSource, lowpass);
+
+    this.crackleTimer = window.setInterval(() => {
+      if (!this.ctx || !this.masterGain || this.currentTrack !== 'fireplace') return;
+      if (Math.random() > 0.55) return;
+
+      const now = this.ctx.currentTime;
+      const popSource = this.ctx.createBufferSource();
+      const popBuf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * 0.03), this.ctx.sampleRate);
+      const ch = popBuf.getChannelData(0);
+      for (let i = 0; i < ch.length; i++) {
+        ch[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ch.length * 0.25));
+      }
+      popSource.buffer = popBuf;
+
+      const highpass = this.ctx.createBiquadFilter();
+      highpass.type = 'bandpass';
+      highpass.frequency.value = 1800 + Math.random() * 2400;
+      highpass.Q.value = 1.6;
+
+      const popGain = this.ctx.createGain();
+      popGain.gain.setValueAtTime(0.18 + Math.random() * 0.22, now);
+      popGain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+
+      popSource.connect(highpass);
+      highpass.connect(popGain);
+      popGain.connect(this.masterGain);
+      popSource.start(now);
+    }, 280);
+  }
+
+  private buildRainGraph(ctx: AudioContext, master: GainNode, withStormGust = false): void {
+    const rainSource = ctx.createBufferSource();
+    rainSource.buffer = this.createNoiseBuffer(ctx, 5, 'pink');
+    rainSource.loop = true;
+
+    const bandpass = ctx.createBiquadFilter();
+    bandpass.type = 'bandpass';
+    bandpass.frequency.value = withStormGust ? 780 : 1100;
+    bandpass.Q.value = 0.55;
+
+    if (withStormGust) {
+      const windLfo = ctx.createOscillator();
+      windLfo.type = 'sine';
+      windLfo.frequency.value = 0.14;
+      const windDepth = ctx.createGain();
+      windDepth.gain.value = 320;
+      windLfo.connect(windDepth);
+      windDepth.connect(bandpass.frequency);
+      windLfo.start();
+      this.activeNodes.push(windLfo, windDepth);
+    }
+
+    const highShelf = ctx.createBiquadFilter();
+    highShelf.type = 'lowpass';
+    highShelf.frequency.value = withStormGust ? 2400 : 3200;
+
+    rainSource.connect(bandpass);
+    bandpass.connect(highShelf);
+    highShelf.connect(master);
+    rainSource.start();
+    this.activeNodes.push(rainSource, bandpass, highShelf);
+  }
+
+  private buildDroneGraph(ctx: AudioContext, master: GainNode, freqs: number[], baseCutoff: number): void {
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = baseCutoff;
+
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.12;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 160;
+    lfo.connect(lfoGain);
+    lfoGain.connect(filter.frequency);
+    lfo.start();
+
+    filter.connect(master);
+    this.activeNodes.push(filter, lfo, lfoGain);
+
+    freqs.forEach((f, idx) => {
+      const osc = ctx.createOscillator();
+      osc.type = idx === 1 ? 'triangle' : 'sine';
+      osc.frequency.value = f;
+      osc.detune.value = idx === 0 ? -4 : idx === 2 ? 4 : 0;
+
+      const voiceGain = ctx.createGain();
+      voiceGain.gain.value = idx === 0 ? 0.28 : 0.14;
+
+      osc.connect(voiceGain);
+      voiceGain.connect(filter);
+      osc.start();
+      this.activeNodes.push(osc, voiceGain);
+    });
+  }
+
+  private buildSuspenseGraph(ctx: AudioContext, master: GainNode): void {
+    // 1. Subtle low heartbeat pulse (warm sub-bass C2 modulated smoothly)
+    const subOsc = ctx.createOscillator();
+    subOsc.type = 'sine';
+    subOsc.frequency.value = 65.41; // C2
+
+    const pulseVca = ctx.createGain();
+    pulseVca.gain.value = 0.22;
+
+    const pulseLfo = ctx.createOscillator();
+    pulseLfo.type = 'sine';
+    pulseLfo.frequency.value = 0.85; // ~51 BPM gentle tense pulse
+    const pulseDepth = ctx.createGain();
+    pulseDepth.gain.value = 0.14;
+    pulseLfo.connect(pulseDepth);
+    pulseDepth.connect(pulseVca.gain);
+
+    subOsc.connect(pulseVca);
+    pulseVca.connect(master);
+    subOsc.start();
+    pulseLfo.start();
+    this.activeNodes.push(subOsc, pulseVca, pulseLfo, pulseDepth);
+
+    // 2. Dark minor-third & diminished-fifth atmospheric pad with gentle filter breathing
+    const padFilter = ctx.createBiquadFilter();
+    padFilter.type = 'lowpass';
+    padFilter.frequency.value = 460;
+    padFilter.Q.value = 1.4;
+
+    const sweepLfo = ctx.createOscillator();
+    sweepLfo.type = 'sine';
+    sweepLfo.frequency.value = 0.18;
+    const sweepDepth = ctx.createGain();
+    sweepDepth.gain.value = 180;
+    sweepLfo.connect(sweepDepth);
+    sweepDepth.connect(padFilter.frequency);
+    sweepLfo.start();
+
+    padFilter.connect(master);
+    this.activeNodes.push(padFilter, sweepLfo, sweepDepth);
+
+    const suspenseFreqs = [130.81, 155.56, 185.0, 246.94]; // C3, Eb3, Gb3, B3 warm eerie cluster
+    suspenseFreqs.forEach((f, idx) => {
+      const osc = ctx.createOscillator();
+      osc.type = idx % 2 === 0 ? 'sine' : 'triangle';
+      osc.frequency.value = f;
+      osc.detune.value = idx % 2 === 0 ? -3 : 4;
+
+      const g = ctx.createGain();
+      g.gain.value = idx === 0 ? 0.16 : idx === 3 ? 0.06 : 0.09;
+
+      osc.connect(g);
+      g.connect(padFilter);
+      osc.start();
+      this.activeNodes.push(osc, g);
+    });
+  }
+
+  private buildActionGraph(ctx: AudioContext, master: GainNode): void {
+    // Urgent muffled low percussive pulse + fifth tension drone (G2 + D3)
+    const drumOsc = ctx.createOscillator();
+    drumOsc.type = 'triangle';
+    drumOsc.frequency.value = 73.42; // D2
+
+    const drumFilter = ctx.createBiquadFilter();
+    drumFilter.type = 'lowpass';
+    drumFilter.frequency.value = 260;
+
+    const drumVca = ctx.createGain();
+    drumVca.gain.value = 0.24;
+
+    const beatLfo = ctx.createOscillator();
+    beatLfo.type = 'sine';
+    beatLfo.frequency.value = 1.65;
+    const beatDepth = ctx.createGain();
+    beatDepth.gain.value = 0.18;
+    beatLfo.connect(beatDepth);
+    beatDepth.connect(drumVca.gain);
+
+    drumOsc.connect(drumFilter);
+    drumFilter.connect(drumVca);
+    drumVca.connect(master);
+    drumOsc.start();
+    beatLfo.start();
+    this.activeNodes.push(drumOsc, drumFilter, drumVca, beatLfo, beatDepth);
+
+    this.buildDroneGraph(ctx, master, [98.0, 146.83, 233.08], 520);
+  }
+
+  public setVolume(volume: number): void {
+    this.lastVolume = Math.max(0, Math.min(1, volume));
+    if (this.masterGain && this.ctx) {
+      if (this.currentTrack === 'adaptive' && this.currentMood === 'neutral') return;
+      const scale = this.currentTrack === 'adaptive' ? 0.38 : 0.35;
+      this.masterGain.gain.setTargetAtTime(
+        this.lastVolume * scale,
+        this.ctx.currentTime,
+        0.05
+      );
+    }
+  }
+
+  public stop(): void {
+    this.currentTrack = 'silence';
+    this.currentMood = 'neutral';
+    this.stopImmediate();
   }
 }
 

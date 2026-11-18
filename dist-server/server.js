@@ -431,165 +431,6 @@ var AUTHORITATIVE_STORIES = [
         ]
       }
     ]
-  },
-  {
-    id: "story-harmattan-verses",
-    slug: "verses-of-the-harmattan",
-    title: "Verses of the Harmattan",
-    subtitle: "Collected Poems of Dust, Brass Lanterns, and Atlantic Dusk",
-    author: "Kemi Adeyemi",
-    authorBio: "Poet and essayist writing between Lagos and Accra, exploring memory, seasonal winds, and oral lyricism.",
-    genre: "Poetry",
-    tags: ["Poetry", "Lyric Verse", "Oral Tradition", "Anthology"],
-    coverImage: "/assets/images/book_cover_whispering_savanna_1794465562207.jpg",
-    synopsis: "A serialized poetry anthology tracing the dry northern wind from Sahelian courtyards to coastal harbors\u2014meditations on longing, kinship, and light surviving dust.",
-    prologueLore: "Each installment gathers three rhythmic cantos meant to be read slowly aloud at dusk.",
-    status: "Ongoing",
-    publicationStatus: "published",
-    accessTier: "free",
-    priceNgn: 0,
-    rating: 0,
-    ratingsCount: 0,
-    totalChapters: 3,
-    totalReads: 0,
-    freeChaptersCount: 3,
-    featured: false,
-    spotlightOrder: 5,
-    updatedAt: "Nov 2026",
-    chapters: [
-      {
-        id: "ch-harmattan-1",
-        storyId: "story-harmattan-verses",
-        chapterNumber: 1,
-        title: "I. When the Red Dust Arrives",
-        slug: "when-the-red-dust-arrives",
-        releaseDate: "Oct 18, 2026",
-        wordCount: 420,
-        readTimeMinutes: 3,
-        isFree: true,
-        excerpt: "At dawn the mango leaves wore a thin coat of ochre, and every door remembered the desert.",
-        content: [
-          "At dawn the mango leaves wore a thin coat of ochre, and every door remembered the desert.",
-          "We lit the brass lantern before sunrise, watching silver motes drift across the veranda like unspoken letters.",
-          "Dry wind carries no rain, yet it softens every hard edge of the city into amber quiet\u2014a truce between yesterday and bloom."
-        ],
-        ambientSoundscape: "fireplace"
-      },
-      {
-        id: "ch-harmattan-2",
-        storyId: "story-harmattan-verses",
-        chapterNumber: 2,
-        title: "II. Elegy for the Ferryman",
-        slug: "elegy-for-the-ferryman",
-        releaseDate: "Oct 25, 2026",
-        wordCount: 390,
-        readTimeMinutes: 3,
-        isFree: true,
-        excerpt: "His wooden oar measured the tide better than any clock in the harbor tower.",
-        content: [
-          "His wooden oar measured the tide better than any clock in the harbor tower.",
-          "Salt and cedar smoke lingered on his coat; he spoke only in gentle proverbs about patience and returning water.",
-          "Now the lagoon keeps his cadence in the hush between evening bells."
-        ],
-        ambientSoundscape: "rain"
-      },
-      {
-        id: "ch-harmattan-3",
-        storyId: "story-harmattan-verses",
-        chapterNumber: 3,
-        title: "III. Starlight on Tin Roofs",
-        slug: "starlight-on-tin-roofs",
-        releaseDate: "Nov 02, 2026",
-        wordCount: 460,
-        readTimeMinutes: 3,
-        isFree: true,
-        excerpt: "Night cools the corrugated iron until the whole street sings with tiny metallic sighs.",
-        content: [
-          "Night cools the corrugated iron until the whole street sings with tiny metallic sighs.",
-          "Above the courtyard, constellations bloom clear and radiant through the thinning haze, reminding us how small our quarrels are beneath an eternal sky."
-        ],
-        ambientSoundscape: "mythic_drone"
-      }
-    ]
-  },
-  {
-    id: "story-lagoon-letters",
-    slug: "letters-across-the-lagoon",
-    title: "Letters Across the Lagoon",
-    subtitle: "An Epistolary Novel of Two Architects Rebuilding a Waterfront Library",
-    author: "Tunde Babalola",
-    authorBio: "Fiction writer and urban chronicler focusing on memory, architecture, and quiet human resilience.",
-    genre: "Literary Fiction",
-    tags: ["Fiction", "Epistolary", "Contemporary", "Drama"],
-    coverImage: "/assets/images/book_cover_sunken_epoch_1794465563519.jpg",
-    synopsis: "Separated by a decade of silence and a contested waterfront restoration, two former partners exchange handwritten letters tucked inside architectural blueprints\u2014uncovering what happened the night the old reading hall burned.",
-    prologueLore: "Every chapter pairs one unsent draft with the letter that finally crossed the water.",
-    status: "Completed",
-    publicationStatus: "published",
-    accessTier: "free",
-    priceNgn: 0,
-    rating: 0,
-    ratingsCount: 0,
-    totalChapters: 3,
-    totalReads: 0,
-    freeChaptersCount: 3,
-    featured: false,
-    spotlightOrder: 6,
-    updatedAt: "Nov 2026",
-    chapters: [
-      {
-        id: "ch-lagoon-1",
-        storyId: "story-lagoon-letters",
-        chapterNumber: 1,
-        title: "Blueprint in Blue Ink",
-        slug: "blueprint-in-blue-ink",
-        releaseDate: "Oct 10, 2026",
-        wordCount: 1850,
-        readTimeMinutes: 7,
-        isFree: true,
-        excerpt: "You left your compass on the drafting table, as if you expected the tide to wait for our second draft.",
-        content: [
-          "You left your compass on the drafting table, as if you expected the tide to wait for our second draft.",
-          "The ferry from Tarkwa Bay still shakes at the pier every morning at seven. I carried your rolled elevations up the timber stairs and spread them across the long mahogany desk.",
-          "Someone had circled the west reading terrace in faint red pencil\u2014the exact corner where the roof timbers gave way ten winters ago."
-        ],
-        ambientSoundscape: "rain"
-      },
-      {
-        id: "ch-lagoon-2",
-        storyId: "story-lagoon-letters",
-        chapterNumber: 2,
-        title: "The Salt-Stained Ledger",
-        slug: "the-salt-stained-ledger",
-        releaseDate: "Oct 17, 2026",
-        wordCount: 1920,
-        readTimeMinutes: 8,
-        isFree: true,
-        excerpt: "Truth rarely arrives in grand speeches; mostly it hides in margin notes and forgotten invoices.",
-        content: [
-          "Truth rarely arrives in grand speeches; mostly it hides in margin notes and forgotten invoices.",
-          "Inside the archive drawer beneath the floorboards, Ada found the contractor receipt dated two days before the fire\u2014signed by a councilman who swore he had never visited the pier."
-        ],
-        ambientSoundscape: "fireplace"
-      },
-      {
-        id: "ch-lagoon-3",
-        storyId: "story-lagoon-letters",
-        chapterNumber: 3,
-        title: "Opening the Timber Windows",
-        slug: "opening-the-timber-windows",
-        releaseDate: "Oct 24, 2026",
-        wordCount: 2100,
-        readTimeMinutes: 8,
-        isFree: true,
-        excerpt: "When the shutters finally swung wide, golden afternoon light flooded every empty shelf.",
-        content: [
-          "When the shutters finally swung wide, golden afternoon light flooded every empty shelf.",
-          "Breeze off the lagoon carried the scent of fresh cedar and rain-washed stone as the first crates of books arrived at the harbor steps."
-        ],
-        ambientSoundscape: "rain"
-      }
-    ]
   }
 ];
 function sanitizeStoryForPublic(story) {
@@ -605,22 +446,6 @@ function sanitizeStoryForPublic(story) {
 }
 
 // server/db.ts
-function normalizePreferredGenres(input) {
-  if (!Array.isArray(input)) return [];
-  const seen = /* @__PURE__ */ new Set();
-  const cleaned = [];
-  for (const item of input) {
-    if (typeof item !== "string") continue;
-    const trimmed = item.trim().slice(0, 48);
-    if (!trimmed) continue;
-    const key = trimmed.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    cleaned.push(trimmed);
-    if (cleaned.length >= 16) break;
-  }
-  return cleaned;
-}
 var PLAN_PRICES_NGN = {
   monthly: { amountNgn: 3500, label: "Patron Monthly Subscription" },
   annual: { amountNgn: 32e3, label: "Patron Annual Subscription (12 Months)" }
@@ -679,17 +504,16 @@ function buildDefaultReadingGoal() {
 var LorethosRepository = class {
   constructor() {
     this.pool = null;
-    this.initialized = false;
     this.initPromise = null;
-    const databaseUrl = process.env.DATABASE_URL?.trim();
-    if (databaseUrl) {
-      const isLocalDb = databaseUrl.includes("localhost") || databaseUrl.includes("127.0.0.1") || databaseUrl.includes("@postgres:");
-      const disableSsl = databaseUrl.includes("sslmode=disable");
+    const connStr = process.env.DATABASE_URL?.trim();
+    if (connStr) {
+      const isLocalDb = /localhost|127\.0\.0\.1|@db:|@postgres:/i.test(connStr);
+      const needsSsl = !isLocalDb && (connStr.includes("sslmode=require") || connStr.includes("supabase.") || connStr.includes("neon.") || Boolean(process.env.VERCEL));
       this.pool = new Pool({
-        connectionString: databaseUrl,
+        connectionString: connStr,
         max: 10,
         connectionTimeoutMillis: 1e4,
-        ...isLocalDb || disableSsl ? {} : { ssl: { rejectUnauthorized: false } }
+        ...needsSsl ? { ssl: { rejectUnauthorized: false } } : {}
       });
       this.pool.on("error", (err) => {
         console.error("PostgreSQL pool error:", err);
@@ -704,10 +528,7 @@ var LorethosRepository = class {
         const parsed = JSON.parse(fs.readFileSync(stateFile, "utf8"));
         if (Array.isArray(parsed.stories) && parsed.stories.length > 0) {
           return {
-            users: (parsed.users || []).map((u) => ({
-              ...u,
-              preferredGenres: normalizePreferredGenres(u.preferredGenres)
-            })),
+            users: parsed.users || [],
             stories: parsed.stories.map((s) => ({
               ...s,
               publicationStatus: s.publicationStatus || "published",
@@ -765,12 +586,10 @@ var LorethosRepository = class {
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('reader', 'owner')),
         reading_goal JSONB,
-        preferred_genres JSONB NOT NULL DEFAULT '[]'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       ALTER TABLE users ADD COLUMN IF NOT EXISTS reading_goal JSONB;
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_genres JSONB NOT NULL DEFAULT '[]'::jsonb;
       CREATE TABLE IF NOT EXISTS stories (
         id TEXT PRIMARY KEY,
         slug TEXT NOT NULL UNIQUE,
@@ -899,69 +718,72 @@ var LorethosRepository = class {
         submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
-    for (const story of AUTHORITATIVE_STORIES) {
-      await pool.query(
-        `INSERT INTO stories (
-          id, slug, title, subtitle, author, author_bio, genre, tags,
-          cover_image, synopsis, prologue_lore, status, publication_status,
-          access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-        ON CONFLICT (id) DO NOTHING`,
-        [
-          story.id,
-          story.slug,
-          story.title,
-          story.subtitle,
-          story.author,
-          story.authorBio,
-          story.genre,
-          JSON.stringify(story.tags),
-          story.coverImage,
-          story.synopsis,
-          story.prologueLore,
-          story.status,
-          story.publicationStatus || "published",
-          story.accessTier,
-          story.priceNgn,
-          story.freeChaptersCount,
-          story.featured,
-          story.spotlightOrder ?? null,
-          story.updatedAt
-        ]
-      );
-      for (const ch of story.chapters) {
+    const countRes = await pool.query("SELECT COUNT(*)::int AS cnt FROM stories");
+    if ((countRes.rows[0]?.cnt ?? 0) === 0) {
+      for (const story of AUTHORITATIVE_STORIES) {
         await pool.query(
-          `INSERT INTO chapters (
-            id, story_id, chapter_number, title, slug, release_date_label,
-            word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
+          `INSERT INTO stories (
+            id, slug, title, subtitle, author, author_bio, genre, tags,
+            cover_image, synopsis, prologue_lore, status, publication_status,
+            access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
           ON CONFLICT (id) DO NOTHING`,
           [
-            ch.id,
             story.id,
-            ch.chapterNumber,
-            ch.title,
-            ch.slug,
-            ch.releaseDate,
-            ch.wordCount,
-            ch.readTimeMinutes,
-            ch.isFree,
-            ch.excerpt,
-            JSON.stringify(ch.content),
-            ch.ambientSoundscape ?? null
+            story.slug,
+            story.title,
+            story.subtitle,
+            story.author,
+            story.authorBio,
+            story.genre,
+            JSON.stringify(story.tags),
+            story.coverImage,
+            story.synopsis,
+            story.prologueLore,
+            story.status,
+            story.publicationStatus || "published",
+            story.accessTier,
+            story.priceNgn,
+            story.freeChaptersCount,
+            story.featured,
+            story.spotlightOrder ?? null,
+            story.updatedAt
           ]
         );
+        for (const ch of story.chapters) {
+          await pool.query(
+            `INSERT INTO chapters (
+              id, story_id, chapter_number, title, slug, release_date_label,
+              word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
+            ON CONFLICT (id) DO NOTHING`,
+            [
+              ch.id,
+              story.id,
+              ch.chapterNumber,
+              ch.title,
+              ch.slug,
+              ch.releaseDate,
+              ch.wordCount,
+              ch.readTimeMinutes,
+              ch.isFree,
+              ch.excerpt,
+              JSON.stringify(ch.content),
+              ch.ambientSoundscape ?? null
+            ]
+          );
+        }
       }
     }
   }
   async initDatabase() {
-    const pool = this.pool;
-    if (this.initialized || !pool) return;
+    if (!this.pool) return;
     if (this.initPromise) return this.initPromise;
     this.initPromise = (async () => {
       try {
-        await this.ensurePostgresSchema(pool);
-        await pool.query("SELECT 1 FROM stories LIMIT 1");
+        if (!this.pool) return;
+        await this.ensurePostgresSchema(this.pool);
+        await this.pool.query("SELECT 1 FROM stories LIMIT 1");
         const [
           storiesRes,
           chaptersRes,
@@ -976,18 +798,18 @@ var LorethosRepository = class {
           evRes,
           inqRes
         ] = await Promise.all([
-          pool.query("SELECT * FROM stories ORDER BY spotlight_order ASC NULLS LAST, created_at DESC"),
-          pool.query("SELECT * FROM chapters ORDER BY chapter_number ASC"),
-          pool.query("SELECT * FROM users"),
-          pool.query("SELECT * FROM subscriptions"),
-          pool.query("SELECT * FROM entitlements"),
-          pool.query("SELECT * FROM bookmarks"),
-          pool.query("SELECT * FROM reading_progress"),
-          pool.query("SELECT * FROM highlights ORDER BY created_at DESC"),
-          pool.query("SELECT * FROM chapter_comments ORDER BY created_at DESC"),
-          pool.query("SELECT * FROM orders ORDER BY created_at DESC"),
-          pool.query("SELECT event_id FROM payment_events"),
-          pool.query("SELECT * FROM contacts ORDER BY submitted_at DESC")
+          this.pool.query("SELECT * FROM stories ORDER BY spotlight_order ASC NULLS LAST, created_at DESC"),
+          this.pool.query("SELECT * FROM chapters ORDER BY chapter_number ASC"),
+          this.pool.query("SELECT * FROM users"),
+          this.pool.query("SELECT * FROM subscriptions"),
+          this.pool.query("SELECT * FROM entitlements"),
+          this.pool.query("SELECT * FROM bookmarks"),
+          this.pool.query("SELECT * FROM reading_progress"),
+          this.pool.query("SELECT * FROM highlights ORDER BY created_at DESC"),
+          this.pool.query("SELECT * FROM chapter_comments ORDER BY created_at DESC"),
+          this.pool.query("SELECT * FROM orders ORDER BY created_at DESC"),
+          this.pool.query("SELECT event_id FROM payment_events"),
+          this.pool.query("SELECT * FROM contacts ORDER BY submitted_at DESC")
         ]);
         if (storiesRes.rows.length > 0) {
           const chaptersByStory = /* @__PURE__ */ new Map();
@@ -1083,7 +905,6 @@ var LorethosRepository = class {
           bookmarkedChapterIds: bookmarksByUser.get(u.id) || [],
           readingProgress: progressByUser.get(u.id) || {},
           readingGoal: u.reading_goal || buildDefaultReadingGoal(),
-          preferredGenres: normalizePreferredGenres(u.preferred_genres),
           createdAt: new Date(u.created_at).toISOString()
         }));
         this.state.highlights = {};
@@ -1149,14 +970,11 @@ var LorethosRepository = class {
             minute: "2-digit"
           })
         }));
-        this.initialized = true;
       } catch (err) {
         console.warn(
           "PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:",
           err instanceof Error ? err.message : err
         );
-      } finally {
-        this.initPromise = null;
       }
     })();
     return this.initPromise;
@@ -1183,8 +1001,7 @@ var LorethosRepository = class {
       unlockedStoryIds: user.unlockedStoryIds,
       bookmarkedChapterIds: user.bookmarkedChapterIds,
       readingProgress: user.readingProgress,
-      readingGoal: user.readingGoal,
-      preferredGenres: user.preferredGenres || []
+      readingGoal: user.readingGoal
     };
   }
   getUserById(userId) {
@@ -1237,7 +1054,6 @@ var LorethosRepository = class {
         bookmarkedChapterIds: bmRes.rows.map((r) => r.chapter_id),
         readingProgress,
         readingGoal: u.reading_goal || buildDefaultReadingGoal(),
-        preferredGenres: normalizePreferredGenres(u.preferred_genres),
         createdAt: new Date(u.created_at).toISOString()
       };
       const existingIdx = this.state.users.findIndex((x) => x.id === hydrated.id || x.email.toLowerCase() === hydrated.email);
@@ -1248,8 +1064,7 @@ var LorethosRepository = class {
       }
       this.persistSnapshot();
       return hydrated;
-    } catch (err) {
-      console.warn("Postgres single-user hydration failed:", err instanceof Error ? err.message : err);
+    } catch {
       return void 0;
     }
   }
@@ -1263,51 +1078,6 @@ var LorethosRepository = class {
     const cached = this.getUserByEmail(normalized);
     if (cached) return cached;
     return this.hydrateSingleUserFromPostgres("LOWER(email) = $1", normalized);
-  }
-  ensureSessionUserFromToken(claims) {
-    const existingById = this.getUserById(claims.uid);
-    if (existingById) return existingById;
-    const normalizedEmail = claims.email.trim().toLowerCase();
-    const existingByEmail = this.getUserByEmail(normalizedEmail);
-    if (existingByEmail) return existingByEmail;
-    const isOwner = normalizedEmail === getOwnerEmail();
-    const hydrated = {
-      id: claims.uid,
-      name: claims.name.trim() || normalizedEmail.split("@")[0] || "Reader",
-      email: normalizedEmail,
-      passwordHash: "",
-      role: isOwner ? "owner" : "reader",
-      subscription: { plan: "free", status: "none", amountNgn: 0 },
-      unlockedStoryIds: [],
-      bookmarkedChapterIds: [],
-      readingProgress: {},
-      readingGoal: buildDefaultReadingGoal(),
-      preferredGenres: [],
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    this.state.users.push(hydrated);
-    this.persistSnapshot();
-    this.mirrorToPostgres(async (pool) => {
-      await pool.query(
-        `INSERT INTO users (id, name, email, password_hash, role, reading_goal, preferred_genres, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
-        [
-          hydrated.id,
-          hydrated.name,
-          hydrated.email,
-          hydrated.passwordHash,
-          hydrated.role,
-          JSON.stringify(hydrated.readingGoal),
-          JSON.stringify(hydrated.preferredGenres)
-        ]
-      );
-      await pool.query(
-        `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
-         VALUES ($1, $2, 'free', 'none', 0) ON CONFLICT (user_id) DO NOTHING`,
-        [`sub_${hydrated.id}`, hydrated.id]
-      );
-    });
-    return hydrated;
   }
   async createUser(name, email, password) {
     const normalizedEmail = email.trim().toLowerCase();
@@ -1323,37 +1093,21 @@ var LorethosRepository = class {
       bookmarkedChapterIds: [],
       readingProgress: {},
       readingGoal: buildDefaultReadingGoal(),
-      preferredGenres: [],
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     if (this.pool) {
       try {
-        const insertRes = await this.pool.query(
-          `INSERT INTO users (id, name, email, password_hash, role, reading_goal, preferred_genres, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, NOW()) ON CONFLICT (email) DO NOTHING RETURNING id`,
-          [
-            record.id,
-            record.name,
-            record.email,
-            record.passwordHash,
-            record.role,
-            JSON.stringify(record.readingGoal),
-            JSON.stringify(record.preferredGenres)
-          ]
+        await this.pool.query(
+          `INSERT INTO users (id, name, email, password_hash, role, reading_goal, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
+          [record.id, record.name, record.email, record.passwordHash, record.role, JSON.stringify(record.readingGoal)]
         );
-        if (insertRes.rowCount === 0) {
-          await this.hydrateSingleUserFromPostgres("LOWER(email) = $1", normalizedEmail);
-          throw new Error("ACCOUNT_EXISTS");
-        }
         await this.pool.query(
           `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
            VALUES ($1, $2, 'free', 'none', 0) ON CONFLICT (user_id) DO NOTHING`,
           [`sub_${record.id}`, record.id]
         );
       } catch (err) {
-        if (err instanceof Error && err.message === "ACCOUNT_EXISTS") {
-          throw err;
-        }
         console.error("Failed to mirror user into PostgreSQL:", err);
       }
     }
@@ -1603,20 +1357,6 @@ var LorethosRepository = class {
       ]);
     });
     return user.readingGoal;
-  }
-  updatePreferredGenres(userId, genres) {
-    const user = this.getUserById(userId);
-    if (!user) return null;
-    const normalized = normalizePreferredGenres(genres);
-    user.preferredGenres = normalized;
-    this.persistSnapshot();
-    this.mirrorToPostgres(async (pool) => {
-      await pool.query("UPDATE users SET preferred_genres = $1::jsonb, updated_at = NOW() WHERE id = $2", [
-        JSON.stringify(normalized),
-        userId
-      ]);
-    });
-    return user.preferredGenres;
   }
   cancelSubscription(userId) {
     const user = this.getUserById(userId);
@@ -1922,6 +1662,7 @@ var repo = new LorethosRepository();
 // server.ts
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path2.dirname(__filename);
+var PROJECT_ROOT = path2.basename(__dirname) === "dist-server" ? path2.resolve(__dirname, "..") : __dirname;
 var PORT = Number(process.env.PORT) || 3e3;
 var MODEL_NAME = "gemini-4-hydrogen";
 var SESSION_COOKIE_NAME = "lorethos_session";
@@ -1931,10 +1672,6 @@ var EPHEMERAL_DEV_SECRET = crypto2.randomBytes(32).toString("hex");
 function getSessionSecret() {
   const configured = process.env.SESSION_SECRET?.trim();
   if (configured) return configured;
-  if (process.env.VERCEL) {
-    const seed = process.env.DATABASE_URL || process.env.PAYSTACK_SECRET_KEY || process.env.GEMINI_API_KEY || process.env.VERCEL_PROJECT_ID || process.env.VERCEL_URL || "lorethos-vercel-fallback";
-    return crypto2.createHmac("sha256", "lorethos-session-key").update(seed).digest("hex");
-  }
   if (process.env.NODE_ENV === "production") {
     console.warn("WARNING: SESSION_SECRET is not set in production; using ephemeral secret.");
   }
@@ -1968,14 +1705,8 @@ function parseCookies(cookieHeader) {
   }
   return result;
 }
-function signSessionToken(user) {
-  const payload = JSON.stringify({
-    uid: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    exp: Date.now() + SESSION_TTL_MS
-  });
+function signSessionToken(userId) {
+  const payload = JSON.stringify({ uid: userId, exp: Date.now() + SESSION_TTL_MS });
   const encoded = Buffer.from(payload, "utf8").toString("base64url");
   const sig = crypto2.createHmac("sha256", getSessionSecret()).update(encoded).digest("base64url");
   return `${encoded}.${sig}`;
@@ -1996,13 +1727,7 @@ function verifySessionToken(token) {
     if (!parsed.uid || !parsed.exp || parsed.exp < Date.now()) {
       return null;
     }
-    return {
-      uid: parsed.uid,
-      name: typeof parsed.name === "string" ? parsed.name : void 0,
-      email: typeof parsed.email === "string" ? parsed.email : void 0,
-      role: parsed.role === "owner" ? "owner" : "reader",
-      exp: parsed.exp
-    };
+    return parsed.uid;
   } catch {
     return null;
   }
@@ -2014,8 +1739,8 @@ function isHttpsRequest(req) {
   const origin = String(req.headers.origin || req.headers.referer || "");
   return origin.startsWith("https://");
 }
-function setSessionCookie(req, res, user) {
-  const token = signSessionToken(user);
+function setSessionCookie(req, res, userId) {
+  const token = signSessionToken(userId);
   const isHttps = isHttpsRequest(req);
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
@@ -2044,29 +1769,20 @@ function clearSessionCookie(req, res) {
   }
   res.setHeader("Set-Cookie", parts.join("; "));
 }
-function extractSessionTokenClaims(req) {
+function extractSessionUserId(req) {
   const authHeader = req.headers.authorization;
   if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
     const bearerToken = authHeader.slice(7).trim();
-    const claims = verifySessionToken(bearerToken);
-    if (claims) return claims;
+    const uid = verifySessionToken(bearerToken);
+    if (uid) return uid;
   }
   const cookies = parseCookies(req.headers.cookie);
   return verifySessionToken(cookies[SESSION_COOKIE_NAME]);
 }
 async function getAuthenticatedUserAsync(req) {
-  const claims = extractSessionTokenClaims(req);
-  if (!claims?.uid) return void 0;
-  const existing = await repo.findUserById(claims.uid);
-  if (existing) return existing;
-  if (claims.email && claims.name && (!repo.isPostgresEnabled() || await repo.checkDatabaseHealth() === "local-store")) {
-    return repo.ensureSessionUserFromToken({
-      uid: claims.uid,
-      name: claims.name,
-      email: claims.email
-    });
-  }
-  return void 0;
+  const userId = extractSessionUserId(req);
+  if (!userId) return void 0;
+  return repo.findUserById(userId);
 }
 async function requireAuth(req, res, next) {
   const user = await getAuthenticatedUserAsync(req);
@@ -2236,7 +1952,7 @@ async function createApp(options) {
   });
   app.post("/api/auth/register", authLimiter, async (req, res) => {
     try {
-      const { name, email, password } = req.body || {};
+      const { name, email, password } = req.body;
       const trimmedName = String(name || "").trim();
       const trimmedEmail = String(email || "").trim().toLowerCase();
       const rawPassword = String(password || "");
@@ -2257,24 +1973,20 @@ async function createApp(options) {
         return;
       }
       const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword);
-      const token = setSessionCookie(req, res, user);
+      const token = setSessionCookie(req, res, user.id);
       res.status(201).json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
-      if (err instanceof Error && err.message === "ACCOUNT_EXISTS") {
-        res.status(409).json({ error: "An account with this email already exists. Please sign in." });
-        return;
-      }
       console.error("Register error:", err);
       res.status(500).json({ error: "Failed to create account. Please try again." });
     }
   });
   app.post("/api/auth/login", authLimiter, async (req, res) => {
     try {
-      const { email, password } = req.body || {};
+      const { email, password } = req.body;
       const trimmedEmail = String(email || "").trim().toLowerCase();
       const rawPassword = String(password || "");
       if (!EMAIL_REGEX.test(trimmedEmail) || !rawPassword) {
-        res.status(400).json({ error: "Valid email and password are required." });
+        res.status(400).json({ error: "Email and password are required." });
         return;
       }
       const user = await repo.findUserByEmail(trimmedEmail);
@@ -2282,57 +1994,11 @@ async function createApp(options) {
         res.status(401).json({ error: "Invalid email or password." });
         return;
       }
-      const token = setSessionCookie(req, res, user);
+      const token = setSessionCookie(req, res, user.id);
       res.json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
       console.error("Login error:", err);
       res.status(500).json({ error: "Failed to sign in. Please try again." });
-    }
-  });
-  app.post("/api/auth/supabase-session", authLimiter, async (req, res) => {
-    try {
-      const { accessToken } = req.body || {};
-      const cleanToken = String(accessToken || "").trim();
-      if (!cleanToken) {
-        res.status(400).json({ error: "Supabase access token is required." });
-        return;
-      }
-      const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
-      const supabaseKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "").trim();
-      if (!supabaseUrl || !supabaseKey) {
-        res.status(503).json({ error: "Supabase verification is not configured on the server." });
-        return;
-      }
-      const verifyRes = await withTimeout(
-        fetch(`${supabaseUrl}/auth/v1/user`, {
-          headers: {
-            Authorization: `Bearer ${cleanToken}`,
-            apikey: supabaseKey
-          }
-        }),
-        1e4
-      );
-      if (!verifyRes.ok) {
-        res.status(401).json({ error: "Supabase session could not be verified. Please sign in again." });
-        return;
-      }
-      const sbUser = await verifyRes.json();
-      const email = String(sbUser?.email || "").trim().toLowerCase();
-      if (!sbUser?.id || !EMAIL_REGEX.test(email)) {
-        res.status(401).json({ error: "Supabase account is missing a verified email address." });
-        return;
-      }
-      const existing = await repo.findUserByEmail(email);
-      const resolvedUser = existing || repo.ensureSessionUserFromToken({
-        uid: sbUser.id,
-        name: String(sbUser.user_metadata?.name || email.split("@")[0] || "Reader"),
-        email
-      });
-      const token = setSessionCookie(req, res, resolvedUser);
-      res.json({ user: repo.toPublicProfile(resolvedUser), token });
-    } catch (err) {
-      console.error("Supabase session exchange error:", err);
-      res.status(500).json({ error: "Failed to synchronize session." });
     }
   });
   app.post("/api/auth/logout", (req, res) => {
@@ -2349,7 +2015,7 @@ async function createApp(options) {
     const isOwner = user?.role === "owner";
     let stories = repo.getStories({ includeUnpublished: isOwner }).map(sanitizeStoryForPublic);
     stories = stories.filter((story) => {
-      const matchesSearch = !q || story.title.toLowerCase().includes(q) || story.subtitle.toLowerCase().includes(q) || story.author.toLowerCase().includes(q) || story.genre.toLowerCase().includes(q) || story.synopsis.toLowerCase().includes(q) || story.tags.some((t) => t.toLowerCase().includes(q));
+      const matchesSearch = !q || story.title.toLowerCase().includes(q) || story.subtitle.toLowerCase().includes(q) || story.author.toLowerCase().includes(q) || story.synopsis.toLowerCase().includes(q) || story.tags.some((t) => t.toLowerCase().includes(q));
       const matchesGenre = genre === "All" || story.genre === genre;
       const matchesStatus = status === "All" || story.status === status;
       const matchesTier = tier === "All" || tier === "Free" && story.accessTier === "free" || tier === "Subscription" && story.accessTier === "subscription" || tier === "Purchase" && story.accessTier === "purchase";
@@ -2442,19 +2108,6 @@ async function createApp(options) {
     }
     const updated = repo.updateReadingGoal(req.currentUser.id, readingGoal);
     res.json({ readingGoal: updated });
-  });
-  app.put("/api/account/preferences", requireAuth, (req, res) => {
-    const { preferredGenres } = req.body;
-    if (!Array.isArray(preferredGenres)) {
-      res.status(400).json({ error: "preferredGenres must be an array of genre strings." });
-      return;
-    }
-    const updated = repo.updatePreferredGenres(req.currentUser.id, preferredGenres);
-    const refreshed = repo.getUserById(req.currentUser.id);
-    res.json({
-      preferredGenres: updated || [],
-      user: refreshed ? repo.toPublicProfile(refreshed) : void 0
-    });
   });
   app.post("/api/account/subscription/cancel", requireAuth, (req, res) => {
     const updated = repo.cancelSubscription(req.currentUser.id);
@@ -3189,7 +2842,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
         ".vercel",
         ".next"
       ]);
-      const excludedFiles = /* @__PURE__ */ new Set([".env", ".env.local", ".env.production", ".DS_Store"]);
+      const isExcludedFile = (name) => name === ".DS_Store" || name.endsWith(".zip") || name.startsWith(".env") && name !== ".env.example";
       const addDirToZip = async (dirPath, relBase) => {
         const entries = await fs2.readdir(dirPath, { withFileTypes: true });
         for (const entry of entries) {
@@ -3199,7 +2852,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
             const nextRel = relBase ? `${relBase}/${entry.name}` : entry.name;
             await addDirToZip(nextAbs, nextRel);
           } else if (entry.isFile()) {
-            if (excludedFiles.has(entry.name) || entry.name.endsWith(".zip")) continue;
+            if (isExcludedFile(entry.name)) continue;
             const absFile = path2.join(dirPath, entry.name);
             const zipPath = relBase ? `${relBase}/${entry.name}` : entry.name;
             const content = await fs2.readFile(absFile);
@@ -3207,7 +2860,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
           }
         }
       };
-      await addDirToZip(__dirname, "");
+      await addDirToZip(PROJECT_ROOT, "");
       const buffer = await zip.generateAsync({
         type: "nodebuffer",
         compression: "DEFLATE",
@@ -3231,7 +2884,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
           transform(code, id) {
             const cleanId = id.split("?", 1)[0];
             if (cleanId.endsWith("/vite/dist/client/client.mjs") || cleanId.endsWith("/@vite/client")) {
-              return code.replace('console.debug("[vite] connecting...");', "/* HMR log disabled */").replace(
+              return code.replace(
                 "transport.connect(createHMRHandler(handleMessage));",
                 "/* HMR WebSocket disabled */"
               );
@@ -3244,13 +2897,13 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
         middlewareMode: true,
         port: PORT,
         allowedHosts: true,
-        ...hmrDisabled ? { hmr: false, ws: false, watch: null } : { hmr: options?.httpServer ? { server: options.httpServer } : false }
+        ...hmrDisabled ? { hmr: false, ws: false, watch: null } : { ws: options?.httpServer ? { server: options.httpServer } : false }
       },
       appType: "spa"
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path2.join(__dirname, "dist");
+    const distPath = path2.join(PROJECT_ROOT, "dist");
     try {
       await fs2.access(distPath);
       app.use(express.static(distPath));
@@ -3265,7 +2918,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
   }
   return app;
 }
-var isDirectExecution = !process.env.LORETHOS_NO_LISTEN && !process.env.VERCEL;
+var isDirectExecution = !process.env.LORETHOS_NO_LISTEN && !process.env.VERCEL && !process.env.VERCEL_ENV;
 if (isDirectExecution) {
   const httpServer = http.createServer();
   createApp({ withVite: process.env.NODE_ENV !== "production", httpServer }).then((app) => {
@@ -3279,7 +2932,5 @@ if (isDirectExecution) {
   });
 }
 export {
-  createApp,
-  signSessionToken,
-  verifySessionToken
+  createApp
 };

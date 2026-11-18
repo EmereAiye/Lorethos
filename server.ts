@@ -7,12 +7,14 @@ import { fileURLToPath } from 'node:url';
 import express, { Request, Response, NextFunction } from 'express';
 import JSZip from 'jszip';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
-import { repo, verifyPassword, PLAN_PRICES_NGN, StoredUserRecord } from './server/db';
-import { sanitizeStoryForPublic } from './server/catalog';
-import { AccessTier, CommentTag, HighlightColor, PublicationStatus } from './src/types';
+import { repo, verifyPassword, PLAN_PRICES_NGN } from './server/db.js';
+import type { StoredUserRecord } from './server/db.js';
+import { sanitizeStoryForPublic } from './server/catalog.js';
+import type { AccessTier, CommentTag, HighlightColor, PublicationStatus } from './src/types/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.basename(__dirname) === 'dist-server' ? path.resolve(__dirname, '..') : __dirname;
 
 const PORT = Number(process.env.PORT) || 3000;
 const MODEL_NAME = 'gemini-4-hydrogen';
@@ -24,16 +26,6 @@ const EPHEMERAL_DEV_SECRET = crypto.randomBytes(32).toString('hex');
 function getSessionSecret(): string {
   const configured = process.env.SESSION_SECRET?.trim();
   if (configured) return configured;
-  if (process.env.VERCEL) {
-    const seed =
-      process.env.DATABASE_URL ||
-      process.env.PAYSTACK_SECRET_KEY ||
-      process.env.GEMINI_API_KEY ||
-      process.env.VERCEL_PROJECT_ID ||
-      process.env.VERCEL_URL ||
-      'lorethos-vercel-fallback';
-    return crypto.createHmac('sha256', 'lorethos-session-key').update(seed).digest('hex');
-  }
   if (process.env.NODE_ENV === 'production') {
     console.warn('WARNING: SESSION_SECRET is not set in production; using ephemeral secret.');
   }
@@ -71,24 +63,8 @@ function parseCookies(cookieHeader: string | undefined): Record<string, string> 
   return result;
 }
 
-export interface SessionTokenClaims {
-  uid: string;
-  name?: string;
-  email?: string;
-  role?: 'reader' | 'owner';
-  exp: number;
-}
-
-export function signSessionToken(
-  user: Pick<StoredUserRecord, 'id' | 'name' | 'email' | 'role'>
-): string {
-  const payload = JSON.stringify({
-    uid: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    exp: Date.now() + SESSION_TTL_MS
-  });
+function signSessionToken(userId: string): string {
+  const payload = JSON.stringify({ uid: userId, exp: Date.now() + SESSION_TTL_MS });
   const encoded = Buffer.from(payload, 'utf8').toString('base64url');
   const sig = crypto
     .createHmac('sha256', getSessionSecret())
@@ -97,7 +73,7 @@ export function signSessionToken(
   return `${encoded}.${sig}`;
 }
 
-export function verifySessionToken(token: string | undefined): SessionTokenClaims | null {
+function verifySessionToken(token: string | undefined): string | null {
   if (!token) return null;
   const parts = token.split('.');
   if (parts.length !== 2) return null;
@@ -114,17 +90,14 @@ export function verifySessionToken(token: string | undefined): SessionTokenClaim
   }
 
   try {
-    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as Partial<SessionTokenClaims>;
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as {
+      uid?: string;
+      exp?: number;
+    };
     if (!parsed.uid || !parsed.exp || parsed.exp < Date.now()) {
       return null;
     }
-    return {
-      uid: parsed.uid,
-      name: typeof parsed.name === 'string' ? parsed.name : undefined,
-      email: typeof parsed.email === 'string' ? parsed.email : undefined,
-      role: parsed.role === 'owner' ? 'owner' : 'reader',
-      exp: parsed.exp
-    };
+    return parsed.uid;
   } catch {
     return null;
   }
@@ -138,12 +111,8 @@ function isHttpsRequest(req: Request): boolean {
   return origin.startsWith('https://');
 }
 
-function setSessionCookie(
-  req: Request,
-  res: Response,
-  user: Pick<StoredUserRecord, 'id' | 'name' | 'email' | 'role'>
-): string {
-  const token = signSessionToken(user);
+function setSessionCookie(req: Request, res: Response, userId: string): string {
+  const token = signSessionToken(userId);
   const isHttps = isHttpsRequest(req);
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
@@ -174,30 +143,21 @@ function clearSessionCookie(req: Request, res: Response): void {
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
-function extractSessionTokenClaims(req: Request): SessionTokenClaims | null {
+function extractSessionUserId(req: Request): string | null {
   const authHeader = req.headers.authorization;
   if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
     const bearerToken = authHeader.slice(7).trim();
-    const claims = verifySessionToken(bearerToken);
-    if (claims) return claims;
+    const uid = verifySessionToken(bearerToken);
+    if (uid) return uid;
   }
   const cookies = parseCookies(req.headers.cookie);
   return verifySessionToken(cookies[SESSION_COOKIE_NAME]);
 }
 
 async function getAuthenticatedUserAsync(req: Request): Promise<StoredUserRecord | undefined> {
-  const claims = extractSessionTokenClaims(req);
-  if (!claims?.uid) return undefined;
-  const existing = await repo.findUserById(claims.uid);
-  if (existing) return existing;
-  if (claims.email && claims.name && (!repo.isPostgresEnabled() || (await repo.checkDatabaseHealth()) === 'local-store')) {
-    return repo.ensureSessionUserFromToken({
-      uid: claims.uid,
-      name: claims.name,
-      email: claims.email
-    });
-  }
-  return undefined;
+  const userId = extractSessionUserId(req);
+  if (!userId) return undefined;
+  return repo.findUserById(userId);
 }
 
 interface AuthedRequest extends Request {
@@ -417,7 +377,7 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
 
   app.post('/api/auth/register', authLimiter, async (req, res) => {
     try {
-      const { name, email, password } = (req.body || {}) as {
+      const { name, email, password } = req.body as {
         name?: string;
         email?: string;
         password?: string;
@@ -446,13 +406,9 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
       }
 
       const user = await repo.createUser(trimmedName, trimmedEmail, rawPassword);
-      const token = setSessionCookie(req, res, user);
+      const token = setSessionCookie(req, res, user.id);
       res.status(201).json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
-      if (err instanceof Error && err.message === 'ACCOUNT_EXISTS') {
-        res.status(409).json({ error: 'An account with this email already exists. Please sign in.' });
-        return;
-      }
       console.error('Register error:', err);
       res.status(500).json({ error: 'Failed to create account. Please try again.' });
     }
@@ -460,12 +416,12 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
 
   app.post('/api/auth/login', authLimiter, async (req, res) => {
     try {
-      const { email, password } = (req.body || {}) as { email?: string; password?: string };
+      const { email, password } = req.body as { email?: string; password?: string };
       const trimmedEmail = String(email || '').trim().toLowerCase();
       const rawPassword = String(password || '');
 
       if (!EMAIL_REGEX.test(trimmedEmail) || !rawPassword) {
-        res.status(400).json({ error: 'Valid email and password are required.' });
+        res.status(400).json({ error: 'Email and password are required.' });
         return;
       }
 
@@ -475,70 +431,11 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
         return;
       }
 
-      const token = setSessionCookie(req, res, user);
+      const token = setSessionCookie(req, res, user.id);
       res.json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
       console.error('Login error:', err);
       res.status(500).json({ error: 'Failed to sign in. Please try again.' });
-    }
-  });
-
-  app.post('/api/auth/supabase-session', authLimiter, async (req, res) => {
-    try {
-      const { accessToken } = (req.body || {}) as { accessToken?: string };
-      const cleanToken = String(accessToken || '').trim();
-      if (!cleanToken) {
-        res.status(400).json({ error: 'Supabase access token is required.' });
-        return;
-      }
-
-      const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
-      const supabaseKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '').trim();
-      if (!supabaseUrl || !supabaseKey) {
-        res.status(503).json({ error: 'Supabase verification is not configured on the server.' });
-        return;
-      }
-
-      const verifyRes = await withTimeout(
-        fetch(`${supabaseUrl}/auth/v1/user`, {
-          headers: {
-            Authorization: `Bearer ${cleanToken}`,
-            apikey: supabaseKey,
-          },
-        }),
-        10000
-      );
-
-      if (!verifyRes.ok) {
-        res.status(401).json({ error: 'Supabase session could not be verified. Please sign in again.' });
-        return;
-      }
-
-      const sbUser = (await verifyRes.json()) as {
-        id?: string;
-        email?: string;
-        user_metadata?: { name?: string };
-      };
-      const email = String(sbUser?.email || '').trim().toLowerCase();
-      if (!sbUser?.id || !EMAIL_REGEX.test(email)) {
-        res.status(401).json({ error: 'Supabase account is missing a verified email address.' });
-        return;
-      }
-
-      const existing = await repo.findUserByEmail(email);
-      const resolvedUser =
-        existing ||
-        repo.ensureSessionUserFromToken({
-          uid: sbUser.id,
-          name: String(sbUser.user_metadata?.name || email.split('@')[0] || 'Reader'),
-          email,
-        });
-
-      const token = setSessionCookie(req, res, resolvedUser);
-      res.json({ user: repo.toPublicProfile(resolvedUser), token });
-    } catch (err) {
-      console.error('Supabase session exchange error:', err);
-      res.status(500).json({ error: 'Failed to synchronize session.' });
     }
   });
 
@@ -567,7 +464,6 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
         story.title.toLowerCase().includes(q) ||
         story.subtitle.toLowerCase().includes(q) ||
         story.author.toLowerCase().includes(q) ||
-        story.genre.toLowerCase().includes(q) ||
         story.synopsis.toLowerCase().includes(q) ||
         story.tags.some((t) => t.toLowerCase().includes(q));
 
@@ -686,20 +582,6 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
     }
     const updated = repo.updateReadingGoal(req.currentUser!.id, readingGoal);
     res.json({ readingGoal: updated });
-  });
-
-  app.put('/api/account/preferences', requireAuth, (req: AuthedRequest, res) => {
-    const { preferredGenres } = req.body as { preferredGenres?: unknown };
-    if (!Array.isArray(preferredGenres)) {
-      res.status(400).json({ error: 'preferredGenres must be an array of genre strings.' });
-      return;
-    }
-    const updated = repo.updatePreferredGenres(req.currentUser!.id, preferredGenres as string[]);
-    const refreshed = repo.getUserById(req.currentUser!.id);
-    res.json({
-      preferredGenres: updated || [],
-      user: refreshed ? repo.toPublicProfile(refreshed) : undefined,
-    });
   });
 
   app.post('/api/account/subscription/cancel', requireAuth, (req: AuthedRequest, res) => {
@@ -1651,7 +1533,10 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
         '.vercel',
         '.next',
       ]);
-      const excludedFiles = new Set(['.env', '.env.local', '.env.production', '.DS_Store']);
+      const isExcludedFile = (name: string) =>
+        name === '.DS_Store' ||
+        name.endsWith('.zip') ||
+        (name.startsWith('.env') && name !== '.env.example');
 
       const addDirToZip = async (dirPath: string, relBase: string) => {
         const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -1662,7 +1547,7 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
             const nextRel = relBase ? `${relBase}/${entry.name}` : entry.name;
             await addDirToZip(nextAbs, nextRel);
           } else if (entry.isFile()) {
-            if (excludedFiles.has(entry.name) || entry.name.endsWith('.zip')) continue;
+            if (isExcludedFile(entry.name)) continue;
             const absFile = path.join(dirPath, entry.name);
             const zipPath = relBase ? `${relBase}/${entry.name}` : entry.name;
             const content = await fs.readFile(absFile);
@@ -1671,7 +1556,7 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
         }
       };
 
-      await addDirToZip(__dirname, '');
+      await addDirToZip(PROJECT_ROOT, '');
       const buffer = await zip.generateAsync({
         type: 'nodebuffer',
         compression: 'DEFLATE',
@@ -1703,12 +1588,10 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
                   cleanId.endsWith('/vite/dist/client/client.mjs') ||
                   cleanId.endsWith('/@vite/client')
                 ) {
-                  return code
-                    .replace('console.debug("[vite] connecting...");', '/* HMR log disabled */')
-                    .replace(
-                      'transport.connect(createHMRHandler(handleMessage));',
-                      '/* HMR WebSocket disabled */'
-                    );
+                  return code.replace(
+                    'transport.connect(createHMRHandler(handleMessage));',
+                    '/* HMR WebSocket disabled */'
+                  );
                 }
                 return null;
               },
@@ -1721,13 +1604,13 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
         allowedHosts: true,
         ...(hmrDisabled
           ? { hmr: false, ws: false, watch: null }
-          : { hmr: options?.httpServer ? { server: options.httpServer } : false }),
+          : { ws: options?.httpServer ? { server: options.httpServer } : false }),
       },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(__dirname, 'dist');
+    const distPath = path.join(PROJECT_ROOT, 'dist');
     try {
       await fs.access(distPath);
       app.use(express.static(distPath));
@@ -1735,7 +1618,7 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
         res.sendFile(path.join(distPath, 'index.html'));
       });
     } catch {
-      // Running API-only behind Caddy static web container
+      // Running API-only behind Caddy static web container or Vercel Serverless
       app.get('/', (_req, res) => {
         res.json({ ok: true, service: 'lorethos-api' });
       });
@@ -1745,7 +1628,10 @@ export async function createApp(options?: { withVite?: boolean; httpServer?: htt
   return app;
 }
 
-const isDirectExecution = !process.env.LORETHOS_NO_LISTEN && !process.env.VERCEL;
+const isDirectExecution =
+  !process.env.LORETHOS_NO_LISTEN &&
+  !process.env.VERCEL &&
+  !process.env.VERCEL_ENV;
 if (isDirectExecution) {
   const httpServer = http.createServer();
   createApp({ withVite: process.env.NODE_ENV !== 'production', httpServer })
