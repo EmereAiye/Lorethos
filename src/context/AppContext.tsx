@@ -28,6 +28,29 @@ export interface RouteParams {
   tier?: string;
   sort?: string;
   reference?: string;
+  interests?: string;
+  redirect?: string;
+}
+
+export function sanitizeInternalRedirect(target?: string | null): string | null {
+  if (!target || typeof target !== 'string') return null;
+  const trimmed = target.trim();
+  if (!trimmed) return null;
+  if (/[\u0000-\u001F\u007F\\]/.test(trimmed)) return null;
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.startsWith('/\\')) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed, 'https://lorethos.local');
+    if (parsed.origin !== 'https://lorethos.local') return null;
+    if (!parsed.pathname.startsWith('/') || parsed.pathname.startsWith('//')) return null;
+    const decodedPath = decodeURIComponent(parsed.pathname);
+    if (decodedPath.startsWith('//') || decodedPath.includes('\\')) return null;
+    if (parsed.pathname === '/account') return null;
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return null;
+  }
 }
 
 export interface PaystackCheckoutRequest {
@@ -90,10 +113,26 @@ interface AppContextType {
   navigate: (route: string, params?: RouteParams, options?: { replace?: boolean }) => void;
   updateReaderSettings: (partial: Partial<ReaderSettings>) => void;
 
-  // Authentication
-  login: (email: string, password: string) => Promise<{ error?: string }>;
-  register: (name: string, email: string, password: string) => Promise<{ error?: string }>;
+  // Authentication & post-auth preferences/redirects
+  login: (email: string, password: string) => Promise<{
+    error?: string;
+    message?: string;
+    requiresEmailVerification?: boolean;
+  }>;
+  register: (name: string, email: string, password: string) => Promise<{
+    error?: string;
+    message?: string;
+    requiresEmailVerification?: boolean;
+  }>;
   logout: () => Promise<void>;
+  preferredGenres: string[];
+  setPreferredGenres: (genres: string[]) => void;
+  readingPromptOpen: boolean;
+  openReadingPrompt: () => void;
+  closeReadingPrompt: () => void;
+  pendingAuthRedirect: string | null;
+  clearPendingAuthRedirect: () => void;
+  completePostAuthRedirect: (fallbackRoute?: string) => void;
 
   // Paystack hosted checkout modal
   paystackModal: {
@@ -366,6 +405,7 @@ export function buildHref(route: string, params?: RouteParams): string {
       if (params?.status && params.status !== 'All') qs.set('status', params.status);
       if (params?.tier && params.tier !== 'All') qs.set('tier', params.tier);
       if (params?.sort && params.sort !== 'popular') qs.set('sort', params.sort);
+      if (params?.interests) qs.set('interests', params.interests);
       const queryStr = qs.toString();
       return queryStr ? `/stories?${queryStr}` : '/stories';
     }
@@ -377,14 +417,27 @@ export function buildHref(route: string, params?: RouteParams): string {
         : '/stories';
     case 'pricing':
       return '/pricing';
-    case 'account':
-      return '/account';
+    case 'account': {
+      const safeRedirect = sanitizeInternalRedirect(params?.redirect);
+      return safeRedirect ? `/account?redirect=${encodeURIComponent(safeRedirect)}` : '/account';
+    }
     case 'contact':
       return '/contact';
     case 'admin':
       return '/admin';
     default:
       return '/';
+  }
+}
+
+function loadSavedPreferredGenres(userId: string): string[] {
+  try {
+    const raw = window.localStorage.getItem(`lorethos_preferred_genres_${userId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((g): g is string => typeof g === 'string') : [];
+  } catch {
+    return [];
   }
 }
 
@@ -404,7 +457,8 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
         genre: qs.get('genre') || undefined,
         status: qs.get('status') || undefined,
         tier: qs.get('tier') || undefined,
-        sort: qs.get('sort') || undefined
+        sort: qs.get('sort') || undefined,
+        interests: qs.get('interests') || undefined
       }
     };
   }
@@ -439,7 +493,13 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
     };
   }
 
-  if (cleanPath === '/account') return { route: 'account', params: {} };
+  if (cleanPath === '/account') {
+    const safeRedirect = sanitizeInternalRedirect(qs.get('redirect'));
+    return {
+      route: 'account',
+      params: safeRedirect ? { redirect: safeRedirect } : {}
+    };
+  }
   if (cleanPath === '/contact') return { route: 'contact', params: {} };
   if (cleanPath === '/admin') return { route: 'admin', params: {} };
 
@@ -497,6 +557,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [currentRoute, setCurrentRoute] = useState<string>(initialParsed.route);
   const [routeParams, setRouteParams] = useState<RouteParams>(initialParsed.params);
+  const [preferredGenres, setPreferredGenresState] = useState<string[]>([]);
+  const [readingPromptOpen, setReadingPromptOpen] = useState(false);
+  const [pendingAuthRedirect, setPendingAuthRedirect] = useState<string | null>(() =>
+    sanitizeInternalRedirect(initialParsed.params.redirect)
+  );
 
   const [paystackModal, setPaystackModal] = useState<{
     isOpen: boolean;
@@ -546,6 +611,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const parsed = parseLocationToRoute(window.location.pathname, window.location.search);
       setCurrentRoute(parsed.route);
       setRouteParams(parsed.params);
+      if (parsed.route === 'account' && parsed.params.redirect) {
+        setPendingAuthRedirect(sanitizeInternalRedirect(parsed.params.redirect));
+      }
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
@@ -605,13 +673,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (sessionRes.ok && mounted) {
           const sessionJson = await sessionRes.json();
           if (sessionJson.authenticated && sessionJson.user) {
+            const savedGenres =
+              Array.isArray(sessionJson.user.preferredGenres) && sessionJson.user.preferredGenres.length > 0
+                ? sessionJson.user.preferredGenres
+                : loadSavedPreferredGenres(sessionJson.user.id);
             const serverUser: UserProfile = {
               ...sessionJson.user,
+              preferredGenres: savedGenres,
               readingGoal: reconcileReadingGoalRollover(
                 sessionJson.user.readingGoal || createGuestUser().readingGoal
               )
             };
             setUser(serverUser);
+            setPreferredGenresState(savedGenres);
             setIsAuthenticated(true);
             await loadAccountExtras();
 
@@ -699,6 +773,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       setCurrentRoute(route);
       setRouteParams(params || {});
+      if (route === 'account' && params?.redirect) {
+        setPendingAuthRedirect(sanitizeInternalRedirect(params.redirect));
+      }
       if (!options?.replace) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
@@ -706,61 +783,146 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     []
   );
 
+  const setPreferredGenres = useCallback((genres: string[]) => {
+    const cleaned = Array.from(new Set(genres.map((g) => g.trim()).filter(Boolean)));
+    setPreferredGenresState(cleaned);
+    setUser((prev) => {
+      try {
+        window.localStorage.setItem(
+          `lorethos_preferred_genres_${prev.id}`,
+          JSON.stringify(cleaned)
+        );
+      } catch {
+        // Ignore storage errors
+      }
+      return { ...prev, preferredGenres: cleaned };
+    });
+  }, []);
+
+  const openReadingPrompt = useCallback(() => setReadingPromptOpen(true), []);
+  const closeReadingPrompt = useCallback(() => setReadingPromptOpen(false), []);
+  const clearPendingAuthRedirect = useCallback(() => setPendingAuthRedirect(null), []);
+
+  const completePostAuthRedirect = useCallback(
+    (fallbackRoute?: string) => {
+      const target = sanitizeInternalRedirect(routeParams.redirect || pendingAuthRedirect);
+      setPendingAuthRedirect(null);
+      if (target) {
+        const url = new URL(target, 'https://lorethos.local');
+        const parsed = parseLocationToRoute(url.pathname, url.search);
+        navigate(parsed.route, parsed.params, { replace: true });
+        return;
+      }
+      if (fallbackRoute) {
+        navigate(fallbackRoute);
+      }
+    },
+    [routeParams.redirect, pendingAuthRedirect, navigate]
+  );
+
   const updateReaderSettings = (partial: Partial<ReaderSettings>) => {
     setReaderSettings(prev => ({ ...prev, ...partial }));
   };
 
-  const login = async (email: string, password: string): Promise<{ error?: string }> => {
+  const login = async (
+    email: string,
+    password: string
+  ): Promise<{ error?: string; message?: string; requiresEmailVerification?: boolean }> => {
     try {
       const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), password })
       });
-      const data = await parseJsonSafe<{ user?: UserProfile; token?: string; error?: string }>(res);
+      const data = await parseJsonSafe<{
+        user?: UserProfile;
+        token?: string;
+        error?: string;
+        message?: string;
+        requiresEmailVerification?: boolean;
+      }>(res);
       if (!res.ok || !data?.user) {
         return { error: data?.error || `Sign-in failed (${res.status}).` };
       }
       if (data.token) {
         setStoredSessionToken(data.token);
       }
+      const savedGenres =
+        Array.isArray(data.user.preferredGenres) && data.user.preferredGenres.length > 0
+          ? data.user.preferredGenres
+          : loadSavedPreferredGenres(data.user.id);
       setUser({
         ...data.user,
+        preferredGenres: savedGenres,
         readingGoal: reconcileReadingGoalRollover(
           data.user.readingGoal || createGuestUser().readingGoal
         )
       });
+      setPreferredGenresState(savedGenres);
       setIsAuthenticated(true);
       await Promise.all([loadAccountExtras(), refreshStories()]);
-      return {};
+      return { message: data.message || 'Signed in successfully.' };
     } catch {
       return { error: 'Network error while signing in.' };
     }
   };
 
-  const register = async (name: string, email: string, password: string): Promise<{ error?: string }> => {
+  const register = async (
+    name: string,
+    email: string,
+    password: string
+  ): Promise<{ error?: string; message?: string; requiresEmailVerification?: boolean }> => {
     try {
       const res = await apiFetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), email: email.trim(), password })
       });
-      const data = await parseJsonSafe<{ user?: UserProfile; token?: string; error?: string }>(res);
-      if (!res.ok || !data?.user) {
+      const data = await parseJsonSafe<{
+        user?: UserProfile;
+        token?: string;
+        error?: string;
+        message?: string;
+        requiresEmailVerification?: boolean;
+      }>(res);
+      if (!res.ok) {
+        return { error: data?.error || `Registration failed (${res.status}).` };
+      }
+      if (data?.requiresEmailVerification) {
+        return {
+          requiresEmailVerification: true,
+          message:
+            data.message || 'Account created! Check your email to confirm your address before signing in.'
+        };
+      }
+      if (!data?.user) {
         return { error: data?.error || `Registration failed (${res.status}).` };
       }
       if (data.token) {
         setStoredSessionToken(data.token);
       }
+      const savedGenres =
+        Array.isArray(data.user.preferredGenres) && data.user.preferredGenres.length > 0
+          ? data.user.preferredGenres
+          : loadSavedPreferredGenres(data.user.id);
       setUser({
         ...data.user,
+        preferredGenres: savedGenres,
         readingGoal: reconcileReadingGoalRollover(
           data.user.readingGoal || createGuestUser().readingGoal
         )
       });
+      setPreferredGenresState(savedGenres);
       setIsAuthenticated(true);
+      const safeRedirect = sanitizeInternalRedirect(routeParams.redirect || pendingAuthRedirect);
+      if (safeRedirect) {
+        setPendingAuthRedirect(safeRedirect);
+      }
+      if (savedGenres.length === 0) {
+        setReadingPromptOpen(true);
+      }
       await Promise.all([loadAccountExtras(), refreshStories()]);
-      return {};
+      return { message: data.message || 'Account created and signed in.' };
     } catch {
       return { error: 'Network error while creating account.' };
     }
@@ -777,6 +939,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTransactions([]);
     setHighlights([]);
     setAdminOverview(null);
+    setPreferredGenresState([]);
+    setReadingPromptOpen(false);
+    setPendingAuthRedirect(null);
     setUser(createGuestUser());
     await refreshStories();
   };
@@ -1275,6 +1440,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         login,
         register,
         logout,
+        preferredGenres,
+        setPreferredGenres,
+        readingPromptOpen,
+        openReadingPrompt,
+        closeReadingPrompt,
+        pendingAuthRedirect,
+        clearPendingAuthRedirect,
+        completePostAuthRedirect,
         paystackModal,
         checkoutStatusMessage,
         clearCheckoutStatusMessage: () => setCheckoutStatusMessage(null),
