@@ -693,7 +693,7 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       assert.equal(lastAuthHeader, 'Bearer ws_test_secret_key_should_stay_private');
       assert.ok(lastSubmittedUrl.includes('alibaba/wan-3.0/text-to-video'));
       assert.ok(String(lastSubmittedBody.prompt || '').includes('The Obsidian Throne'));
-      assert.ok(String(lastSubmittedBody.prompt || '').includes('spoken storytelling voiceover'));
+      assert.ok(String(lastSubmittedBody.prompt || '').includes('no distorted voices'));
       assert.equal(lastSubmittedBody.aspect_ratio, '16:9');
       assert.equal(lastSubmittedBody.duration, 20);
       assert.equal(lastSubmittedBody.generate_audio, true);
@@ -739,6 +739,7 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       assert.equal(narrationData.mood, 'storm');
       assert.equal(narrationData.voiceName, 'Charon');
       assert.ok(typeof narrationData.script === 'string' && narrationData.script.length > 30);
+      assert.match(narrationData.script, /[.!?]$/);
 
       // 5. Expired CDN output returns 410 Gone
       mode = 'expired_cdn';

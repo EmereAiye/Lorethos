@@ -142,13 +142,13 @@ export function buildMoodCinematicPrompt(options: {
 
   const moodMotionCue: Record<VideoSceneMood, string> = {
     storm:
-      'Mood & camera motion: tempestuous sweeping crane pull-back, wind-whipped rain, lightning flashes, urgent dolly push-in; synchronized audible rolling thunder, rain ambience, and expressive spoken storytelling voiceover explaining the scene.',
+      'Mood & camera motion: tempestuous sweeping crane pull-back, wind-whipped rain, lightning flashes, urgent dolly push-in; clean subtle atmospheric rain and distant thunder ambience only, no distorted voices or garbled speech.',
     action:
-      'Mood & camera motion: kinetic low-angle tracking shot, dynamic whip-pans, flying embers and crisp swift movement; synchronized audible dramatic percussion impacts and urgent spoken narrator explanation.',
+      'Mood & camera motion: kinetic low-angle tracking shot, dynamic whip-pans, flying embers and crisp swift movement; clean subtle cinematic percussion and kinetic ambience only, no distorted voices or garbled speech.',
     suspense:
-      'Mood & camera motion: slow creeping steadicam glide, shifting chiaroscuro shadows, tense atmospheric close-up; subtle low heartbeat pulse and hushed, expressive spoken voiceover explaining the hidden tension.',
+      'Mood & camera motion: slow creeping steadicam glide, shifting chiaroscuro shadows, tense atmospheric close-up; clean subtle low atmospheric underscore only, no distorted voices or garbled speech.',
     neutral:
-      'Mood & camera motion: fluid cinematic crane reveal, gentle golden-hour light drift, expressive character movement; warm audible atmospheric soundscape and clear spoken narrator voiceover explaining the scene.',
+      'Mood & camera motion: fluid cinematic crane reveal, gentle golden-hour light drift, expressive character movement; clean warm ambient soundscape only, no distorted voices or garbled speech.',
   };
 
   const storyLead = storyTitle

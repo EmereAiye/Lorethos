@@ -124,7 +124,7 @@ export const VideoStudioView: React.FC = () => {
           defaultPrompt={
             seedPrompt ||
             (selectedStory
-              ? `${selectedStory.synopsis.slice(0, 180)} Atmospheric book trailer with dramatic mood lighting and spoken narration.`
+              ? `${selectedStory.synopsis.length <= 220 ? selectedStory.synopsis : `${selectedStory.synopsis.slice(0, 220).replace(/\s+\S*$/, '')}...`} Atmospheric book trailer with dramatic mood lighting and spoken narration.`
               : '')
           }
         />

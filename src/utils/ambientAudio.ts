@@ -100,6 +100,7 @@ export function detectSceneMood(text: string): SceneMood {
 
 class AmbientSoundEngine {
   private ctx: AudioContext | null = null;
+  private compressor: DynamicsCompressorNode | null = null;
   private masterGain: GainNode | null = null;
   private activeNodes: AudioNode[] = [];
   private crackleTimer: number | null = null;
@@ -107,6 +108,20 @@ class AmbientSoundEngine {
   private currentTrack: AmbientTrackId = 'silence';
   private currentMood: SceneMood = 'neutral';
   private lastVolume = 0.6;
+
+  private getOutputDestination(ctx: AudioContext): AudioNode {
+    if (!this.compressor || this.compressor.context !== ctx) {
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -14;
+      comp.knee.value = 12;
+      comp.ratio.value = 6;
+      comp.attack.value = 0.01;
+      comp.release.value = 0.2;
+      comp.connect(ctx.destination);
+      this.compressor = comp;
+    }
+    return this.compressor;
+  }
 
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -190,18 +205,37 @@ class AmbientSoundEngine {
       window.clearInterval(this.crackleTimer);
       this.crackleTimer = null;
     }
-    for (const node of this.activeNodes) {
-      try {
-        if ('stop' in node && typeof (node as AudioScheduledSourceNode).stop === 'function') {
-          (node as AudioScheduledSourceNode).stop();
-        }
-        node.disconnect();
-      } catch {
-        // ignore cleanup errors on already-stopped nodes
-      }
-    }
+    const oldNodes = this.activeNodes;
+    const oldMaster = this.masterGain;
+    const ctx = this.ctx;
     this.activeNodes = [];
     this.masterGain = null;
+
+    const cleanupNodes = () => {
+      for (const node of oldNodes) {
+        try {
+          if ('stop' in node && typeof (node as AudioScheduledSourceNode).stop === 'function') {
+            (node as AudioScheduledSourceNode).stop();
+          }
+          node.disconnect();
+        } catch {
+          // ignore cleanup errors on already-stopped nodes
+        }
+      }
+    };
+
+    if (oldMaster && ctx && ctx.state === 'running' && oldNodes.length > 0) {
+      try {
+        const now = ctx.currentTime;
+        oldMaster.gain.cancelScheduledValues(now);
+        oldMaster.gain.setTargetAtTime(0.0001, now, 0.025);
+        window.setTimeout(cleanupNodes, 90);
+        return;
+      } catch {
+        // fall through to immediate cleanup
+      }
+    }
+    cleanupNodes();
   }
 
   public start(track: AmbientTrackId, volume: number): void {
@@ -231,8 +265,8 @@ class AmbientSoundEngine {
 
     const master = ctx.createGain();
     master.gain.setValueAtTime(0.0001, ctx.currentTime);
-    master.gain.setTargetAtTime(this.lastVolume * 0.35, ctx.currentTime, 0.25);
-    master.connect(ctx.destination);
+    master.gain.setTargetAtTime(this.lastVolume * 0.28, ctx.currentTime, 0.25);
+    master.connect(this.getOutputDestination(ctx));
     this.masterGain = master;
     this.activeNodes.push(master);
 
@@ -241,7 +275,7 @@ class AmbientSoundEngine {
     } else if (track === 'rain') {
       this.buildRainGraph(ctx, master);
     } else if (track === 'mythic_drone') {
-      this.buildDroneGraph(ctx, master, [110, 164.81, 220], 420);
+      this.buildDroneGraph(ctx, master, [110, 164.81, 220], 380);
     }
   }
 
@@ -284,8 +318,8 @@ class AmbientSoundEngine {
     this.stopImmediate();
     const master = ctx.createGain();
     master.gain.setValueAtTime(0.0001, ctx.currentTime);
-    master.gain.setTargetAtTime(this.lastVolume * 0.38, ctx.currentTime, 0.45);
-    master.connect(ctx.destination);
+    master.gain.setTargetAtTime(this.lastVolume * 0.3, ctx.currentTime, 0.45);
+    master.connect(this.getOutputDestination(ctx));
     this.masterGain = master;
     this.activeNodes.push(master);
 
@@ -398,7 +432,7 @@ class AmbientSoundEngine {
       osc.detune.value = idx === 0 ? -4 : idx === 2 ? 4 : 0;
 
       const voiceGain = ctx.createGain();
-      voiceGain.gain.value = idx === 0 ? 0.28 : 0.14;
+      voiceGain.gain.value = idx === 0 ? 0.18 : 0.09;
 
       osc.connect(voiceGain);
       voiceGain.connect(filter);
@@ -414,13 +448,13 @@ class AmbientSoundEngine {
     subOsc.frequency.value = 65.41; // C2
 
     const pulseVca = ctx.createGain();
-    pulseVca.gain.value = 0.22;
+    pulseVca.gain.value = 0.14;
 
     const pulseLfo = ctx.createOscillator();
     pulseLfo.type = 'sine';
     pulseLfo.frequency.value = 0.85; // ~51 BPM gentle tense pulse
     const pulseDepth = ctx.createGain();
-    pulseDepth.gain.value = 0.14;
+    pulseDepth.gain.value = 0.08;
     pulseLfo.connect(pulseDepth);
     pulseDepth.connect(pulseVca.gain);
 
@@ -433,14 +467,14 @@ class AmbientSoundEngine {
     // 2. Dark minor-third & diminished-fifth atmospheric pad with gentle filter breathing
     const padFilter = ctx.createBiquadFilter();
     padFilter.type = 'lowpass';
-    padFilter.frequency.value = 460;
-    padFilter.Q.value = 1.4;
+    padFilter.frequency.value = 420;
+    padFilter.Q.value = 0.9;
 
     const sweepLfo = ctx.createOscillator();
     sweepLfo.type = 'sine';
     sweepLfo.frequency.value = 0.18;
     const sweepDepth = ctx.createGain();
-    sweepDepth.gain.value = 180;
+    sweepDepth.gain.value = 140;
     sweepLfo.connect(sweepDepth);
     sweepDepth.connect(padFilter.frequency);
     sweepLfo.start();
@@ -456,7 +490,7 @@ class AmbientSoundEngine {
       osc.detune.value = idx % 2 === 0 ? -3 : 4;
 
       const g = ctx.createGain();
-      g.gain.value = idx === 0 ? 0.16 : idx === 3 ? 0.06 : 0.09;
+      g.gain.value = idx === 0 ? 0.11 : idx === 3 ? 0.04 : 0.06;
 
       osc.connect(g);
       g.connect(padFilter);
@@ -473,16 +507,16 @@ class AmbientSoundEngine {
 
     const drumFilter = ctx.createBiquadFilter();
     drumFilter.type = 'lowpass';
-    drumFilter.frequency.value = 260;
+    drumFilter.frequency.value = 240;
 
     const drumVca = ctx.createGain();
-    drumVca.gain.value = 0.24;
+    drumVca.gain.value = 0.15;
 
     const beatLfo = ctx.createOscillator();
     beatLfo.type = 'sine';
     beatLfo.frequency.value = 1.65;
     const beatDepth = ctx.createGain();
-    beatDepth.gain.value = 0.18;
+    beatDepth.gain.value = 0.1;
     beatLfo.connect(beatDepth);
     beatDepth.connect(drumVca.gain);
 
@@ -493,14 +527,14 @@ class AmbientSoundEngine {
     beatLfo.start();
     this.activeNodes.push(drumOsc, drumFilter, drumVca, beatLfo, beatDepth);
 
-    this.buildDroneGraph(ctx, master, [98.0, 146.83, 233.08], 520);
+    this.buildDroneGraph(ctx, master, [98.0, 146.83, 233.08], 460);
   }
 
   public setVolume(volume: number): void {
     this.lastVolume = Math.max(0, Math.min(1, volume));
     if (this.masterGain && this.ctx) {
       if (this.currentTrack === 'adaptive' && this.currentMood === 'neutral') return;
-      const scale = this.currentTrack === 'adaptive' ? 0.38 : 0.35;
+      const scale = this.currentTrack === 'adaptive' ? 0.3 : 0.28;
       this.masterGain.gain.setTargetAtTime(
         this.lastVolume * scale,
         this.ctx.currentTime,

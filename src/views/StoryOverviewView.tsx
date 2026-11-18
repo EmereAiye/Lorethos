@@ -296,7 +296,7 @@ export const StoryOverviewView: React.FC = () => {
           storyTitle={story.title}
           heading="Custom Scene Video Generator"
           description="Want a custom clip from another scene? Describe the scene in words to generate a new 15–30 second talking video variation."
-          defaultPrompt={`${story.synopsis.slice(0, 180)} Atmospheric book trailer, painterly lighting, slow camera push.`}
+          defaultPrompt={`${story.synopsis.length <= 220 ? story.synopsis : `${story.synopsis.slice(0, 220).replace(/\s+\S*$/, '')}...`} Atmospheric book trailer, painterly lighting, slow camera push.`}
         />
 
         {/* Chapter Directory */}

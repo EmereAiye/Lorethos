@@ -43,7 +43,7 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Oct 2026",
     trailerVideoUrl: "/assets/trailers/the-obsidian-throne.mp4",
     trailerPosterUrl: "/assets/images/trailers/the-obsidian-throne.jpg",
-    trailerDuration: "16s",
+    trailerDuration: "22s",
     trailerMood: "action",
     trailerNarration: "Beneath a blackened solar eclipse, the High Citadels of Ostraka tremble. King Vane faces betrayal behind velvet banners, bound by an ancient obsidian pact. Read The Obsidian Throne, free opening chapters now on Lorethos.",
     chapters: [
@@ -172,7 +172,7 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Sep 2026",
     trailerVideoUrl: "/assets/trailers/whisper-of-the-baobab.mp4",
     trailerPosterUrl: "/assets/images/trailers/whisper-of-the-baobab.jpg",
-    trailerDuration: "16s",
+    trailerDuration: "22s",
     trailerMood: "neutral",
     trailerNarration: "Under the cosmic expanse of the Sahel night, young navigator Boma carries an ancestral brass compass across the singing sands. When the colossal baobab awakens with luminous runes, the stars reveal forgotten highways. Explore Whisper of the Baobab on Lorethos.",
     chapters: [
@@ -278,7 +278,7 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Jul 2026",
     trailerVideoUrl: "/assets/trailers/chronicles-of-the-sunken-epoch.mp4",
     trailerPosterUrl: "/assets/images/trailers/chronicles-of-the-sunken-epoch.jpg",
-    trailerDuration: "16s",
+    trailerDuration: "24s",
     trailerMood: "storm",
     trailerNarration: "Four thousand fathoms beneath storm-torn waters lies the sunken city of Atal-Mor. Diver Captain Kaelen uncovers a glowing golden reliquary holding the living memory of a drowned council, and a warning that the sea is rising again.",
     chapters: [
@@ -378,7 +378,7 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Sep 2026",
     trailerVideoUrl: "/assets/trailers/the-crimson-scribe.mp4",
     trailerPosterUrl: "/assets/images/trailers/the-crimson-scribe.jpg",
-    trailerDuration: "16s",
+    trailerDuration: "28s",
     trailerMood: "suspense",
     trailerNarration: "Inside the royal scriptorium of House Valerius, every decree is written in crimson ink. When apprentice copyist Lucien uncovers a hidden cipher between illuminated pages, he learns why three kings never survived the quill. Discover The Crimson Scribe.",
     chapters: [
@@ -478,7 +478,7 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Nov 2026",
     trailerVideoUrl: "/assets/trailers/verses-of-the-harmattan.mp4",
     trailerPosterUrl: "/assets/images/trailers/verses-of-the-harmattan.jpg",
-    trailerDuration: "16s",
+    trailerDuration: "19s",
     trailerMood: "neutral",
     trailerNarration: "Tracing the warm northern wind from Sahelian courtyards to Atlantic harbors, Verses of the Harmattan gathers luminous poems of brass lanterns, longing, and light surviving dust. Listen and read all cantos free on Lorethos.",
     chapters: [
@@ -563,7 +563,7 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Nov 2026",
     trailerVideoUrl: "/assets/trailers/letters-across-the-lagoon.mp4",
     trailerPosterUrl: "/assets/images/trailers/letters-across-the-lagoon.jpg",
-    trailerDuration: "16s",
+    trailerDuration: "22s",
     trailerMood: "neutral",
     trailerNarration: "Separated by a decade of silence, two former partners exchange handwritten letters folded inside waterfront blueprints, uncovering the truth behind the fire that claimed the old lagoon reading hall. Read Letters Across the Lagoon free on Lorethos.",
     chapters: [
@@ -641,7 +641,7 @@ function withOfficialTrailerMetadata(story) {
     ...story,
     trailerVideoUrl: story.trailerVideoUrl || defaults.trailerVideoUrl,
     trailerPosterUrl: story.trailerPosterUrl || defaults.trailerPosterUrl,
-    trailerDuration: story.trailerDuration || defaults.trailerDuration,
+    trailerDuration: !story.trailerDuration || story.trailerVideoUrl === defaults.trailerVideoUrl ? defaults.trailerDuration : story.trailerDuration,
     trailerMood: story.trailerMood || defaults.trailerMood,
     trailerNarration: story.trailerNarration || defaults.trailerNarration
   };
@@ -2026,10 +2026,10 @@ function classifyVideoSceneMood(text, preferredMood) {
 function buildMoodCinematicPrompt(options) {
   const { scenePrompt, storyTitle, storyGenre, mood, durationSeconds } = options;
   const moodMotionCue = {
-    storm: "Mood & camera motion: tempestuous sweeping crane pull-back, wind-whipped rain, lightning flashes, urgent dolly push-in; synchronized audible rolling thunder, rain ambience, and expressive spoken storytelling voiceover explaining the scene.",
-    action: "Mood & camera motion: kinetic low-angle tracking shot, dynamic whip-pans, flying embers and crisp swift movement; synchronized audible dramatic percussion impacts and urgent spoken narrator explanation.",
-    suspense: "Mood & camera motion: slow creeping steadicam glide, shifting chiaroscuro shadows, tense atmospheric close-up; subtle low heartbeat pulse and hushed, expressive spoken voiceover explaining the hidden tension.",
-    neutral: "Mood & camera motion: fluid cinematic crane reveal, gentle golden-hour light drift, expressive character movement; warm audible atmospheric soundscape and clear spoken narrator voiceover explaining the scene."
+    storm: "Mood & camera motion: tempestuous sweeping crane pull-back, wind-whipped rain, lightning flashes, urgent dolly push-in; clean subtle atmospheric rain and distant thunder ambience only, no distorted voices or garbled speech.",
+    action: "Mood & camera motion: kinetic low-angle tracking shot, dynamic whip-pans, flying embers and crisp swift movement; clean subtle cinematic percussion and kinetic ambience only, no distorted voices or garbled speech.",
+    suspense: "Mood & camera motion: slow creeping steadicam glide, shifting chiaroscuro shadows, tense atmospheric close-up; clean subtle low atmospheric underscore only, no distorted voices or garbled speech.",
+    neutral: "Mood & camera motion: fluid cinematic crane reveal, gentle golden-hour light drift, expressive character movement; clean warm ambient soundscape only, no distorted voices or garbled speech."
   };
   const storyLead = storyTitle ? `Literary scene trailer (${durationSeconds}s) for "${storyTitle}"${storyGenre ? ` (${storyGenre})` : ""}: ` : `Cinematic story trailer (${durationSeconds}s): `;
   return `${storyLead}${scenePrompt}. ${moodMotionCue[mood]}`.slice(0, 1200);
@@ -2557,11 +2557,90 @@ function formatWaveSpeedError(err) {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path2.dirname(__filename);
 var PROJECT_ROOT = path2.basename(__dirname) === "dist-server" ? path2.resolve(__dirname, "..") : __dirname;
-var PORT = Number(process.env.PORT) || 3e3;
+function parseCliArg(flag) {
+  for (let i = 2; i < process.argv.length; i += 1) {
+    const arg = process.argv[i];
+    if (arg === flag && i + 1 < process.argv.length) {
+      return process.argv[i + 1];
+    }
+    if (arg.startsWith(`${flag}=`)) {
+      return arg.slice(flag.length + 1);
+    }
+  }
+  return void 0;
+}
+var cliPortRaw = parseCliArg("--port");
+var cliHostRaw = parseCliArg("--host");
+var isAiStudioContainer = Boolean(process.env.K_SERVICE && process.env.APPLET_ID);
+var envPortNum = Number(process.env.PORT);
+var resolvedEnvPort = Number.isFinite(envPortNum) && envPortNum > 0 ? isAiStudioContainer && process.env.NODE_ENV !== "production" && envPortNum === 8080 ? 3e3 : envPortNum : 3e3;
+var PORT = cliPortRaw && Number.isFinite(Number(cliPortRaw)) && Number(cliPortRaw) > 0 ? Number(cliPortRaw) : resolvedEnvPort;
+var HOST = (cliHostRaw || process.env.HOST || "0.0.0.0").trim() || "0.0.0.0";
 var MODEL_NAME = "gemini-4-hydrogen";
 var SESSION_COOKIE_NAME = "lorethos_session";
 var SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
 var EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function normalizeTtsWavAudio(base64Data, rawMimeType) {
+  const rawBuf = Buffer.from(base64Data, "base64");
+  if (rawBuf.length >= 12 && rawBuf.subarray(0, 4).toString("ascii") === "RIFF" && rawBuf.subarray(8, 12).toString("ascii") === "WAVE") {
+    return { audioBase64: base64Data, mimeType: "audio/wav" };
+  }
+  const mimeLower = String(rawMimeType || "").toLowerCase();
+  const rateMatch = mimeLower.match(/rate=(\d+)/);
+  const sampleRate = rateMatch ? Math.max(8e3, Math.min(48e3, Number(rateMatch[1]))) : 24e3;
+  const channels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * channels * (bitsPerSample / 8);
+  const blockAlign = channels * (bitsPerSample / 8);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + rawBuf.length, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(rawBuf.length, 40);
+  return {
+    audioBase64: Buffer.concat([header, rawBuf]).toString("base64"),
+    mimeType: "audio/wav"
+  };
+}
+function buildCleanTrailerNarrationScript(options) {
+  const { scenePrompt, storyTitle, storyNarration, mood, durationSeconds } = options;
+  const maxWords = Math.max(22, Math.min(68, Math.round(durationSeconds * 2.15)));
+  const stripProductionCues = (text) => text.replace(/\b(atmospheric book trailer|painterly lighting|slow camera push|dramatic mood lighting|spoken narration|cinematic|4k|8k|camera angle)\b[^,.!?]*[,.!?]?/gi, "").replace(/\[[^\]]*\]|\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
+  const cleanedScene = stripProductionCues(scenePrompt).replace(/[.!?]+$/, "");
+  const moodBridge = {
+    storm: "Through thunder and sweeping storm winds, every moment draws you deeper into the coming reckoning.",
+    action: "As steel meets fire in urgent motion, destiny turns upon a single breath.",
+    suspense: "In the hush of creeping shadows, an unspoken secret waits to be uncovered.",
+    neutral: "Step inside a living world of memory, wonder, and unforgettable storytelling."
+  };
+  let rawCandidate = "";
+  if (storyNarration && storyNarration.trim().length >= 30 && (!cleanedScene || scenePrompt.length > 140)) {
+    rawCandidate = storyNarration.trim();
+  } else {
+    const lead = storyTitle ? `From ${storyTitle}. ` : "";
+    const sceneLine = cleanedScene ? `${cleanedScene.charAt(0).toUpperCase()}${cleanedScene.slice(1)}. ` : "";
+    rawCandidate = `${lead}${sceneLine}${moodBridge[mood]}`.trim();
+  }
+  const words = rawCandidate.split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) {
+    return /[.!?]$/.test(rawCandidate) ? rawCandidate : `${rawCandidate}.`;
+  }
+  const clipped = words.slice(0, maxWords).join(" ");
+  const lastSentenceEnd = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
+  if (lastSentenceEnd >= Math.floor(clipped.length * 0.55)) {
+    return clipped.slice(0, lastSentenceEnd + 1).trim();
+  }
+  return `${clipped.replace(/[,;:\-–—]+$/, "")}.`;
+}
 var EPHEMERAL_DEV_SECRET = crypto2.randomBytes(32).toString("hex");
 function getSessionSecret() {
   const configured = process.env.SESSION_SECRET?.trim();
@@ -3621,9 +3700,10 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
         res.status(502).json({ error: "Audio narration was not returned by the model." });
         return;
       }
+      const normalizedAudio = normalizeTtsWavAudio(audioPart.data, audioPart.mime_type);
       res.json({
-        audioBase64: audioPart.data,
-        mimeType: audioPart.mime_type || "audio/wav",
+        audioBase64: normalizedAudio.audioBase64,
+        mimeType: normalizedAudio.mimeType,
         voiceName: selectedVoice
       });
     } catch (err) {
@@ -3654,25 +3734,25 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
       const safeContext = String(contextHint || "").trim().slice(0, 200);
       const instruction = safeContext ? `Transcribe this spoken literary note clearly and accurately without adding commentary. Context: ${safeContext}` : "Transcribe this spoken audio clearly and accurately without adding commentary.";
       const ai = getGeminiClient();
-      const response = await withTimeout(
-        ai.models.generateContent({
+      const interaction = await withTimeout(
+        ai.interactions.create({
           model: "gemini-3.5-transcribe",
-          contents: {
-            parts: [
-              {
-                inlineData: {
-                  mimeType: safeMimeType,
-                  data: cleanedBase64
-                }
-              },
-              { text: instruction }
-            ]
-          }
+          input: [
+            {
+              type: "audio",
+              data: cleanedBase64,
+              mime_type: safeMimeType
+            },
+            {
+              type: "text",
+              text: instruction
+            }
+          ]
         }),
         45e3
       );
       res.json({
-        transcript: (response.text ?? "").trim()
+        transcript: (interaction.output_text ?? "").trim()
       });
     } catch (err) {
       const formatted = formatGeminiError(err);
@@ -3763,7 +3843,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
   });
   app.post("/api/ai/video/narration", aiLimiter, async (req, res) => {
     try {
-      const { prompt, storySlug, duration, mood, voiceName } = req.body;
+      const { prompt, storySlug, duration, mood, voiceName, useStoryNarration } = req.body;
       const cleanPrompt = String(prompt || "").trim().slice(0, 600);
       if (cleanPrompt.length < 6) {
         res.status(400).json({ error: "Please describe the video scene in at least 6 characters." });
@@ -3784,45 +3864,58 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
       );
       const allowedVoices = /* @__PURE__ */ new Set(["Kore", "Charon", "Puck", "Zephyr", "Fenrir"]);
       const selectedVoice = voiceName && allowedVoices.has(voiceName) ? voiceName : "Kore";
-      const moodMotionSummary = {
-        storm: "sweeping tempest cameras and flashes of lightning across drenched stone",
-        action: "fast kinetic tracking shots, flying embers, and urgent momentum",
-        suspense: "slow, creeping shadows and tense, hushed close-ups",
-        neutral: "fluid golden-hour sweeps and atmospheric cinematic focus"
-      };
-      const fallbackWordTarget = Math.max(22, Math.round(durationSeconds * 2.3));
-      const fallbackScript = `${story ? `From ${story.title}, watch as ` : "Watch as "}${cleanPrompt.replace(/[.!?]+$/, "")}. Guided by ${moodMotionSummary[detectedMood]}, every frame unfolds the story's tension and invites you deeper into the chapter ahead.`.slice(
-        0,
-        Math.max(180, fallbackWordTarget * 8)
-      );
-      let script = fallbackScript;
+      let script = useStoryNarration && story?.trailerNarration ? story.trailerNarration.trim() : buildCleanTrailerNarrationScript({
+        scenePrompt: cleanPrompt,
+        storyTitle: story?.title,
+        storyNarration: story?.trailerNarration,
+        mood: detectedMood,
+        durationSeconds
+      });
       let audioBase64 = null;
       let mimeType = null;
       let source = "browser-speech-fallback";
-      const targetWords = Math.max(20, Math.min(85, Math.round(durationSeconds * 2.4)));
+      const targetWords = Math.max(20, Math.min(68, Math.round(durationSeconds * 2.15)));
       const speechStyleByMood = {
-        storm: "Dramatic, urgent, atmospheric cinema trailer narrator speaking clearly through a storm",
-        action: "Energetic, bold, fast-paced literary trailer narrator explaining intense motion",
-        suspense: "Low, tense, mysterious, captivating literary narrator building quiet dread",
-        neutral: "Warm, expressive, cinematic literary narrator explaining a vivid story scene"
+        storm: "Clear, resonant, dramatic cinema trailer narrator speaking with steady diction",
+        action: "Crisp, dynamic, confident literary trailer narrator with clear articulation",
+        suspense: "Low, warm, deliberate, captivating literary narrator with clean pauses",
+        neutral: "Warm, clear, expressive, studio-quality literary audiobook narrator"
       };
       if (process.env.GEMINI_API_KEY?.trim()) {
-        try {
-          const ai = getGeminiClient();
-          const scriptRes = await withTimeout(
-            ai.models.generateContent({
-              model: MODEL_NAME,
-              contents: `Write a single spoken voiceover narration script (about ${targetWords} words, paced for a ${durationSeconds}-second trailer video) that clearly explains what is happening in this scene and its ${detectedMood} mood/motion. No stage directions, no brackets, no markdown\u2014only natural spoken sentences.
+        const ai = getGeminiClient();
+        if (!(useStoryNarration && story?.trailerNarration)) {
+          try {
+            const scriptRes = await withTimeout(
+              ai.models.generateContent({
+                model: MODEL_NAME,
+                contents: `Write one concise, natural spoken voiceover narration script (about ${targetWords} words, paced calmly for a ${durationSeconds}-second trailer) describing the scene below. Use complete sentences, no stage directions, no brackets, no markdown, and no camera terms.
 
 Story: ${story ? `${story.title} (${story.genre})` : "Lorethos Original"}
-Scene: ${cleanPrompt}`
-            }),
-            15e3
-          );
-          const generatedText = scriptRes.text?.trim();
-          if (generatedText && generatedText.length >= 20) {
-            script = generatedText.replace(/\[[^\]]*\]|\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
+Scene: ${cleanPrompt}`,
+                config: {
+                  thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+                }
+              }),
+              1e4
+            );
+            const generatedText = scriptRes.text?.trim();
+            if (generatedText && generatedText.length >= 20) {
+              const cleanedGenerated = generatedText.replace(/\[[^\]]*\]|\([^)]*\)/g, "").replace(/\*{1,2}|_{1,2}|`/g, "").replace(/\s+/g, " ").trim();
+              const genWords = cleanedGenerated.split(/\s+/).filter(Boolean);
+              if (genWords.length > targetWords + 8) {
+                const clipped = genWords.slice(0, targetWords).join(" ");
+                const lastStop = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
+                script = lastStop >= Math.floor(clipped.length * 0.5) ? clipped.slice(0, lastStop + 1).trim() : `${clipped.replace(/[,;:\-–—]+$/, "")}.`;
+              } else {
+                script = /[.!?]$/.test(cleanedGenerated) ? cleanedGenerated : `${cleanedGenerated}.`;
+              }
+            }
+          } catch (scriptErr) {
+            const formatted = formatGeminiError(scriptErr);
+            console.warn("[Video Narration Script fallback]", formatted.status, formatted.message);
           }
+        }
+        try {
           const ttsInteraction = await withTimeout(
             ai.interactions.create({
               model: "gemini-3.8-flash-lite-tts",
@@ -3852,8 +3945,9 @@ Scene: ${cleanPrompt}`
           );
           const audioPart = ttsInteraction.output_audio;
           if (audioPart?.data) {
-            audioBase64 = audioPart.data;
-            mimeType = audioPart.mime_type || "audio/wav";
+            const normalizedAudio = normalizeTtsWavAudio(audioPart.data, audioPart.mime_type);
+            audioBase64 = normalizedAudio.audioBase64;
+            mimeType = normalizedAudio.mimeType;
             source = "gemini-tts";
           }
         } catch (ttsErr) {
@@ -4073,10 +4167,14 @@ Scene: ${cleanPrompt}`
 var isDirectExecution = !process.env.LORETHOS_NO_LISTEN && !process.env.VERCEL && !process.env.VERCEL_ENV;
 if (isDirectExecution) {
   const httpServer = http.createServer();
+  httpServer.on("error", (err) => {
+    console.error(`Failed to bind server on ${HOST}:${PORT}:`, err);
+    process.exit(1);
+  });
   createApp({ withVite: process.env.NODE_ENV !== "production", httpServer }).then((app) => {
     httpServer.on("request", app);
-    httpServer.listen(PORT, "0.0.0.0", () => {
-      console.log(`Lorethos server listening on http://0.0.0.0:${PORT}`);
+    httpServer.listen(PORT, HOST, () => {
+      console.log(`Lorethos server listening on http://${HOST}:${PORT}`);
     });
   }).catch((err) => {
     console.error("Failed to start server:", err);

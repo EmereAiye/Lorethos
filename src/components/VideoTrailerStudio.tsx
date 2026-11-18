@@ -110,48 +110,102 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
   }, [stopSyncedAudio]);
 
   useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.volume = audioOverlayEnabled && (narrationAudioSrc || narrationScript) ? 0.38 : 1.0;
-    }
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+    const useOverlayVoice = audioOverlayEnabled && Boolean(narrationAudioSrc || narrationScript);
+    videoEl.muted = useOverlayVoice;
+    videoEl.volume = useOverlayVoice ? 0 : 1.0;
   }, [audioOverlayEnabled, narrationAudioSrc, narrationScript, videoSrc]);
 
+  const speakBrowserFallback = useCallback(
+    (text: string) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = activeMood === 'action' ? 1.02 : activeMood === 'suspense' ? 0.92 : 0.96;
+      utterance.pitch = activeMood === 'suspense' ? 0.94 : 1.0;
+      utterance.volume = 0.95;
+      window.speechSynthesis.speak(utterance);
+    },
+    [activeMood]
+  );
+
   const startSyncedAudio = useCallback(
-    (fromStart = false) => {
+    (forceRestart = false) => {
       if (!audioOverlayEnabled) return;
 
       ambientAudio.unlock();
+      // Keep mood bed subtle and warm underneath crisp studio narration
       if (activeMood === 'neutral') {
-        ambientAudio.start('mythic_drone', 0.35);
+        ambientAudio.start('mythic_drone', 0.14);
       } else {
-        ambientAudio.setSceneMood(activeMood, 0.42);
+        ambientAudio.setSceneMood(activeMood, 0.16);
       }
 
-      if (narrationAudioRef.current && narrationAudioSrc) {
-        if (fromStart) {
-          narrationAudioRef.current.currentTime = 0;
+      const audioEl = narrationAudioRef.current;
+      const videoEl = videoRef.current;
+      if (audioEl && narrationAudioSrc) {
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
         }
-        void narrationAudioRef.current.play().catch(() => {});
+        const targetTime = forceRestart ? 0 : Math.max(0, videoEl?.currentTime || 0);
+        if (Number.isFinite(audioEl.duration) && audioEl.duration > 0 && targetTime >= audioEl.duration) {
+          audioEl.pause();
+          return;
+        }
+        try {
+          audioEl.currentTime = targetTime;
+        } catch {
+          // ignore if metadata isn't ready yet
+        }
+        audioEl.volume = 1.0;
+        void audioEl.play().catch(() => {
+          if (narrationScript) {
+            speakBrowserFallback(narrationScript);
+          }
+        });
         return;
       }
 
-      if (narrationScript && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(narrationScript);
-        utterance.rate = activeMood === 'action' ? 1.04 : activeMood === 'suspense' ? 0.92 : 0.98;
-        utterance.pitch = activeMood === 'suspense' ? 0.92 : 1.0;
-        window.speechSynthesis.speak(utterance);
+      if (narrationScript && (!videoEl || videoEl.currentTime < 1.5 || forceRestart)) {
+        speakBrowserFallback(narrationScript);
       }
     },
-    [activeMood, audioOverlayEnabled, narrationAudioSrc, narrationScript]
+    [activeMood, audioOverlayEnabled, narrationAudioSrc, narrationScript, speakBrowserFallback]
   );
+
+  const handleVideoSeeked = useCallback(() => {
+    const videoEl = videoRef.current;
+    const audioEl = narrationAudioRef.current;
+    if (!videoEl || !audioOverlayEnabled || !audioEl || !narrationAudioSrc) return;
+
+    const targetTime = Math.max(0, videoEl.currentTime);
+    if (Number.isFinite(audioEl.duration) && audioEl.duration > 0 && targetTime >= audioEl.duration) {
+      audioEl.pause();
+      return;
+    }
+    try {
+      audioEl.currentTime = targetTime;
+    } catch {
+      // ignore seek before readyState
+    }
+    if (!videoEl.paused && audioEl.paused) {
+      void audioEl.play().catch(() => {});
+    }
+  }, [audioOverlayEnabled, narrationAudioSrc]);
 
   const handleToggleAudioOverlay = () => {
     const next = !audioOverlayEnabled;
     setAudioOverlayEnabled(next);
+    if (videoRef.current) {
+      const muteNative = next && Boolean(narrationAudioSrc || narrationScript);
+      videoRef.current.muted = muteNative;
+      videoRef.current.volume = muteNative ? 0 : 1.0;
+    }
     if (!next) {
       stopSyncedAudio();
     } else if (videoRef.current && !videoRef.current.paused) {
-      startSyncedAudio(true);
+      startSyncedAudio(false);
     }
   };
 
@@ -591,9 +645,11 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
               src={videoSrc}
               controls
               playsInline
-              onPlay={() => startSyncedAudio(true)}
+              muted={audioOverlayEnabled && Boolean(narrationAudioSrc || narrationScript)}
+              onPlay={() => startSyncedAudio(false)}
               onPause={() => stopSyncedAudio()}
               onEnded={() => stopSyncedAudio()}
+              onSeeked={handleVideoSeeked}
               className="w-full h-full object-cover"
             />
           </div>
@@ -603,6 +659,11 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
               ref={narrationAudioRef}
               src={narrationAudioSrc}
               preload="auto"
+              onError={() => {
+                if (narrationScript && videoRef.current && !videoRef.current.paused && audioOverlayEnabled) {
+                  speakBrowserFallback(narrationScript);
+                }
+              }}
               className="hidden"
             />
           )}
