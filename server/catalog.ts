@@ -27,9 +27,41 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     updatedAt: 'Oct 2026',
     trailerVideoUrl: '/assets/trailers/the-obsidian-throne.mp4',
     trailerPosterUrl: '/assets/images/trailers/the-obsidian-throne.jpg',
-    trailerDuration: '22s',
+    trailerDuration: '21s',
     trailerMood: 'action',
-    trailerNarration: 'Beneath a blackened solar eclipse, the High Citadels of Ostraka tremble. King Vane faces betrayal behind velvet banners, bound by an ancient obsidian pact. Read The Obsidian Throne, free opening chapters now on Lorethos.',
+    trailerNarration: 'Beneath a blackened solar eclipse, the High Citadels of Ostraka tremble. Hidden in ancient vaults, glowing tablets whisper of the First Weavers as warlords gather beside the Obsidian Throne.',
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: 'Eclipse Over Ostraka',
+        mood: 'storm',
+        moodLabel: 'Storm',
+        startSec: 0,
+        endSec: 7,
+        imageUrl: '/assets/images/trailers/the-obsidian-throne.jpg',
+        caption: 'Violet twilight falls across the obsidian ramparts.'
+      },
+      {
+        sceneNumber: 2,
+        title: 'Vault of the First Weavers',
+        mood: 'suspense',
+        moodLabel: 'Suspense',
+        startSec: 7,
+        endSec: 14,
+        imageUrl: '/assets/images/trailers/the-obsidian-throne-s2.jpg',
+        caption: 'Glowing clay tablets thrum beneath the citadel.'
+      },
+      {
+        sceneNumber: 3,
+        title: 'The Iron Covenant',
+        mood: 'action',
+        moodLabel: 'Action',
+        startSec: 14,
+        endSec: 21,
+        imageUrl: '/assets/images/trailers/the-obsidian-throne-s3.jpg',
+        caption: 'Twelve warlords swear beside roaring Great Hall hearths.'
+      }
+    ],
     chapters: [
       {
         id: 'ch-obsidian-1',
@@ -156,9 +188,41 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     updatedAt: 'Sep 2026',
     trailerVideoUrl: '/assets/trailers/whisper-of-the-baobab.mp4',
     trailerPosterUrl: '/assets/images/trailers/whisper-of-the-baobab.jpg',
-    trailerDuration: '22s',
+    trailerDuration: '21s',
     trailerMood: 'neutral',
-    trailerNarration: 'Under the cosmic expanse of the Sahel night, young navigator Boma carries an ancestral brass compass across the singing sands. When the colossal baobab awakens with luminous runes, the stars reveal forgotten highways. Explore Whisper of the Baobab on Lorethos.',
+    trailerNarration: 'Under the Sahel stars, young navigator Boma holds an ancient brass compass. Across the singing dunes, silver sands hum beneath shifting winds, revealing celestial highways inside the sacred Baobab.',
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: 'The Luminous Baobab',
+        mood: 'neutral',
+        moodLabel: 'Calm Drift',
+        startSec: 0,
+        endSec: 7,
+        imageUrl: '/assets/images/trailers/whisper-of-the-baobab.jpg',
+        caption: 'Cobalt runes awaken beneath the Sahel night sky.'
+      },
+      {
+        sceneNumber: 2,
+        title: 'The Singing Sands',
+        mood: 'action',
+        moodLabel: 'Wind & Pulse',
+        startSec: 7,
+        endSec: 14,
+        imageUrl: '/assets/images/trailers/whisper-of-the-baobab-s2.jpg',
+        caption: 'Crossing the humming crimson dunes toward the horizon.'
+      },
+      {
+        sceneNumber: 3,
+        title: 'The Starlit Oasis',
+        mood: 'neutral',
+        moodLabel: 'Starlight',
+        startSec: 14,
+        endSec: 21,
+        imageUrl: '/assets/images/trailers/whisper-of-the-baobab-s3.jpg',
+        caption: 'Mirrored waters reflect constellations of another sky.'
+      }
+    ],
     chapters: [
       {
         id: 'ch-baobab-1',
@@ -262,9 +326,41 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     updatedAt: 'Jul 2026',
     trailerVideoUrl: '/assets/trailers/chronicles-of-the-sunken-epoch.mp4',
     trailerPosterUrl: '/assets/images/trailers/chronicles-of-the-sunken-epoch.jpg',
-    trailerDuration: '24s',
+    trailerDuration: '21s',
     trailerMood: 'storm',
-    trailerNarration: 'Four thousand fathoms beneath storm-torn waters lies the sunken city of Atal-Mor. Diver Captain Kaelen uncovers a glowing golden reliquary holding the living memory of a drowned council, and a warning that the sea is rising again.',
+    trailerNarration: 'Four thousand fathoms beneath ocean storms, Diver Kaelen descends into drowned Atal-Mor. Inside a golden reliquary, rotating amber awakens voices of a drowned council as the crystal dome trembles.',
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: 'The Cerulean Trench',
+        mood: 'storm',
+        moodLabel: 'Deep Storm',
+        startSec: 0,
+        endSec: 7,
+        imageUrl: '/assets/images/trailers/chronicles-of-the-sunken-epoch.jpg',
+        caption: 'Hull beams pierce four thousand fathoms into Atal-Mor.'
+      },
+      {
+        sceneNumber: 2,
+        title: 'Reliquary of Living Light',
+        mood: 'suspense',
+        moodLabel: 'Suspense',
+        startSec: 7,
+        endSec: 14,
+        imageUrl: '/assets/images/trailers/chronicles-of-the-sunken-epoch-s2.jpg',
+        caption: 'Carved amber projects ancient script into the abyss.'
+      },
+      {
+        sceneNumber: 3,
+        title: 'Breach in the Dome',
+        mood: 'storm',
+        moodLabel: 'Tempest',
+        startSec: 14,
+        endSec: 21,
+        imageUrl: '/assets/images/trailers/chronicles-of-the-sunken-epoch-s3.jpg',
+        caption: 'A crystal fracture threatens the sunken archive.'
+      }
+    ],
     chapters: [
       {
         id: 'ch-sunken-1',
@@ -362,9 +458,41 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     updatedAt: 'Sep 2026',
     trailerVideoUrl: '/assets/trailers/the-crimson-scribe.mp4',
     trailerPosterUrl: '/assets/images/trailers/the-crimson-scribe.jpg',
-    trailerDuration: '28s',
+    trailerDuration: '21s',
     trailerMood: 'suspense',
-    trailerNarration: 'Inside the royal scriptorium of House Valerius, every decree is written in crimson ink. When apprentice copyist Lucien uncovers a hidden cipher between illuminated pages, he learns why three kings never survived the quill. Discover The Crimson Scribe.',
+    trailerNarration: 'Inside the royal scriptorium of House Valerius, statecraft is written in crimson ink. Held against candlelight, margin ciphers expose five royal tasters while armed guards bolt every palace door.',
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: 'The Gall of Veritas',
+        mood: 'suspense',
+        moodLabel: 'Suspense',
+        startSec: 0,
+        endSec: 7,
+        imageUrl: '/assets/images/trailers/the-crimson-scribe.jpg',
+        caption: 'Crimson cochineal ink steams inside the scriptorium.'
+      },
+      {
+        sceneNumber: 2,
+        title: 'Cipher in the Margins',
+        mood: 'suspense',
+        moodLabel: 'Cipher Pulse',
+        startSec: 7,
+        endSec: 14,
+        imageUrl: '/assets/images/trailers/the-crimson-scribe-s2.jpg',
+        caption: 'Candlelight reveals coordinates pierced into vellum.'
+      },
+      {
+        sceneNumber: 3,
+        title: 'Night of the Silent Wax',
+        mood: 'storm',
+        moodLabel: 'Rain & Tension',
+        startSec: 14,
+        endSec: 21,
+        imageUrl: '/assets/images/trailers/the-crimson-scribe-s3.jpg',
+        caption: 'Lantern beams sweep rain-slicked courtyard stones.'
+      }
+    ],
     chapters: [
       {
         id: 'ch-scribe-1',
@@ -462,9 +590,41 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     updatedAt: 'Nov 2026',
     trailerVideoUrl: '/assets/trailers/verses-of-the-harmattan.mp4',
     trailerPosterUrl: '/assets/images/trailers/verses-of-the-harmattan.jpg',
-    trailerDuration: '19s',
+    trailerDuration: '21s',
     trailerMood: 'neutral',
-    trailerNarration: 'Tracing the warm northern wind from Sahelian courtyards to Atlantic harbors, Verses of the Harmattan gathers luminous poems of brass lanterns, longing, and light surviving dust. Listen and read all cantos free on Lorethos.',
+    trailerNarration: 'When red northern dust coats the mango leaves, brass lanterns glow at dawn. Along twilight waters, an elder ferryman measures the tide as tin rooftops sing beneath clear constellations.',
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: 'When Red Dust Arrives',
+        mood: 'neutral',
+        moodLabel: 'Amber Breeze',
+        startSec: 0,
+        endSec: 7,
+        imageUrl: '/assets/images/trailers/verses-of-the-harmattan.jpg',
+        caption: 'Ochre sunrise dust settles across brass veranda lamps.'
+      },
+      {
+        sceneNumber: 2,
+        title: 'Elegy for the Ferryman',
+        mood: 'suspense',
+        moodLabel: 'Twilight Tide',
+        startSec: 7,
+        endSec: 14,
+        imageUrl: '/assets/images/trailers/verses-of-the-harmattan-s2.jpg',
+        caption: 'Warm harbor lights linger above the dusk lagoon.'
+      },
+      {
+        sceneNumber: 3,
+        title: 'Starlight on Tin Roofs',
+        mood: 'neutral',
+        moodLabel: 'Night Chorus',
+        startSec: 14,
+        endSec: 21,
+        imageUrl: '/assets/images/trailers/verses-of-the-harmattan-s3.jpg',
+        caption: 'Constellations bloom radiant above cooling tin eaves.'
+      }
+    ],
     chapters: [
       {
         id: 'ch-harmattan-1',
@@ -547,9 +707,41 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     updatedAt: 'Nov 2026',
     trailerVideoUrl: '/assets/trailers/letters-across-the-lagoon.mp4',
     trailerPosterUrl: '/assets/images/trailers/letters-across-the-lagoon.jpg',
-    trailerDuration: '22s',
+    trailerDuration: '21s',
     trailerMood: 'neutral',
-    trailerNarration: 'Separated by a decade of silence, two former partners exchange handwritten letters folded inside waterfront blueprints, uncovering the truth behind the fire that claimed the old lagoon reading hall. Read Letters Across the Lagoon free on Lorethos.',
+    trailerNarration: 'Ten years after the waterfront reading hall burned, rolled blueprints cross the lagoon tide once more. Beneath pried floorboards, a salt-stained ledger exposes the truth before sunlit shutters open.',
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: 'Blueprint in Blue Ink',
+        mood: 'neutral',
+        moodLabel: 'Harbor Calm',
+        startSec: 0,
+        endSec: 7,
+        imageUrl: '/assets/images/trailers/letters-across-the-lagoon.jpg',
+        caption: 'Rolled waterfront elevations return across the tide.'
+      },
+      {
+        sceneNumber: 2,
+        title: 'The Salt-Stained Ledger',
+        mood: 'suspense',
+        moodLabel: 'Archive Secret',
+        startSec: 7,
+        endSec: 14,
+        imageUrl: '/assets/images/trailers/letters-across-the-lagoon-s2.jpg',
+        caption: 'Hidden beneath floorboards lies truth from ten winters ago.'
+      },
+      {
+        sceneNumber: 3,
+        title: 'Opening the Timber Windows',
+        mood: 'action',
+        moodLabel: 'Sunlit Rebirth',
+        startSec: 14,
+        endSec: 21,
+        imageUrl: '/assets/images/trailers/letters-across-the-lagoon-s3.jpg',
+        caption: 'Golden afternoon sun floods fresh cedar shelves.'
+      }
+    ],
     chapters: [
       {
         id: 'ch-lagoon-1',
@@ -616,6 +808,7 @@ const TRAILER_DEFAULTS_BY_ID = new Map(
       trailerDuration: story.trailerDuration,
       trailerMood: story.trailerMood,
       trailerNarration: story.trailerNarration,
+      trailerScenes: story.trailerScenes,
     },
   ])
 );
@@ -627,12 +820,13 @@ export function withOfficialTrailerMetadata(story: Story): Story {
     ...story,
     trailerVideoUrl: story.trailerVideoUrl || defaults.trailerVideoUrl,
     trailerPosterUrl: story.trailerPosterUrl || defaults.trailerPosterUrl,
-    trailerDuration:
-      !story.trailerDuration || story.trailerVideoUrl === defaults.trailerVideoUrl
-        ? defaults.trailerDuration
-        : story.trailerDuration,
+    trailerDuration: story.trailerDuration || defaults.trailerDuration,
     trailerMood: story.trailerMood || defaults.trailerMood,
     trailerNarration: story.trailerNarration || defaults.trailerNarration,
+    trailerScenes:
+      story.trailerScenes && story.trailerScenes.length > 0
+        ? story.trailerScenes
+        : defaults.trailerScenes,
   };
 }
 

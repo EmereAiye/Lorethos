@@ -405,7 +405,7 @@ export const HomeView: React.FC = () => {
                   Watch the Official Story Trailers
                 </h2>
                 <p className="font-reader text-sm text-[#2D142C]/70 dark:text-[#F9F6F0]/70 mt-1 max-w-2xl">
-                  Every serialized work in the Lorethos library features a narrated video trailer with mood-driven visuals and ambient soundscapes.
+                  Every serialized work in the Lorethos library features one unified narrated story trailer explaining the story with mood-driven visuals and clear voiceover.
                 </p>
               </div>
               <a
@@ -457,7 +457,7 @@ export const HomeView: React.FC = () => {
                       </div>
                       <div className="min-w-0 flex-1 space-y-0.5 font-sans-ui">
                         <div className="text-[11px] text-[#C85A32] font-semibold truncate">
-                          {story.genre} &middot; {story.trailerDuration || '16s'}
+                          {story.genre} &middot; Official Trailer
                         </div>
                         <div className="font-display text-base font-bold truncate text-[#2D142C] dark:text-[#F9F6F0]">
                           {story.title}

@@ -26,9 +26,14 @@ import {
   Square,
   Trash2
 } from 'lucide-react';
-import { Chapter, HighlightColor, CommentTag, SceneMood } from '../types';
-import { ambientAudio, AmbientTrackId, detectSceneMood } from '../utils/ambientAudio';
+import { Chapter, HighlightColor, CommentTag, SceneMood, TextHighlight } from '../types';
+import { ambientAudio, AmbientTrackId } from '../utils/ambientAudio';
+import { NarrativeAudioMiddleware, toSceneMood } from '../utils/narrativeAudioMiddleware';
 import { getDisplayName, computeReaderRank } from '../utils/readerProfile';
+import {
+  measureSelectionInParagraphElement,
+  resolveParagraphHighlightSegments
+} from '../utils/highlightSpans';
 import { VoiceDictationButton } from '../components/VoiceDictationButton';
 
 const TRACK_LABELS: Record<AmbientTrackId, string> = {
@@ -46,22 +51,25 @@ const MOOD_LABELS: Record<SceneMood, string> = {
   storm: 'Storm Scene (Playing)'
 };
 
-const HIGHLIGHT_STYLES: Record<HighlightColor, { border: string; bg: string; label: string; dot: string }> = {
+const HIGHLIGHT_STYLES: Record<HighlightColor, { border: string; bg: string; mark: string; label: string; dot: string }> = {
   terracotta: {
     border: 'border-l-4 border-[#C85A32]',
     bg: 'bg-[#C85A32]/10',
+    mark: 'bg-[#C85A32]/25 decoration-[#C85A32]/70',
     label: 'Terracotta',
     dot: 'bg-[#C85A32]'
   },
   gold: {
     border: 'border-l-4 border-amber-500',
     bg: 'bg-amber-500/12',
+    mark: 'bg-amber-400/32 decoration-amber-500/80',
     label: 'Ochre Gold',
     dot: 'bg-amber-500'
   },
   sage: {
     border: 'border-l-4 border-emerald-600',
     bg: 'bg-emerald-600/10',
+    mark: 'bg-emerald-500/24 decoration-emerald-600/75',
     label: 'Forest Sage',
     dot: 'bg-emerald-600'
   }
@@ -86,6 +94,7 @@ export const ReaderView: React.FC = () => {
     logChapterCompleted,
     highlights,
     saveHighlight,
+    updateHighlight,
     removeHighlight,
     paragraphBookmarks,
     saveParagraphBookmark,
@@ -99,6 +108,7 @@ export const ReaderView: React.FC = () => {
   const [scrollProgress, setScrollProgress] = useState(0);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [bookmarksDrawerOpen, setBookmarksDrawerOpen] = useState(false);
+  const [highlightsDrawerOpen, setHighlightsDrawerOpen] = useState(false);
   const [audioDrawerOpen, setAudioDrawerOpen] = useState(false);
   const [companionOpen, setCompanionOpen] = useState(false);
   const [companionLoading, setCompanionLoading] = useState(false);
@@ -122,8 +132,15 @@ export const ReaderView: React.FC = () => {
   const [ttsDuration, setTtsDuration] = useState(0);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Highlight & Margin Note popover state
+  // Highlight, Text Selection & Annotation popover state
   const [editingParagraphIdx, setEditingParagraphIdx] = useState<number | null>(null);
+  const [editingHighlightId, setEditingHighlightId] = useState<string | null>(null);
+  const [pendingSelection, setPendingSelection] = useState<{
+    paragraphIndex: number;
+    startOffset: number;
+    endOffset: number;
+    selectedText: string;
+  } | null>(null);
   const [selectedColor, setSelectedColor] = useState<HighlightColor>('terracotta');
   const [noteDraft, setNoteDraft] = useState('');
 
@@ -131,6 +148,7 @@ export const ReaderView: React.FC = () => {
   const [bookmarkingParagraphIdx, setBookmarkingParagraphIdx] = useState<number | null>(null);
   const [bookmarkLabelDraft, setBookmarkLabelDraft] = useState('');
   const [focusedParagraphIdx, setFocusedParagraphIdx] = useState<number | null>(null);
+  const [focusedHighlightId, setFocusedHighlightId] = useState<string | null>(null);
   const focusTimerRef = useRef<number | null>(null);
 
   // Chapter Discussion state
@@ -138,10 +156,16 @@ export const ReaderView: React.FC = () => {
   const [commentDraft, setCommentDraft] = useState('');
   const [commentError, setCommentError] = useState<string | null>(null);
 
-  // Scene-adaptive mood tracking state
+  // Scene-adaptive mood tracking state & debounced middleware
   const [activeParagraphIdx, setActiveParagraphIdx] = useState(0);
   const [detectedMood, setDetectedMood] = useState<SceneMood>('neutral');
   const [moodPreviewActive, setMoodPreviewActive] = useState(false);
+  const activeIdxRef = useRef(0);
+  const lastRecordedPercentRef = useRef(-1);
+  const audioMiddlewareRef = useRef<NarrativeAudioMiddleware | null>(null);
+  if (!audioMiddlewareRef.current) {
+    audioMiddlewareRef.current = new NarrativeAudioMiddleware();
+  }
 
   const chapterData = getChapter(routeParams.slug || '', routeParams.chapterNumber || 1);
   const storySlug = routeParams.slug || '';
@@ -204,46 +228,67 @@ export const ReaderView: React.FC = () => {
 
   useEffect(() => {
     return () => {
+      audioMiddlewareRef.current?.dispose();
       ambientAudio.stop();
       if (ttsAudioRef.current) {
         ttsAudioRef.current.pause();
       }
+      if (focusTimerRef.current) {
+        window.clearTimeout(focusTimerRef.current);
+      }
     };
   }, []);
 
-  // Scroll depth tracking
+  // Scroll depth tracking throttled per animation frame to avoid jank while reading
   useEffect(() => {
-    const handleScroll = () => {
+    let rafId: number | null = null;
+    const updateScroll = () => {
+      rafId = null;
       const totalHeight = document.documentElement.scrollHeight - window.innerHeight;
       if (totalHeight > 0 && chapterData) {
         const current = (window.scrollY / totalHeight) * 100;
         const bounded = Math.min(100, Math.max(0, current));
-        setScrollProgress(bounded);
+        const rounded = Math.round(bounded);
 
-        const accessible = !chapterLocked && hasAccessToChapter(chapterData.story, chapterData.chapter);
-        if (accessible) {
-          recordReadingProgress(
-            chapterData.story.id,
-            chapterData.chapter.id,
-            chapterData.chapter.chapterNumber,
-            Math.round(bounded)
-          );
-          if (
-            bounded >= 92 &&
-            !user.readingGoal.completedChapterIds?.includes(chapterData.chapter.id)
-          ) {
-            const newlyLogged = logChapterCompleted(chapterData.chapter.id);
-            if (newlyLogged) {
-              setAutoCompletedToast(true);
-              window.setTimeout(() => setAutoCompletedToast(false), 3800);
+        if (rounded !== lastRecordedPercentRef.current) {
+          lastRecordedPercentRef.current = rounded;
+          setScrollProgress(rounded);
+
+          const accessible = !chapterLocked && hasAccessToChapter(chapterData.story, chapterData.chapter);
+          if (accessible) {
+            recordReadingProgress(
+              chapterData.story.id,
+              chapterData.chapter.id,
+              chapterData.chapter.chapterNumber,
+              rounded
+            );
+            if (
+              bounded >= 92 &&
+              !user.readingGoal.completedChapterIds?.includes(chapterData.chapter.id)
+            ) {
+              const newlyLogged = logChapterCompleted(chapterData.chapter.id);
+              if (newlyLogged) {
+                setAutoCompletedToast(true);
+                window.setTimeout(() => setAutoCompletedToast(false), 3800);
+              }
             }
           }
         }
       }
     };
 
+    const handleScroll = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(updateScroll);
+    };
+
     window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => window.removeEventListener('scroll', handleScroll);
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+    };
   }, [
     chapterData,
     chapterLocked,
@@ -257,12 +302,20 @@ export const ReaderView: React.FC = () => {
     setCompanionReply(null);
     setCompanionError(null);
     setEditingParagraphIdx(null);
+    setEditingHighlightId(null);
+    setPendingSelection(null);
     setBookmarkingParagraphIdx(null);
     setBookmarksDrawerOpen(false);
+    setHighlightsDrawerOpen(false);
     setFocusedParagraphIdx(null);
+    setFocusedHighlightId(null);
     setAutoCompletedToast(false);
+    activeIdxRef.current = 0;
+    lastRecordedPercentRef.current = -1;
     setActiveParagraphIdx(0);
+    setDetectedMood('neutral');
     setMoodPreviewActive(false);
+    audioMiddlewareRef.current?.reset();
     setTtsError(null);
     setTtsCurrentTime(0);
     setTtsDuration(0);
@@ -289,6 +342,188 @@ export const ReaderView: React.FC = () => {
       }
     };
   }, [ttsAudioSrc]);
+
+  const activeChapter = serverChapter || chapterData?.chapter;
+  const activeParagraphs = activeChapter?.content || [];
+  const activeIsAccessible = Boolean(
+    chapterData && activeChapter && !chapterLocked && hasAccessToChapter(chapterData.story, activeChapter)
+  );
+  const activeParagraphBookmarks = paragraphBookmarks
+    .filter(b => b.chapterId === (activeChapter?.id || ''))
+    .sort((a, b) => a.paragraphIndex - b.paragraphIndex);
+
+  const jumpToParagraph = (paragraphIdx: number, openLabelEditor = false, highlightId?: string) => {
+    setBookmarksDrawerOpen(false);
+    setHighlightsDrawerOpen(false);
+    const el =
+      document.getElementById(`paragraph-${paragraphIdx}`) ||
+      document.querySelector<HTMLElement>(`[data-paragraph-idx="${paragraphIdx}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setFocusedParagraphIdx(paragraphIdx);
+    setFocusedHighlightId(highlightId || null);
+    if (focusTimerRef.current) {
+      window.clearTimeout(focusTimerRef.current);
+    }
+    focusTimerRef.current = window.setTimeout(() => {
+      setFocusedParagraphIdx(null);
+      setFocusedHighlightId(null);
+    }, 2800);
+
+    if (openLabelEditor) {
+      const existing = activeParagraphBookmarks.find(b => b.paragraphIndex === paragraphIdx);
+      setBookmarkLabelDraft(existing?.label || '');
+      setBookmarkingParagraphIdx(paragraphIdx);
+      setEditingParagraphIdx(null);
+      setEditingHighlightId(null);
+    }
+  };
+
+  // Automatically scroll to ?paragraph=N (and optional ?highlight=ID) when arriving from a saved bookmark or note deep link
+  useEffect(() => {
+    const targetPara = routeParams.paragraph;
+    if (
+      typeof targetPara !== 'number' ||
+      chapterLoading ||
+      !activeIsAccessible ||
+      targetPara < 0 ||
+      targetPara >= activeParagraphs.length
+    ) {
+      return;
+    }
+    const raf = window.requestAnimationFrame(() => {
+      jumpToParagraph(targetPara, false, routeParams.highlight);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [routeParams.paragraph, routeParams.highlight, chapterLoading, activeIsAccessible, activeParagraphs.length, chapterId]);
+
+  // Observe visible paragraph so Scene Mood (Auto) updates activeIdx only when settled on a new paragraph
+  useEffect(() => {
+    if (!activeIsAccessible || activeParagraphs.length === 0) {
+      setDetectedMood('neutral');
+      return;
+    }
+
+    const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-paragraph-idx]'));
+    if (elements.length === 0 || typeof IntersectionObserver === 'undefined') {
+      return;
+    }
+
+    const visibleScores = new Map<number, number>();
+    let focalRafId: number | null = null;
+
+    const commitFocalParagraph = () => {
+      focalRafId = null;
+      if (visibleScores.size === 0) return;
+      let bestIdx = activeIdxRef.current;
+      let bestRatio = -1;
+      for (const [idx, ratio] of visibleScores.entries()) {
+        if (ratio > bestRatio) {
+          bestRatio = ratio;
+          bestIdx = idx;
+        }
+      }
+      if (bestIdx !== activeIdxRef.current) {
+        activeIdxRef.current = bestIdx;
+        setActiveParagraphIdx(bestIdx);
+      }
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const idx = Number(entry.target.getAttribute('data-paragraph-idx'));
+          if (!Number.isFinite(idx)) continue;
+          if (entry.isIntersecting) {
+            visibleScores.set(idx, entry.intersectionRatio);
+          } else {
+            visibleScores.delete(idx);
+          }
+        }
+        if (focalRafId === null && visibleScores.size > 0) {
+          focalRafId = window.requestAnimationFrame(commitFocalParagraph);
+        }
+      },
+      {
+        rootMargin: '-22% 0px -42% 0px',
+        threshold: [0.15, 0.5, 0.85]
+      }
+    );
+
+    elements.forEach((el) => observer.observe(el));
+    return () => {
+      observer.disconnect();
+      if (focalRafId !== null) {
+        window.cancelAnimationFrame(focalRafId);
+      }
+    };
+  }, [activeIsAccessible, chapterId, activeParagraphs.length]);
+
+  // Evaluate mood transitions through debounced NarrativeAudioMiddleware (hysteresis prevents rapid stutters)
+  const prevAdaptiveKeyRef = useRef('');
+  useEffect(() => {
+    const middleware = audioMiddlewareRef.current;
+    if (!middleware) return;
+
+    const adaptiveEnabled =
+      activeIsAccessible &&
+      activeParagraphs.length > 0 &&
+      readerSettings.ambientSound &&
+      readerSettings.ambientTrack === 'adaptive';
+
+    if (moodPreviewActive) {
+      setDetectedMood('suspense');
+      if (readerSettings.ambientSound && readerSettings.ambientTrack === 'adaptive') {
+        ambientAudio.setSceneMood('suspense', readerSettings.ambientVolume, 0.75);
+      }
+      return;
+    }
+
+    if (!activeIsAccessible || activeParagraphs.length === 0) {
+      middleware.evaluate([], 0, {
+        enabled: false,
+        immediate: true,
+        onApply: () => {
+          setDetectedMood('neutral');
+          if (readerSettings.ambientSound && readerSettings.ambientTrack === 'adaptive') {
+            ambientAudio.setSceneMood('neutral', readerSettings.ambientVolume, 0.2);
+          }
+        }
+      });
+      return;
+    }
+
+    const modeKey = `${chapterId}:${adaptiveEnabled}`;
+    const isModeOrChapterChange = prevAdaptiveKeyRef.current !== modeKey;
+    prevAdaptiveKeyRef.current = modeKey;
+
+    middleware.evaluate(activeParagraphs, activeParagraphIdx, {
+      enabled: adaptiveEnabled,
+      immediate: isModeOrChapterChange,
+      debounceMs: 550,
+      minIntensityDelta: 0.22,
+      cooldownMs: 1200,
+      onApply: (analysis) => {
+        const currentText = activeParagraphs[analysis.paragraphIndex] || '';
+        const sceneMood = adaptiveEnabled ? toSceneMood(analysis, currentText) : 'neutral';
+        setDetectedMood(sceneMood);
+        if (adaptiveEnabled) {
+          const scaledVolume = readerSettings.ambientVolume * (0.68 + analysis.intensity * 0.32);
+          ambientAudio.setSceneMood(sceneMood, scaledVolume, analysis.intensity);
+        }
+      }
+    });
+  }, [
+    chapterId,
+    activeIsAccessible,
+    activeParagraphs,
+    activeParagraphIdx,
+    moodPreviewActive,
+    readerSettings.ambientSound,
+    readerSettings.ambientTrack,
+    readerSettings.ambientVolume
+  ]);
 
   const askLorekeeper = async (mode: 'recap' | 'ask', customQuestion?: string) => {
     if (!chapterData) return;
@@ -438,136 +673,14 @@ export const ReaderView: React.FC = () => {
   const paragraphs = chapter.content || [];
   const isBookmarked = user.bookmarkedChapterIds.includes(chapter.id);
   const chapterHighlights = highlights.filter(h => h.chapterId === chapter.id);
-  const chapterParagraphBookmarks = paragraphBookmarks
-    .filter(b => b.chapterId === chapter.id)
-    .sort((a, b) => a.paragraphIndex - b.paragraphIndex);
+  const storyOtherHighlights = highlights
+    .filter(h => h.storyId === story.id && h.chapterId !== chapter.id)
+    .sort((a, b) => a.chapterNumber - b.chapterNumber || a.paragraphIndex - b.paragraphIndex);
+  const chapterParagraphBookmarks = activeParagraphBookmarks;
   const storyOtherParagraphBookmarks = paragraphBookmarks
     .filter(b => b.storyId === story.id && b.chapterId !== chapter.id)
     .sort((a, b) => a.chapterNumber - b.chapterNumber || a.paragraphIndex - b.paragraphIndex);
   const activeComments = chapterComments.filter(c => c.chapterId === chapter.id);
-
-  const jumpToParagraph = (paragraphIdx: number, openLabelEditor = false) => {
-    setBookmarksDrawerOpen(false);
-    const el =
-      document.getElementById(`paragraph-${paragraphIdx}`) ||
-      document.querySelector<HTMLElement>(`[data-paragraph-idx="${paragraphIdx}"]`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-    setFocusedParagraphIdx(paragraphIdx);
-    if (focusTimerRef.current) {
-      window.clearTimeout(focusTimerRef.current);
-    }
-    focusTimerRef.current = window.setTimeout(() => {
-      setFocusedParagraphIdx(null);
-    }, 2400);
-
-    if (openLabelEditor) {
-      const existing = chapterParagraphBookmarks.find(b => b.paragraphIndex === paragraphIdx);
-      setBookmarkLabelDraft(existing?.label || '');
-      setBookmarkingParagraphIdx(paragraphIdx);
-      setEditingParagraphIdx(null);
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (focusTimerRef.current) {
-        window.clearTimeout(focusTimerRef.current);
-      }
-    };
-  }, []);
-
-  // Automatically scroll to ?paragraph=N when arriving from a saved bookmark deep link
-  useEffect(() => {
-    const targetPara = routeParams.paragraph;
-    if (
-      typeof targetPara !== 'number' ||
-      chapterLoading ||
-      !isAccessible ||
-      targetPara < 0 ||
-      targetPara >= paragraphs.length
-    ) {
-      return;
-    }
-    const raf = window.requestAnimationFrame(() => {
-      jumpToParagraph(targetPara);
-    });
-    return () => window.cancelAnimationFrame(raf);
-  }, [routeParams.paragraph, chapterLoading, isAccessible, paragraphs.length, chapter.id]);
-
-  // Observe visible paragraph so Scene Mood (Auto) activates only on tense/suspense spots
-  useEffect(() => {
-    if (!isAccessible || paragraphs.length === 0) {
-      setDetectedMood('neutral');
-      return;
-    }
-
-    const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-paragraph-idx]'));
-    if (elements.length === 0 || typeof IntersectionObserver === 'undefined') {
-      return;
-    }
-
-    const visibleScores = new Map<number, number>();
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const idx = Number(entry.target.getAttribute('data-paragraph-idx'));
-          if (!Number.isFinite(idx)) continue;
-          if (entry.isIntersecting) {
-            visibleScores.set(idx, entry.intersectionRatio);
-          } else {
-            visibleScores.delete(idx);
-          }
-        }
-        if (visibleScores.size > 0) {
-          let bestIdx = activeParagraphIdx;
-          let bestRatio = -1;
-          for (const [idx, ratio] of visibleScores.entries()) {
-            if (ratio > bestRatio) {
-              bestRatio = ratio;
-              bestIdx = idx;
-            }
-          }
-          setActiveParagraphIdx(bestIdx);
-        }
-      },
-      {
-        rootMargin: '-22% 0px -42% 0px',
-        threshold: [0.1, 0.35, 0.65, 0.9]
-      }
-    );
-
-    elements.forEach((el) => observer.observe(el));
-    return () => observer.disconnect();
-  }, [isAccessible, chapter.id, paragraphs.length]);
-
-  // Compute & apply active paragraph mood when Adaptive Mood Audio is allowed
-  useEffect(() => {
-    if (!isAccessible || paragraphs.length === 0) {
-      setDetectedMood('neutral');
-      if (readerSettings.ambientSound && readerSettings.ambientTrack === 'adaptive' && !moodPreviewActive) {
-        ambientAudio.setSceneMood('neutral', readerSettings.ambientVolume);
-      }
-      return;
-    }
-
-    const currentText = paragraphs[Math.min(activeParagraphIdx, paragraphs.length - 1)] || '';
-    const mood = moodPreviewActive ? 'suspense' : detectSceneMood(currentText);
-    setDetectedMood(mood);
-
-    if (readerSettings.ambientSound && readerSettings.ambientTrack === 'adaptive') {
-      ambientAudio.setSceneMood(mood, readerSettings.ambientVolume);
-    }
-  }, [
-    isAccessible,
-    paragraphs,
-    activeParagraphIdx,
-    moodPreviewActive,
-    readerSettings.ambientSound,
-    readerSettings.ambientTrack,
-    readerSettings.ambientVolume
-  ]);
 
   const themeStyles = {
     day: {
@@ -602,16 +715,88 @@ export const ReaderView: React.FC = () => {
   const prevChapter = story.chapters.find(c => c.chapterNumber === chapter.chapterNumber - 1);
   const nextChapter = story.chapters.find(c => c.chapterNumber === chapter.chapterNumber + 1);
 
-  const openParagraphEditor = (idx: number) => {
-    if (editingParagraphIdx === idx) {
+  const openParagraphEditor = (idx: number, highlightToEdit?: TextHighlight) => {
+    if (!highlightToEdit && editingParagraphIdx === idx && editingHighlightId === null && !pendingSelection) {
       setEditingParagraphIdx(null);
       return;
     }
+    if (highlightToEdit && editingHighlightId === highlightToEdit.id && editingParagraphIdx === idx) {
+      setEditingParagraphIdx(null);
+      setEditingHighlightId(null);
+      return;
+    }
     setBookmarkingParagraphIdx(null);
-    const existing = chapterHighlights.find(h => h.paragraphIndex === idx);
-    setSelectedColor(existing?.color || 'terracotta');
-    setNoteDraft(existing?.note || '');
+    const fallbackBlock = highlightToEdit || chapterHighlights.find(h => h.paragraphIndex === idx && typeof h.startOffset !== 'number');
+    setEditingHighlightId(fallbackBlock?.id || null);
+    setPendingSelection(null);
+    setSelectedColor(fallbackBlock?.color || 'terracotta');
+    setNoteDraft(fallbackBlock?.note || '');
     setEditingParagraphIdx(idx);
+  };
+
+  const handleParagraphSelectionRelease = () => {
+    if (typeof window === 'undefined') return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+    const startEl =
+      range.startContainer instanceof HTMLElement
+        ? range.startContainer.closest<HTMLElement>('[data-paragraph-text-idx]')
+        : range.startContainer.parentElement?.closest<HTMLElement>('[data-paragraph-text-idx]');
+    const endEl =
+      range.endContainer instanceof HTMLElement
+        ? range.endContainer.closest<HTMLElement>('[data-paragraph-text-idx]')
+        : range.endContainer.parentElement?.closest<HTMLElement>('[data-paragraph-text-idx]');
+
+    if (!startEl || !endEl || startEl !== endEl) return;
+    const paraIdx = Number(startEl.getAttribute('data-paragraph-text-idx'));
+    if (!Number.isInteger(paraIdx) || paraIdx < 0) return;
+
+    const measured = measureSelectionInParagraphElement(startEl, range);
+    if (!measured) return;
+
+    setBookmarkingParagraphIdx(null);
+    setEditingHighlightId(null);
+    setEditingParagraphIdx(null);
+    setPendingSelection({
+      paragraphIndex: paraIdx,
+      ...measured,
+    });
+  };
+
+  const commitQuickSelectionHighlight = (
+    selection: { paragraphIndex: number; startOffset: number; endOffset: number; selectedText: string },
+    color: HighlightColor
+  ) => {
+    const paragraphText = paragraphs[selection.paragraphIndex] || selection.selectedText;
+    saveHighlight({
+      storyId: story.id,
+      storyTitle: story.title,
+      storySlug: story.slug,
+      chapterId: chapter.id,
+      chapterNumber: chapter.chapterNumber,
+      chapterTitle: chapter.title,
+      paragraphIndex: selection.paragraphIndex,
+      excerpt: paragraphText,
+      selectedText: selection.selectedText,
+      startOffset: selection.startOffset,
+      endOffset: selection.endOffset,
+      color,
+    });
+    setPendingSelection(null);
+    window.getSelection()?.removeAllRanges();
+  };
+
+  const openSelectionNoteComposer = (
+    selection: { paragraphIndex: number; startOffset: number; endOffset: number; selectedText: string },
+    initialColor: HighlightColor = 'terracotta'
+  ) => {
+    setSelectedColor(initialColor);
+    setNoteDraft('');
+    setEditingHighlightId(null);
+    setEditingParagraphIdx(selection.paragraphIndex);
+    window.getSelection()?.removeAllRanges();
   };
 
   const openBookmarkEditor = (idx: number) => {
@@ -620,6 +805,8 @@ export const ReaderView: React.FC = () => {
       return;
     }
     setEditingParagraphIdx(null);
+    setEditingHighlightId(null);
+    setPendingSelection(null);
     const existing = chapterParagraphBookmarks.find(b => b.paragraphIndex === idx);
     setBookmarkLabelDraft(existing?.label || '');
     setBookmarkingParagraphIdx(idx);
@@ -642,6 +829,8 @@ export const ReaderView: React.FC = () => {
       excerpt: paragraphText
     });
     setEditingParagraphIdx(null);
+    setEditingHighlightId(null);
+    setPendingSelection(null);
     setBookmarkLabelDraft('');
     setBookmarkingParagraphIdx(idx);
   };
@@ -758,6 +947,7 @@ export const ReaderView: React.FC = () => {
               type="button"
               onClick={() => {
                 setBookmarksDrawerOpen(!bookmarksDrawerOpen);
+                setHighlightsDrawerOpen(false);
                 setControlsOpen(false);
                 setAudioDrawerOpen(false);
                 setCompanionOpen(false);
@@ -782,8 +972,35 @@ export const ReaderView: React.FC = () => {
             <button
               type="button"
               onClick={() => {
+                setHighlightsDrawerOpen(!highlightsDrawerOpen);
+                setBookmarksDrawerOpen(false);
+                setControlsOpen(false);
+                setAudioDrawerOpen(false);
+                setCompanionOpen(false);
+              }}
+              aria-expanded={highlightsDrawerOpen}
+              aria-label="Highlights and reading notes"
+              className={`flex items-center gap-1 px-2 py-1 rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                highlightsDrawerOpen || chapterHighlights.length > 0
+                  ? 'text-[#C85A32] bg-[#C85A32]/12 font-semibold'
+                  : 'opacity-80 hover:opacity-100 hover:text-[#C85A32]'
+              }`}
+            >
+              <Highlighter className="w-4 h-4" />
+              {chapterHighlights.length > 0 && (
+                <span className="text-[11px] font-semibold tabular-nums">
+                  {chapterHighlights.length}
+                </span>
+              )}
+              <span className="hidden lg:inline">Notes</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
                 setAudioDrawerOpen(!audioDrawerOpen);
                 setBookmarksDrawerOpen(false);
+                setHighlightsDrawerOpen(false);
                 setControlsOpen(false);
                 setCompanionOpen(false);
               }}
@@ -810,6 +1027,7 @@ export const ReaderView: React.FC = () => {
               onClick={() => {
                 setCompanionOpen(!companionOpen);
                 setBookmarksDrawerOpen(false);
+                setHighlightsDrawerOpen(false);
                 setControlsOpen(false);
                 setAudioDrawerOpen(false);
               }}
@@ -830,6 +1048,7 @@ export const ReaderView: React.FC = () => {
               onClick={() => {
                 setControlsOpen(!controlsOpen);
                 setBookmarksDrawerOpen(false);
+                setHighlightsDrawerOpen(false);
                 setCompanionOpen(false);
                 setAudioDrawerOpen(false);
               }}
@@ -842,6 +1061,163 @@ export const ReaderView: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Highlights & Personal Annotations Drawer */}
+        {highlightsDrawerOpen && (
+          <div className="max-w-xl mx-auto mt-2 p-5 rounded-xl border transition-all text-xs space-y-4 shadow-xl bg-white dark:bg-[#1E111E] sepia:bg-[#EDE3D5] border-[#C85A32]/25 text-slate-800 dark:text-slate-100 sepia:text-[#2C1E18]">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Highlighter className="w-4 h-4 text-[#C85A32]" />
+                <div>
+                  <span className="font-display text-sm font-bold block">Highlights &amp; Annotations</span>
+                  <span className="text-[11px] opacity-65">
+                    Select any text while reading to highlight or attach thoughts
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHighlightsDrawerOpen(false)}
+                className="text-xs text-[#C85A32] font-semibold hover:underline cursor-pointer"
+              >
+                Close &times;
+              </button>
+            </div>
+
+            <div className="p-3 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] sepia:bg-[#F4ECE1] border border-current/10 flex flex-wrap items-center justify-between gap-2">
+              {isAuthenticated ? (
+                <div className="flex items-center gap-2 text-[11px]">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    Notes saved to <strong className="text-[#C85A32]">{getDisplayName(user)}</strong>&rsquo;s account
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <span className="text-[11px] opacity-75">
+                    Saved locally on this browser. Sign in to sync notes to your account.
+                  </span>
+                  <a
+                    href={buildHref('account', {
+                      redirect: buildHref('reader', { slug: story.slug, chapterNumber: chapter.chapterNumber })
+                    })}
+                    onClick={(e) => {
+                      setHighlightsDrawerOpen(false);
+                      handleLink(e, 'account', {
+                        redirect: buildHref('reader', { slug: story.slug, chapterNumber: chapter.chapterNumber })
+                      });
+                    }}
+                    className="px-3 py-1 rounded-md bg-[#C85A32] text-white font-semibold text-[11px] shrink-0"
+                  >
+                    Sign In to Sync
+                  </a>
+                </>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-semibold opacity-75">
+                <span>Annotated Passages in Chapter {chapter.chapterNumber}</span>
+                <span className="tabular-nums">{chapterHighlights.length}</span>
+              </div>
+
+              {chapterHighlights.length === 0 ? (
+                <p className="p-3.5 rounded-lg border border-dashed border-current/15 text-[11px] opacity-70 leading-relaxed">
+                  Select a phrase in the text or click <strong className="text-[#C85A32]">Highlight / Note</strong> beside any paragraph to save a passage thought.
+                </p>
+              ) : (
+                <div className="divide-y divide-current/10 border border-current/12 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
+                  {chapterHighlights.map((hl) => (
+                    <div key={hl.id} className="p-3 space-y-1.5 hover:bg-current/[0.03] transition-colors">
+                      <div className="flex items-center justify-between gap-2 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => jumpToParagraph(hl.paragraphIndex, false, hl.id)}
+                          className="flex items-center gap-1.5 font-semibold text-[#C85A32] hover:underline cursor-pointer"
+                        >
+                          <span className={`w-2.5 h-2.5 rounded-full ${HIGHLIGHT_STYLES[hl.color].dot}`} />
+                          <span className="font-mono tabular-nums">Para. {hl.paragraphIndex + 1}</span>
+                          {hl.selectedText && <span className="opacity-70 font-sans-ui font-normal">&middot; Selected Passage</span>}
+                        </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHighlightsDrawerOpen(false);
+                              jumpToParagraph(hl.paragraphIndex, false, hl.id);
+                              openParagraphEditor(hl.paragraphIndex, hl);
+                            }}
+                            className="text-[11px] font-semibold text-[#C85A32] hover:underline cursor-pointer"
+                          >
+                            {hl.note ? 'Edit Note' : 'Add Note'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeHighlight(hl.id)}
+                            aria-label="Remove highlight"
+                            className="p-1 opacity-60 hover:opacity-100 hover:text-red-500 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <p className="font-reader text-xs italic opacity-85 line-clamp-2">
+                        &ldquo;{hl.selectedText || hl.excerpt}&rdquo;
+                      </p>
+
+                      {hl.note && (
+                        <p className="text-[11px] px-2.5 py-1.5 rounded bg-current/[0.04] leading-snug">
+                          <strong className="text-[#C85A32] mr-1">Thought:</strong>
+                          {hl.note}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {storyOtherHighlights.length > 0 && (
+              <div className="space-y-1.5 pt-2 border-t border-current/10">
+                <span className="text-[11px] font-semibold opacity-70 block">
+                  Notes in Other Chapters of {story.title}
+                </span>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {storyOtherHighlights.map((hl) => (
+                    <a
+                      key={hl.id}
+                      href={buildHref('reader', {
+                        slug: story.slug,
+                        chapterNumber: hl.chapterNumber,
+                        paragraph: hl.paragraphIndex,
+                        highlight: hl.id
+                      })}
+                      onClick={(e) => {
+                        setHighlightsDrawerOpen(false);
+                        handleLink(e, 'reader', {
+                          slug: story.slug,
+                          chapterNumber: hl.chapterNumber,
+                          paragraph: hl.paragraphIndex,
+                          highlight: hl.id
+                        });
+                      }}
+                      className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded hover:bg-current/[0.04] text-[11px]"
+                    >
+                      <span className="truncate">
+                        <span className="font-semibold text-[#C85A32] tabular-nums">
+                          Ch. {hl.chapterNumber} &middot; Para. {hl.paragraphIndex + 1}
+                        </span>
+                        {hl.note ? ` — ${hl.note}` : ` — “${hl.selectedText || hl.excerpt}”`}
+                      </span>
+                      <span className="text-[#C85A32] font-semibold shrink-0">Revisit &rarr;</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Bookmarks & Marked Sections Drawer */}
         {bookmarksDrawerOpen && (
@@ -1442,16 +1818,27 @@ export const ReaderView: React.FC = () => {
             </div>
           ) : isAccessible ? (
             <div
+              onMouseUp={handleParagraphSelectionRelease}
+              onTouchEnd={handleParagraphSelectionRelease}
               className={`${fontClass} space-y-6 leading-relaxed`}
               style={{ fontSize: `${readerSettings.fontSize}px` }}
             >
               {paragraphs.map((paragraph, index) => {
-                const existingHighlight = chapterHighlights.find(h => h.paragraphIndex === index);
-                const hlStyle = existingHighlight ? HIGHLIGHT_STYLES[existingHighlight.color] : null;
+                const paraHighlights = chapterHighlights.filter(h => h.paragraphIndex === index);
+                const blockHighlight = paraHighlights.find(h => typeof h.startOffset !== 'number');
+                const hlStyle = blockHighlight ? HIGHLIGHT_STYLES[blockHighlight.color] : null;
                 const existingBookmark = chapterParagraphBookmarks.find(b => b.paragraphIndex === index);
                 const isEditing = editingParagraphIdx === index;
+                const activeEditTarget =
+                  editingHighlightId !== null
+                    ? paraHighlights.find(h => h.id === editingHighlightId)
+                    : blockHighlight;
+                const paraSelection =
+                  pendingSelection && pendingSelection.paragraphIndex === index ? pendingSelection : null;
                 const isBookmarkEditing = bookmarkingParagraphIdx === index;
                 const isFocused = focusedParagraphIdx === index;
+                const segments = resolveParagraphHighlightSegments(paragraph, paraHighlights);
+                const hasAnyHighlight = paraHighlights.length > 0;
 
                 return (
                   <div
@@ -1460,6 +1847,53 @@ export const ReaderView: React.FC = () => {
                     data-paragraph-idx={index}
                     className="group relative space-y-2 scroll-mt-24"
                   >
+                    {paraSelection && !isEditing && (
+                      <div
+                        role="region"
+                        aria-label="Highlight selected passage"
+                        className={`p-3 rounded-xl border text-xs font-sans-ui flex flex-wrap items-center justify-between gap-3 shadow-lg ${themeStyles.panel}`}
+                      >
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-[#C85A32] font-semibold block">
+                            Selected Text
+                          </span>
+                          <p className="font-reader italic truncate opacity-85">
+                            &ldquo;{paraSelection.selectedText}&rdquo;
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-1.5 mr-1">
+                            {(['terracotta', 'gold', 'sage'] as const).map((color) => (
+                              <button
+                                key={color}
+                                type="button"
+                                onClick={() => commitQuickSelectionHighlight(paraSelection, color)}
+                                title={`Highlight ${HIGHLIGHT_STYLES[color].label}`}
+                                aria-label={`Highlight selection in ${HIGHLIGHT_STYLES[color].label}`}
+                                className={`w-5 h-5 rounded-full ${HIGHLIGHT_STYLES[color].dot} hover:scale-110 transition-transform cursor-pointer ring-1 ring-black/15`}
+                              />
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => openSelectionNoteComposer(paraSelection, 'terracotta')}
+                            className="px-3 py-1.5 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold cursor-pointer inline-flex items-center gap-1"
+                          >
+                            <Highlighter className="w-3.5 h-3.5" />
+                            <span>Highlight &amp; Add Note</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPendingSelection(null)}
+                            className="px-2 py-1 opacity-65 hover:opacity-100 cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <div
                       className={`rounded-lg transition-all duration-300 ${
                         hlStyle
@@ -1507,17 +1941,41 @@ export const ReaderView: React.FC = () => {
                       )}
 
                       <p
+                        data-paragraph-text-idx={index}
                         className={
                           index === 0
                             ? 'first-letter:text-5xl first-letter:font-display first-letter:font-bold first-letter:float-left first-letter:mr-3 first-letter:text-[#C85A32]'
                             : ''
                         }
                       >
-                        {paragraph}
+                        {segments.map((seg, segIdx) => {
+                          if (!seg.highlight) {
+                            return <React.Fragment key={segIdx}>{seg.text}</React.Fragment>;
+                          }
+                          const segHl = seg.highlight;
+                          const isSpotlight = focusedHighlightId === segHl.id;
+                          return (
+                            <mark
+                              key={segHl.id + '-' + segIdx}
+                              data-highlight-id={segHl.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openParagraphEditor(index, segHl);
+                              }}
+                              title={segHl.note ? `Note: ${segHl.note}` : 'Click to add or edit note'}
+                              className={`cursor-pointer underline decoration-2 underline-offset-4 transition-all ${HIGHLIGHT_STYLES[segHl.color].mark} ${
+                                isSpotlight ? 'ring-2 ring-[#C85A32] rounded' : ''
+                              }`}
+                            >
+                              {seg.text}
+                            </mark>
+                          );
+                        })}
                       </p>
+
                       <div
                         className={`mt-1.5 flex items-center justify-end gap-4 transition-opacity ${
-                          existingBookmark || existingHighlight || isEditing || isBookmarkEditing
+                          existingBookmark || hasAnyHighlight || isEditing || isBookmarkEditing
                             ? 'opacity-100'
                             : 'opacity-70 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100'
                         }`}
@@ -1536,23 +1994,49 @@ export const ReaderView: React.FC = () => {
                           className="text-[11px] font-sans-ui text-[#C85A32] hover:underline flex items-center gap-1 cursor-pointer"
                         >
                           <Highlighter className="w-3 h-3" />
-                          <span>{existingHighlight ? 'Edit Highlight' : 'Highlight / Note'}</span>
+                          <span>{blockHighlight ? 'Edit Note' : 'Highlight / Note'}</span>
                         </button>
                       </div>
                     </div>
 
-                    {existingHighlight?.note && !isEditing && (
-                      <div className="ml-4 pl-3 border-l border-current/25 text-xs font-sans-ui italic opacity-80 flex items-start justify-between gap-2">
-                        <span>Margin Note: &ldquo;{existingHighlight.note}&rdquo;</span>
-                        <button
-                          type="button"
-                          onClick={() => openParagraphEditor(index)}
-                          className="text-[11px] font-semibold not-italic text-[#C85A32] hover:underline shrink-0 cursor-pointer"
-                        >
-                          Edit
-                        </button>
-                      </div>
-                    )}
+                    {!isEditing &&
+                      paraHighlights
+                        .filter((h) => Boolean(h.note || h.selectedText))
+                        .map((hl) => (
+                          <div
+                            key={hl.id}
+                            className={`ml-3 pl-3 py-1.5 border-l-2 text-xs font-sans-ui flex items-start justify-between gap-2 rounded-r transition-colors ${
+                              hl.color === 'gold'
+                                ? 'border-amber-500'
+                                : hl.color === 'sage'
+                                ? 'border-emerald-600'
+                                : 'border-[#C85A32]'
+                            } ${focusedHighlightId === hl.id ? 'bg-[#C85A32]/12 ring-1 ring-[#C85A32]/50' : 'bg-current/[0.025]'}`}
+                          >
+                            <div className="min-w-0 space-y-0.5">
+                              {hl.selectedText && (
+                                <span className="text-[11px] font-reader italic opacity-75 block truncate">
+                                  &ldquo;{hl.selectedText}&rdquo;
+                                </span>
+                              )}
+                              {hl.note ? (
+                                <span className="block opacity-90">
+                                  <strong className="text-[#C85A32] mr-1">Note:</strong>
+                                  {hl.note}
+                                </span>
+                              ) : (
+                                <span className="opacity-65 italic">Highlighted passage (no note yet)</span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openParagraphEditor(index, hl)}
+                              className="text-[11px] font-semibold text-[#C85A32] hover:underline shrink-0 cursor-pointer"
+                            >
+                              {hl.note ? 'Edit' : 'Add Note'}
+                            </button>
+                          </div>
+                        ))}
 
                     {isBookmarkEditing && (
                       <form
@@ -1630,7 +2114,11 @@ export const ReaderView: React.FC = () => {
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-semibold flex items-center gap-1.5">
                             <Highlighter className="w-3.5 h-3.5 text-[#C85A32]" />
-                            <span>Highlight Passage &amp; Margin Note</span>
+                            <span>
+                              {activeEditTarget?.selectedText || paraSelection?.selectedText
+                                ? 'Annotate Selected Passage'
+                                : 'Highlight Passage & Margin Note'}
+                            </span>
                           </span>
                           <div className="flex items-center gap-1.5">
                             {(['terracotta', 'gold', 'sage'] as const).map(color => (
@@ -1647,9 +2135,15 @@ export const ReaderView: React.FC = () => {
                           </div>
                         </div>
 
+                        {(activeEditTarget?.selectedText || paraSelection?.selectedText) && (
+                          <blockquote className="p-2.5 rounded-lg bg-current/[0.04] border-l-2 border-[#C85A32] font-reader text-xs italic opacity-85">
+                            &ldquo;{activeEditTarget?.selectedText || paraSelection?.selectedText}&rdquo;
+                          </blockquote>
+                        )}
+
                         <div className="flex items-center justify-between gap-2">
                           <label htmlFor={`note-draft-${index}`} className="font-semibold text-[11px] opacity-75">
-                            Margin Note
+                            Personal Note ({isAuthenticated ? 'Saved to Account' : 'Saved Locally'})
                           </label>
                           <VoiceDictationButton
                             compact
@@ -1663,17 +2157,18 @@ export const ReaderView: React.FC = () => {
                           rows={2}
                           value={noteDraft}
                           onChange={(e) => setNoteDraft(e.target.value)}
-                          placeholder="Write an optional margin note..."
+                          placeholder="Write your thoughts on this passage..."
                           className="w-full px-3 py-2 rounded-lg border border-current/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
                         />
 
                         <div className="flex items-center justify-between gap-2">
-                          {existingHighlight ? (
+                          {activeEditTarget ? (
                             <button
                               type="button"
                               onClick={() => {
-                                removeHighlight(existingHighlight.id);
+                                removeHighlight(activeEditTarget.id);
                                 setEditingParagraphIdx(null);
+                                setEditingHighlightId(null);
                               }}
                               className="text-red-600 dark:text-red-400 hover:underline flex items-center gap-1 cursor-pointer"
                             >
@@ -1687,7 +2182,11 @@ export const ReaderView: React.FC = () => {
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => setEditingParagraphIdx(null)}
+                              onClick={() => {
+                                setEditingParagraphIdx(null);
+                                setEditingHighlightId(null);
+                                setPendingSelection(null);
+                              }}
                               className="px-3 py-1.5 rounded-lg border border-current/20 opacity-80 hover:opacity-100 cursor-pointer"
                             >
                               Cancel
@@ -1695,23 +2194,35 @@ export const ReaderView: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => {
-                                saveHighlight({
-                                  storyId: story.id,
-                                  storyTitle: story.title,
-                                  storySlug: story.slug,
-                                  chapterId: chapter.id,
-                                  chapterNumber: chapter.chapterNumber,
-                                  chapterTitle: chapter.title,
-                                  paragraphIndex: index,
-                                  excerpt: paragraph,
-                                  color: selectedColor,
-                                  note: noteDraft.trim() || undefined
-                                });
+                                if (activeEditTarget) {
+                                  updateHighlight(activeEditTarget.id, {
+                                    color: selectedColor,
+                                    note: noteDraft.trim() || null
+                                  });
+                                } else {
+                                  saveHighlight({
+                                    storyId: story.id,
+                                    storyTitle: story.title,
+                                    storySlug: story.slug,
+                                    chapterId: chapter.id,
+                                    chapterNumber: chapter.chapterNumber,
+                                    chapterTitle: chapter.title,
+                                    paragraphIndex: index,
+                                    excerpt: paragraph,
+                                    selectedText: paraSelection?.selectedText,
+                                    startOffset: paraSelection?.startOffset,
+                                    endOffset: paraSelection?.endOffset,
+                                    color: selectedColor,
+                                    note: noteDraft.trim() || undefined
+                                  });
+                                }
                                 setEditingParagraphIdx(null);
+                                setEditingHighlightId(null);
+                                setPendingSelection(null);
                               }}
                               className="px-3.5 py-1.5 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold cursor-pointer"
                             >
-                              Save Highlight
+                              Save Note
                             </button>
                           </div>
                         </div>

@@ -10,10 +10,16 @@ import {
   ArrowLeft,
   ChevronRight,
   ShieldCheck,
-  CheckCircle2
+  CheckCircle2,
+  Clock
 } from 'lucide-react';
 import { StoryTrailerPlayer } from '../components/StoryTrailerPlayer';
 import { VideoTrailerStudio } from '../components/VideoTrailerStudio';
+import {
+  AVERAGE_READING_WPM,
+  estimateChapterReadingTime,
+  summarizeStoryReadingTime
+} from '../utils/readingTime';
 
 export const StoryOverviewView: React.FC = () => {
   const {
@@ -74,6 +80,8 @@ export const StoryOverviewView: React.FC = () => {
       setTimeout(() => setShareCopied(false), 2500);
     }
   };
+
+  const readingSummary = summarizeStoryReadingTime(story.chapters);
 
   return (
     <div className="min-h-screen bg-[#F9F6F0] dark:bg-[#160C16] text-[#2D142C] dark:text-[#F9F6F0] py-12 transition-colors">
@@ -166,6 +174,13 @@ export const StoryOverviewView: React.FC = () => {
               <span>Author: <strong className="text-[#2D142C] dark:text-white">{story.author}</strong></span>
               <span>&middot;</span>
               <span>{story.chapters.length} Chapters</span>
+              <span>&middot;</span>
+              <span className="inline-flex items-center gap-1 font-medium text-[#2D142C] dark:text-white">
+                <Clock className="w-3.5 h-3.5 text-[#C85A32]" />
+                <span>
+                  ~{readingSummary.totalStoryMinutes} min total ({readingSummary.averageWordCount.toLocaleString()} avg words, ~{readingSummary.averageChapterMinutes} min/ch)
+                </span>
+              </span>
               <span>&middot;</span>
               <span>Chapters 1&ndash;{story.freeChaptersCount} Free</span>
               <span>&middot;</span>
@@ -307,7 +322,7 @@ export const StoryOverviewView: React.FC = () => {
                 Chapter Directory ({story.chapters.length})
               </h2>
               <p className="font-sans-ui text-xs text-[#2D142C]/65 dark:text-white/65 mt-0.5">
-                Select any chapter to begin reading. Chapters 1&ndash;{story.freeChaptersCount} are open to everyone.
+                Chapters 1&ndash;{story.freeChaptersCount} are free &middot; Est. reading times calculated at {AVERAGE_READING_WPM} words/min (avg. {readingSummary.averageWordCount.toLocaleString()} words, ~{readingSummary.averageChapterMinutes} min/ch).
               </p>
             </div>
 
@@ -325,6 +340,7 @@ export const StoryOverviewView: React.FC = () => {
           <div className="grid grid-cols-1 divide-y divide-[#2D142C]/10 dark:divide-white/10 bg-white dark:bg-[#1E111E] rounded-xl border border-[#2D142C]/10 dark:border-white/10 shadow-2xs overflow-hidden">
             {story.chapters.map((chapter) => {
               const hasAccess = hasAccessToChapter(story, chapter);
+              const estimate = estimateChapterReadingTime(chapter, readingSummary.averageWordCount);
 
               return (
                 <a
@@ -349,12 +365,19 @@ export const StoryOverviewView: React.FC = () => {
                         &ldquo;{chapter.excerpt}&rdquo;
                       </p>
 
-                      <div className="flex items-center gap-3 text-[11px] text-[#2D142C]/55 dark:text-white/55 font-sans-ui">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#2D142C]/60 dark:text-white/60 font-sans-ui">
                         <span>{chapter.releaseDate}</span>
                         <span>&middot;</span>
-                        <span>{chapter.wordCount.toLocaleString()} words</span>
+                        <span>
+                          {estimate.usedAverageFallback
+                            ? `~${estimate.wordCount.toLocaleString()} avg words`
+                            : `${estimate.wordCount.toLocaleString()} words`}
+                        </span>
                         <span>&middot;</span>
-                        <span>{chapter.readTimeMinutes} min read</span>
+                        <span className="inline-flex items-center gap-1 font-medium text-[#2D142C]/80 dark:text-white/80">
+                          <Clock className="w-3 h-3 text-[#C85A32]" />
+                          <span>Est. {estimate.estimatedMinutes} min read</span>
+                        </span>
                       </div>
                     </div>
                   </div>

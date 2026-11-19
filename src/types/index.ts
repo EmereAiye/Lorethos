@@ -25,6 +25,17 @@ export interface Chapter {
   ambientSoundscape?: string;
 }
 
+export interface StoryTrailerScene {
+  sceneNumber: number;
+  title: string;
+  mood: SceneMood;
+  moodLabel: string;
+  startSec: number;
+  endSec: number;
+  imageUrl: string;
+  caption: string;
+}
+
 export interface Story {
   id: string;
   slug: string;
@@ -54,6 +65,7 @@ export interface Story {
   trailerDuration?: string;
   trailerMood?: SceneMood;
   trailerNarration?: string;
+  trailerScenes?: StoryTrailerScene[];
   chapters: Chapter[];
 }
 
@@ -98,9 +110,13 @@ export interface TextHighlight {
   chapterTitle: string;
   paragraphIndex: number;
   excerpt: string;
+  selectedText?: string;
+  startOffset?: number;
+  endOffset?: number;
   color: HighlightColor;
   note?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ParagraphBookmark {

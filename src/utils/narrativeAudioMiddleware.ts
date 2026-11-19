@@ -1,3 +1,5 @@
+import type { SceneMood } from '../types';
+
 export type NarrativeMood = 'calm' | 'tense' | 'solemn' | 'wonder' | 'action';
 
 export interface MoodCueAnalysis {
@@ -16,13 +18,15 @@ const MOOD_KEYWORDS: Record<Exclude<NarrativeMood, 'calm'>, string[]> = {
     'scream', 'shatter', 'shattered', 'cold', 'steel', 'threat', 'enemy', 'betray', 'betrayal',
     'dread', 'crept', 'gasped', 'panic', 'panicked', 'urgent', 'suddenly', 'hunted', 'abyss',
     'watchful', 'suspicion', 'unease', 'fear', 'terror', 'crimson', 'omen', 'secret', 'clandestine',
-    'conspiracy', 'cipher', 'venom', 'throat', 'breathless', 'frozen', 'crack', 'stalked', 'loomed'
+    'conspiracy', 'cipher', 'venom', 'throat', 'breathless', 'frozen', 'crack', 'stalked', 'loomed',
+    'heartbeat', 'ominous', 'crypt', 'phantom', 'eerie', 'chill', 'catacombs', 'subterranean', 'ghost'
   ],
   action: [
     'charged', 'leaped', 'clashed', 'erupted', 'sprinted', 'galloped', 'exploded', 'crashed',
     'thundered', 'surged', 'tore', 'hurled', 'swung', 'struck', 'strike', 'blaze', 'blazing',
     'tempest', 'avalanche', 'fury', 'battle', 'roared', 'roar', 'fled', 'pursuit', 'collide',
-    'shrieked', 'slashed', 'arrow', 'arrows', 'flames', 'storm', 'lightning', 'crash', 'sprint'
+    'shrieked', 'slashed', 'arrow', 'arrows', 'flames', 'storm', 'lightning', 'crash', 'sprint',
+    'thunder', 'gale', 'downpour', 'hurricane'
   ],
   solemn: [
     'ancestors', 'ancestral', 'shrine', 'oath', 'throne', 'crown', 'memory', 'mourn', 'mourning',
@@ -40,7 +44,12 @@ const MOOD_KEYWORDS: Record<Exclude<NarrativeMood, 'calm'>, string[]> = {
   ],
 };
 
-// Precomputed O(1) lookup table mapping keyword -> mood to keep scrolling overhead near zero
+const STORM_CUES = new Set([
+  'storm', 'tempest', 'hurricane', 'lightning', 'thunder', 'thundered',
+  'rain', 'downpour', 'gale'
+]);
+
+// Precomputed O(1) lookup table mapping keyword -> mood to keep analysis overhead near zero
 const KEYWORD_TO_MOOD = new Map<string, Exclude<NarrativeMood, 'calm'>>();
 (Object.keys(MOOD_KEYWORDS) as Array<Exclude<NarrativeMood, 'calm'>>).forEach((mood) => {
   for (const kw of MOOD_KEYWORDS[mood]) {
@@ -88,7 +97,7 @@ function scoreTextSegment(text: string): {
     wonder: [],
   };
 
-  if (!text.trim()) return { scores, matches };
+  if (!text || !text.trim()) return { scores, matches };
 
   const words = text.toLowerCase().match(/[a-z0-9'-]+/g) || [];
   const seenWords = new Set<string>();
@@ -146,12 +155,14 @@ export function analyzeNarrativeSegment(
   paragraphIndex = 0
 ): MoodCueAnalysis {
   const primary = scoreTextSegment(primaryText);
-  const secondary = scoreTextSegment(secondaryText);
+  const secondary = secondaryText ? scoreTextSegment(secondaryText) : null;
 
-  const blendMood = (mood: Exclude<NarrativeMood, 'calm'>) =>
-    primary.scores[mood] > 0
-      ? primary.scores[mood] + secondary.scores[mood] * 0.25
-      : Math.min(0.45, secondary.scores[mood] * 0.15);
+  const blendMood = (mood: Exclude<NarrativeMood, 'calm'>) => {
+    const secScore = secondary ? secondary.scores[mood] : 0;
+    return primary.scores[mood] > 0
+      ? primary.scores[mood] + secScore * 0.25
+      : Math.min(0.45, secScore * 0.15);
+  };
 
   const combinedScores: Record<Exclude<NarrativeMood, 'calm'>, number> = {
     tense: blendMood('tense'),
@@ -171,7 +182,7 @@ export function analyzeNarrativeSegment(
   });
 
   // Require a meaningful narrative cue signal before shifting away from calm baseline
-  if (bestScore < 1.1) {
+  if (bestScore < 1.25) {
     return {
       mood: 'calm',
       intensity: 0.2,
@@ -182,10 +193,10 @@ export function analyzeNarrativeSegment(
     };
   }
 
-  const normalizedIntensity = Math.min(1, Math.max(0.35, bestScore / 4.2));
+  const normalizedIntensity = Math.min(1, Math.max(0.42, bestScore / 3.8));
   const cues =
     bestMood !== 'calm'
-      ? [...primary.matches[bestMood], ...secondary.matches[bestMood]].slice(0, 3)
+      ? [...primary.matches[bestMood], ...(secondary ? secondary.matches[bestMood] : [])].slice(0, 4)
       : [];
 
   return {
@@ -196,6 +207,24 @@ export function analyzeNarrativeSegment(
     matchedCues: cues,
     paragraphIndex,
   };
+}
+
+/**
+ * Maps fine-grained NarrativeMood cues into the Web Audio engine's SceneMood channels.
+ * Calm/wonder exposition stays silent ('neutral') so readers aren't distracted on normal prose.
+ */
+export function toSceneMood(analysis: MoodCueAnalysis, primaryText = ''): SceneMood {
+  if (analysis.mood === 'calm' || analysis.mood === 'wonder' || analysis.intensity < 0.35) {
+    return 'neutral';
+  }
+  if (analysis.mood === 'action') {
+    const hasStormCue =
+      analysis.matchedCues.some((cue) => STORM_CUES.has(cue)) ||
+      /\b(storm|tempest|lightning|thunder|thundered|rain|downpour|gale|hurricane)\b/i.test(primaryText);
+    return hasStormCue ? 'storm' : 'action';
+  }
+  // tense & solemn both drive the atmospheric suspense synth layer
+  return 'suspense';
 }
 
 export interface EvaluateMoodOptions {
@@ -214,7 +243,9 @@ const DEFAULT_COOLDOWN_MS = 1200;
 export class NarrativeAudioMiddleware {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private analysisCache = new Map<string, MoodCueAnalysis>();
+  private lastParagraphsRef: string[] | null = null;
   private lastTransitionAt = 0;
+  private hasCommitted = false;
   private lastAnalysis: MoodCueAnalysis = {
     mood: 'calm',
     intensity: 0.2,
@@ -229,6 +260,10 @@ export class NarrativeAudioMiddleware {
   }
 
   private getOrAnalyze(paragraphs: string[], clampedIndex: number): MoodCueAnalysis {
+    if (this.lastParagraphsRef !== paragraphs) {
+      this.analysisCache.clear();
+      this.lastParagraphsRef = paragraphs;
+    }
     const primary = paragraphs[clampedIndex] || '';
     const next = paragraphs[clampedIndex + 1] || '';
     const cacheKey = `${clampedIndex}:${primary.length}:${primary.slice(0, 24)}:${next.length}`;
@@ -269,17 +304,23 @@ export class NarrativeAudioMiddleware {
       const intensityDelta = Math.abs(candidate.intensity - this.lastAnalysis.intensity);
       const moodChanged = candidate.mood !== this.lastAnalysis.mood;
       const now = Date.now();
-      const cooldownElapsed = now - this.lastTransitionAt >= cooldownMs;
+      const cooldownElapsed = this.lastTransitionAt === 0 || now - this.lastTransitionAt >= cooldownMs;
+      const crossesCalmBoundary =
+        (candidate.mood === 'calm') !== (this.lastAnalysis.mood === 'calm');
 
-      // Only transition audio on significant narrative intensity changes or genuine mood shifts (with cooldown guard)
+      // Only transition ambient audio when there is a significant change in narrative intensity
+      // (or on explicit immediate triggers / entering or exiting calm baseline with clear delta).
       const isSignificantChange =
         options.immediate ||
+        (!this.hasCommitted && candidate.mood !== 'calm') ||
         intensityDelta >= minDelta ||
-        (moodChanged && (cooldownElapsed || intensityDelta >= 0.14));
+        (crossesCalmBoundary && intensityDelta >= Math.max(0.18, minDelta * 0.72) && cooldownElapsed) ||
+        (moodChanged && intensityDelta >= minDelta * 0.75 && cooldownElapsed);
 
       if (isSignificantChange) {
         this.lastAnalysis = candidate;
         this.lastTransitionAt = now;
+        this.hasCommitted = true;
         options.onApply(candidate);
       }
     };
@@ -301,7 +342,9 @@ export class NarrativeAudioMiddleware {
   public reset(): void {
     this.dispose();
     this.analysisCache.clear();
+    this.lastParagraphsRef = null;
     this.lastTransitionAt = 0;
+    this.hasCommitted = false;
     this.lastAnalysis = {
       mood: 'calm',
       intensity: 0.2,

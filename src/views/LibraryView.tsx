@@ -513,7 +513,7 @@ export const LibraryView: React.FC = () => {
 
       {activeTrailerStory && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs overflow-y-auto"
           role="dialog"
           aria-modal="true"
           aria-label={`${activeTrailerStory.title} official trailer`}
@@ -521,7 +521,7 @@ export const LibraryView: React.FC = () => {
             if (e.target === e.currentTarget) setActiveTrailerStory(null);
           }}
         >
-          <div className="w-full max-w-3xl relative">
+          <div className="w-full max-w-3xl relative my-auto">
             <button
               type="button"
               onClick={() => setActiveTrailerStory(null)}

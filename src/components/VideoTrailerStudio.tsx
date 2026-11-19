@@ -134,13 +134,8 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
     (forceRestart = false) => {
       if (!audioOverlayEnabled) return;
 
-      ambientAudio.unlock();
-      // Keep mood bed subtle and warm underneath crisp studio narration
-      if (activeMood === 'neutral') {
-        ambientAudio.start('mythic_drone', 0.14);
-      } else {
-        ambientAudio.setSceneMood(activeMood, 0.16);
-      }
+      // Always stop Web Audio synth oscillators before playing studio narration to avoid distortion/clipping
+      ambientAudio.stop();
 
       const audioEl = narrationAudioRef.current;
       const videoEl = videoRef.current;
@@ -154,11 +149,13 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
           return;
         }
         try {
-          audioEl.currentTime = targetTime;
+          if (forceRestart || Math.abs((audioEl.currentTime || 0) - targetTime) > 0.35) {
+            audioEl.currentTime = targetTime;
+          }
         } catch {
           // ignore if metadata isn't ready yet
         }
-        audioEl.volume = 1.0;
+        audioEl.volume = 0.96;
         void audioEl.play().catch(() => {
           if (narrationScript) {
             speakBrowserFallback(narrationScript);
@@ -171,7 +168,7 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
         speakBrowserFallback(narrationScript);
       }
     },
-    [activeMood, audioOverlayEnabled, narrationAudioSrc, narrationScript, speakBrowserFallback]
+    [audioOverlayEnabled, narrationAudioSrc, narrationScript, speakBrowserFallback]
   );
 
   const handleVideoSeeked = useCallback(() => {
@@ -185,7 +182,9 @@ export const VideoTrailerStudio: React.FC<VideoTrailerStudioProps> = ({
       return;
     }
     try {
-      audioEl.currentTime = targetTime;
+      if (Math.abs((audioEl.currentTime || 0) - targetTime) > 0.35) {
+        audioEl.currentTime = targetTime;
+      }
     } catch {
       // ignore seek before readyState
     }

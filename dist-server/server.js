@@ -43,9 +43,41 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Oct 2026",
     trailerVideoUrl: "/assets/trailers/the-obsidian-throne.mp4",
     trailerPosterUrl: "/assets/images/trailers/the-obsidian-throne.jpg",
-    trailerDuration: "22s",
+    trailerDuration: "21s",
     trailerMood: "action",
-    trailerNarration: "Beneath a blackened solar eclipse, the High Citadels of Ostraka tremble. King Vane faces betrayal behind velvet banners, bound by an ancient obsidian pact. Read The Obsidian Throne, free opening chapters now on Lorethos.",
+    trailerNarration: "Beneath a blackened solar eclipse, the High Citadels of Ostraka tremble. Hidden in ink-stained catacombs, warm cuneiform tablets whisper of the First Weavers. By midnight, twelve warlords gather beside the Obsidian Throne. Read The Obsidian Throne now on Lorethos.",
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: "Eclipse Over Ostraka",
+        mood: "storm",
+        moodLabel: "Storm",
+        startSec: 0,
+        endSec: 7,
+        imageUrl: "/assets/images/trailers/the-obsidian-throne.jpg",
+        caption: "Violet twilight falls across the obsidian ramparts."
+      },
+      {
+        sceneNumber: 2,
+        title: "Vault of the First Weavers",
+        mood: "suspense",
+        moodLabel: "Suspense",
+        startSec: 7,
+        endSec: 14,
+        imageUrl: "/assets/images/trailers/the-obsidian-throne-s2.jpg",
+        caption: "Glowing clay tablets thrum beneath the citadel."
+      },
+      {
+        sceneNumber: 3,
+        title: "The Iron Covenant",
+        mood: "action",
+        moodLabel: "Action",
+        startSec: 14,
+        endSec: 21,
+        imageUrl: "/assets/images/trailers/the-obsidian-throne-s3.jpg",
+        caption: "Twelve warlords swear beside roaring Great Hall hearths."
+      }
+    ],
     chapters: [
       {
         id: "ch-obsidian-1",
@@ -172,9 +204,41 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Sep 2026",
     trailerVideoUrl: "/assets/trailers/whisper-of-the-baobab.mp4",
     trailerPosterUrl: "/assets/images/trailers/whisper-of-the-baobab.jpg",
-    trailerDuration: "22s",
+    trailerDuration: "21s",
     trailerMood: "neutral",
-    trailerNarration: "Under the cosmic expanse of the Sahel night, young navigator Boma carries an ancestral brass compass across the singing sands. When the colossal baobab awakens with luminous runes, the stars reveal forgotten highways. Explore Whisper of the Baobab on Lorethos.",
+    trailerNarration: "Under the Sahel stars, young navigator Boma holds an ancient brass compass. Across the singing dunes, silver sands hum in five rhythms beneath shifting winds. At the starlit oasis, forgotten constellations reveal highways across the sky. Explore Whisper of the Baobab on Lorethos.",
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: "The Luminous Baobab",
+        mood: "neutral",
+        moodLabel: "Calm Drift",
+        startSec: 0,
+        endSec: 7,
+        imageUrl: "/assets/images/trailers/whisper-of-the-baobab.jpg",
+        caption: "Cobalt runes awaken beneath the Sahel night sky."
+      },
+      {
+        sceneNumber: 2,
+        title: "The Singing Sands",
+        mood: "action",
+        moodLabel: "Wind & Pulse",
+        startSec: 7,
+        endSec: 14,
+        imageUrl: "/assets/images/trailers/whisper-of-the-baobab-s2.jpg",
+        caption: "Crossing the humming crimson dunes toward the horizon."
+      },
+      {
+        sceneNumber: 3,
+        title: "The Starlit Oasis",
+        mood: "neutral",
+        moodLabel: "Starlight",
+        startSec: 14,
+        endSec: 21,
+        imageUrl: "/assets/images/trailers/whisper-of-the-baobab-s3.jpg",
+        caption: "Mirrored waters reflect constellations of another sky."
+      }
+    ],
     chapters: [
       {
         id: "ch-baobab-1",
@@ -278,9 +342,41 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Jul 2026",
     trailerVideoUrl: "/assets/trailers/chronicles-of-the-sunken-epoch.mp4",
     trailerPosterUrl: "/assets/images/trailers/chronicles-of-the-sunken-epoch.jpg",
-    trailerDuration: "24s",
+    trailerDuration: "21s",
     trailerMood: "storm",
-    trailerNarration: "Four thousand fathoms beneath storm-torn waters lies the sunken city of Atal-Mor. Diver Captain Kaelen uncovers a glowing golden reliquary holding the living memory of a drowned council, and a warning that the sea is rising again.",
+    trailerNarration: "Four thousand fathoms beneath ocean storms, Diver Kaelen descends into drowned Atal-Mor. Inside a sea-serpent casket, rotating amber awakens with voices of a drowned council. Above the dry library, the crystal dome trembles against rising waters. Read on Lorethos.",
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: "The Cerulean Trench",
+        mood: "storm",
+        moodLabel: "Deep Storm",
+        startSec: 0,
+        endSec: 7,
+        imageUrl: "/assets/images/trailers/chronicles-of-the-sunken-epoch.jpg",
+        caption: "Hull beams pierce four thousand fathoms into Atal-Mor."
+      },
+      {
+        sceneNumber: 2,
+        title: "Reliquary of Living Light",
+        mood: "suspense",
+        moodLabel: "Suspense",
+        startSec: 7,
+        endSec: 14,
+        imageUrl: "/assets/images/trailers/chronicles-of-the-sunken-epoch-s2.jpg",
+        caption: "Carved amber projects ancient script into the abyss."
+      },
+      {
+        sceneNumber: 3,
+        title: "Breach in the Dome",
+        mood: "storm",
+        moodLabel: "Tempest",
+        startSec: 14,
+        endSec: 21,
+        imageUrl: "/assets/images/trailers/chronicles-of-the-sunken-epoch-s3.jpg",
+        caption: "A crystal fracture threatens the sunken archive."
+      }
+    ],
     chapters: [
       {
         id: "ch-sunken-1",
@@ -378,9 +474,41 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Sep 2026",
     trailerVideoUrl: "/assets/trailers/the-crimson-scribe.mp4",
     trailerPosterUrl: "/assets/images/trailers/the-crimson-scribe.jpg",
-    trailerDuration: "28s",
+    trailerDuration: "21s",
     trailerMood: "suspense",
-    trailerNarration: "Inside the royal scriptorium of House Valerius, every decree is written in crimson ink. When apprentice copyist Lucien uncovers a hidden cipher between illuminated pages, he learns why three kings never survived the quill. Discover The Crimson Scribe.",
+    trailerNarration: "Inside the royal scriptorium of House Valerius, statecraft is written in crimson ink. Held against candlelight, pinprick ciphers along the Psalms betray five royal tasters. Outside, rain sweeps the flagstones as armed guards bolt every door.",
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: "The Gall of Veritas",
+        mood: "suspense",
+        moodLabel: "Suspense",
+        startSec: 0,
+        endSec: 7,
+        imageUrl: "/assets/images/trailers/the-crimson-scribe.jpg",
+        caption: "Crimson cochineal ink steams inside the scriptorium."
+      },
+      {
+        sceneNumber: 2,
+        title: "Cipher in the Margins",
+        mood: "suspense",
+        moodLabel: "Cipher Pulse",
+        startSec: 7,
+        endSec: 14,
+        imageUrl: "/assets/images/trailers/the-crimson-scribe-s2.jpg",
+        caption: "Candlelight reveals coordinates pierced into vellum."
+      },
+      {
+        sceneNumber: 3,
+        title: "Night of the Silent Wax",
+        mood: "storm",
+        moodLabel: "Rain & Tension",
+        startSec: 14,
+        endSec: 21,
+        imageUrl: "/assets/images/trailers/the-crimson-scribe-s3.jpg",
+        caption: "Lantern beams sweep rain-slicked courtyard stones."
+      }
+    ],
     chapters: [
       {
         id: "ch-scribe-1",
@@ -478,9 +606,41 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Nov 2026",
     trailerVideoUrl: "/assets/trailers/verses-of-the-harmattan.mp4",
     trailerPosterUrl: "/assets/images/trailers/verses-of-the-harmattan.jpg",
-    trailerDuration: "19s",
+    trailerDuration: "21s",
     trailerMood: "neutral",
-    trailerNarration: "Tracing the warm northern wind from Sahelian courtyards to Atlantic harbors, Verses of the Harmattan gathers luminous poems of brass lanterns, longing, and light surviving dust. Listen and read all cantos free on Lorethos.",
+    trailerNarration: "When red northern dust coats the mango leaves, brass lanterns glow at dawn. Along twilight waters, an elder ferryman measures the lagoon tide with cedar oar and patience. Beneath thinning haze, tin rooftops sing under clear constellations.",
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: "When Red Dust Arrives",
+        mood: "neutral",
+        moodLabel: "Amber Breeze",
+        startSec: 0,
+        endSec: 7,
+        imageUrl: "/assets/images/trailers/verses-of-the-harmattan.jpg",
+        caption: "Ochre sunrise dust settles across brass veranda lamps."
+      },
+      {
+        sceneNumber: 2,
+        title: "Elegy for the Ferryman",
+        mood: "suspense",
+        moodLabel: "Twilight Tide",
+        startSec: 7,
+        endSec: 14,
+        imageUrl: "/assets/images/trailers/verses-of-the-harmattan-s2.jpg",
+        caption: "Warm harbor lights linger above the dusk lagoon."
+      },
+      {
+        sceneNumber: 3,
+        title: "Starlight on Tin Roofs",
+        mood: "neutral",
+        moodLabel: "Night Chorus",
+        startSec: 14,
+        endSec: 21,
+        imageUrl: "/assets/images/trailers/verses-of-the-harmattan-s3.jpg",
+        caption: "Constellations bloom radiant above cooling tin eaves."
+      }
+    ],
     chapters: [
       {
         id: "ch-harmattan-1",
@@ -563,9 +723,41 @@ var AUTHORITATIVE_STORIES = [
     updatedAt: "Nov 2026",
     trailerVideoUrl: "/assets/trailers/letters-across-the-lagoon.mp4",
     trailerPosterUrl: "/assets/images/trailers/letters-across-the-lagoon.jpg",
-    trailerDuration: "22s",
+    trailerDuration: "21s",
     trailerMood: "neutral",
-    trailerNarration: "Separated by a decade of silence, two former partners exchange handwritten letters folded inside waterfront blueprints, uncovering the truth behind the fire that claimed the old lagoon reading hall. Read Letters Across the Lagoon free on Lorethos.",
+    trailerNarration: "Ten years after the harbor reading hall burned, rolled blueprints cross the morning tide once more. Beneath pried floorboards, a salt-stained ledger exposes the secret behind that fire. At last, wide timber shutters swing open to golden lagoon sunlight.",
+    trailerScenes: [
+      {
+        sceneNumber: 1,
+        title: "Blueprint in Blue Ink",
+        mood: "neutral",
+        moodLabel: "Harbor Calm",
+        startSec: 0,
+        endSec: 7,
+        imageUrl: "/assets/images/trailers/letters-across-the-lagoon.jpg",
+        caption: "Rolled waterfront elevations return across the tide."
+      },
+      {
+        sceneNumber: 2,
+        title: "The Salt-Stained Ledger",
+        mood: "suspense",
+        moodLabel: "Archive Secret",
+        startSec: 7,
+        endSec: 14,
+        imageUrl: "/assets/images/trailers/letters-across-the-lagoon-s2.jpg",
+        caption: "Hidden beneath floorboards lies truth from ten winters ago."
+      },
+      {
+        sceneNumber: 3,
+        title: "Opening the Timber Windows",
+        mood: "action",
+        moodLabel: "Sunlit Rebirth",
+        startSec: 14,
+        endSec: 21,
+        imageUrl: "/assets/images/trailers/letters-across-the-lagoon-s3.jpg",
+        caption: "Golden afternoon sun floods fresh cedar shelves."
+      }
+    ],
     chapters: [
       {
         id: "ch-lagoon-1",
@@ -630,7 +822,8 @@ var TRAILER_DEFAULTS_BY_ID = new Map(
       trailerPosterUrl: story.trailerPosterUrl,
       trailerDuration: story.trailerDuration,
       trailerMood: story.trailerMood,
-      trailerNarration: story.trailerNarration
+      trailerNarration: story.trailerNarration,
+      trailerScenes: story.trailerScenes
     }
   ])
 );
@@ -641,9 +834,10 @@ function withOfficialTrailerMetadata(story) {
     ...story,
     trailerVideoUrl: story.trailerVideoUrl || defaults.trailerVideoUrl,
     trailerPosterUrl: story.trailerPosterUrl || defaults.trailerPosterUrl,
-    trailerDuration: !story.trailerDuration || story.trailerVideoUrl === defaults.trailerVideoUrl ? defaults.trailerDuration : story.trailerDuration,
+    trailerDuration: story.trailerDuration || defaults.trailerDuration,
     trailerMood: story.trailerMood || defaults.trailerMood,
-    trailerNarration: story.trailerNarration || defaults.trailerNarration
+    trailerNarration: story.trailerNarration || defaults.trailerNarration,
+    trailerScenes: story.trailerScenes && story.trailerScenes.length > 0 ? story.trailerScenes : defaults.trailerScenes
   };
 }
 function sanitizeStoryForPublic(story) {
@@ -2582,19 +2776,58 @@ var SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
 var EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function normalizeTtsWavAudio(base64Data, rawMimeType) {
   const rawBuf = Buffer.from(base64Data, "base64");
+  const mimeLower = String(rawMimeType || "").toLowerCase();
   if (rawBuf.length >= 12 && rawBuf.subarray(0, 4).toString("ascii") === "RIFF" && rawBuf.subarray(8, 12).toString("ascii") === "WAVE") {
     return { audioBase64: base64Data, mimeType: "audio/wav" };
   }
-  const mimeLower = String(rawMimeType || "").toLowerCase();
+  const isMp3Magic = rawBuf.length >= 3 && rawBuf.subarray(0, 3).toString("ascii") === "ID3" || rawBuf.length >= 2 && rawBuf[0] === 255 && (rawBuf[1] & 224) === 224;
+  const isOggMagic = rawBuf.length >= 4 && rawBuf.subarray(0, 4).toString("ascii") === "OggS";
+  const isFlacMagic = rawBuf.length >= 4 && rawBuf.subarray(0, 4).toString("ascii") === "fLaC";
+  const isMp4Magic = rawBuf.length >= 8 && rawBuf.subarray(4, 8).toString("ascii") === "ftyp";
+  if (isMp3Magic || mimeLower.includes("mpeg") || mimeLower.includes("mp3")) {
+    return { audioBase64: base64Data, mimeType: "audio/mpeg" };
+  }
+  if (isOggMagic || mimeLower.includes("ogg")) {
+    return { audioBase64: base64Data, mimeType: "audio/ogg" };
+  }
+  if (isFlacMagic || mimeLower.includes("flac")) {
+    return { audioBase64: base64Data, mimeType: "audio/flac" };
+  }
+  if (isMp4Magic || mimeLower.includes("mp4") || mimeLower.includes("aac")) {
+    return { audioBase64: base64Data, mimeType: "audio/mp4" };
+  }
+  if (mimeLower.includes("webm")) {
+    return { audioBase64: base64Data, mimeType: "audio/webm" };
+  }
   const rateMatch = mimeLower.match(/rate=(\d+)/);
+  const channelsMatch = mimeLower.match(/channels=(\d+)/);
   const sampleRate = rateMatch ? Math.max(8e3, Math.min(48e3, Number(rateMatch[1]))) : 24e3;
-  const channels = 1;
+  const channels = channelsMatch ? Math.max(1, Math.min(2, Number(channelsMatch[1]))) : 1;
   const bitsPerSample = 16;
   const byteRate = sampleRate * channels * (bitsPerSample / 8);
   const blockAlign = channels * (bitsPerSample / 8);
+  const evenLen = rawBuf.length - rawBuf.length % 2;
+  const pcmBuf = Buffer.from(rawBuf.subarray(0, evenLen));
+  const isBigEndianL16 = mimeLower.includes("audio/l16") && !mimeLower.includes("little") && !mimeLower.includes("le");
+  let maxAbs = 0;
+  for (let i = 0; i < pcmBuf.length; i += 2) {
+    const sample = isBigEndianL16 ? pcmBuf.readInt16BE(i) : pcmBuf.readInt16LE(i);
+    if (isBigEndianL16) {
+      pcmBuf.writeInt16LE(sample, i);
+    }
+    const abs = Math.abs(sample);
+    if (abs > maxAbs) maxAbs = abs;
+  }
+  if (maxAbs > 29500) {
+    const scale = 29500 / maxAbs;
+    for (let i = 0; i < pcmBuf.length; i += 2) {
+      const scaled = Math.round(pcmBuf.readInt16LE(i) * scale);
+      pcmBuf.writeInt16LE(scaled, i);
+    }
+  }
   const header = Buffer.alloc(44);
   header.write("RIFF", 0, "ascii");
-  header.writeUInt32LE(36 + rawBuf.length, 4);
+  header.writeUInt32LE(36 + pcmBuf.length, 4);
   header.write("WAVE", 8, "ascii");
   header.write("fmt ", 12, "ascii");
   header.writeUInt32LE(16, 16);
@@ -2605,9 +2838,9 @@ function normalizeTtsWavAudio(base64Data, rawMimeType) {
   header.writeUInt16LE(blockAlign, 32);
   header.writeUInt16LE(bitsPerSample, 34);
   header.write("data", 36, "ascii");
-  header.writeUInt32LE(rawBuf.length, 40);
+  header.writeUInt32LE(pcmBuf.length, 40);
   return {
-    audioBase64: Buffer.concat([header, rawBuf]).toString("base64"),
+    audioBase64: Buffer.concat([header, pcmBuf]).toString("base64"),
     mimeType: "audio/wav"
   };
 }

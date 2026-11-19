@@ -77,12 +77,10 @@ export function detectSceneMood(text: string): SceneMood {
     if (re.test(clean)) stormScore += 2;
   }
 
-  // Ellipses or sharp dramatic exclamations nudge tension subtly
   if (/\.{3}|—/.test(clean) && suspenseScore >= 1) {
     suspenseScore += 1;
   }
 
-  // Require a clear signal (>= 3) so normal descriptive scenes stay silent ('neutral')
   if (actionScore >= 4 && actionScore >= suspenseScore && actionScore >= stormScore) {
     return 'action';
   }
@@ -105,18 +103,23 @@ class AmbientSoundEngine {
   private activeNodes: AudioNode[] = [];
   private crackleTimer: number | null = null;
   private fadeOutCleanupTimer: number | null = null;
+  private pendingCleanupTimers = new Set<number>();
+  private noiseBufferCache = new WeakMap<AudioContext, Map<string, AudioBuffer>>();
+  private cracklePoolCache = new WeakMap<AudioContext, Map<number, AudioBuffer[]>>();
   private currentTrack: AmbientTrackId = 'silence';
   private currentMood: SceneMood = 'neutral';
+  private currentIntensity = 0.2;
   private lastVolume = 0.6;
 
   private getOutputDestination(ctx: AudioContext): AudioNode {
     if (!this.compressor || this.compressor.context !== ctx) {
+      // Gentle transparent safety limiter so summed voices never clip the DAC
       const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -14;
-      comp.knee.value = 12;
-      comp.ratio.value = 6;
-      comp.attack.value = 0.01;
-      comp.release.value = 0.2;
+      comp.threshold.value = -6;
+      comp.knee.value = 24;
+      comp.ratio.value = 2.5;
+      comp.attack.value = 0.03;
+      comp.release.value = 0.25;
       comp.connect(ctx.destination);
       this.compressor = comp;
     }
@@ -157,7 +160,14 @@ class AmbientSoundEngine {
 
   private createNoiseBuffer(ctx: AudioContext, seconds: number, warmth: 'brown' | 'pink'): AudioBuffer {
     const sampleRate = ctx.sampleRate;
-    const length = sampleRate * seconds;
+    let ctxCache = this.noiseBufferCache.get(ctx);
+    const cacheKey = `${warmth}:${seconds}:${sampleRate}`;
+    const cached = ctxCache?.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const length = Math.max(1024, Math.floor(sampleRate * seconds));
     const buffer = ctx.createBuffer(1, length, sampleRate);
     const data = buffer.getChannelData(0);
 
@@ -165,9 +175,8 @@ class AmbientSoundEngine {
       let lastOut = 0;
       for (let i = 0; i < length; i++) {
         const white = Math.random() * 2 - 1;
-        data[i] = (lastOut + 0.02 * white) / 1.02;
-        lastOut = data[i];
-        data[i] *= 3.2;
+        lastOut = (lastOut + 0.02 * white) / 1.02;
+        data[i] = lastOut;
       }
     } else {
       let b0 = 0,
@@ -189,6 +198,40 @@ class AmbientSoundEngine {
         b6 = white * 0.115926;
       }
     }
+
+    // Remove DC offset and normalize strictly within [-0.65, +0.65] to prevent clipping
+    let sum = 0;
+    for (let i = 0; i < length; i++) sum += data[i];
+    const mean = sum / length;
+    let maxAbs = 0.0001;
+    for (let i = 0; i < length; i++) {
+      data[i] -= mean;
+      const abs = Math.abs(data[i]);
+      if (abs > maxAbs) maxAbs = abs;
+    }
+    const normScale = 0.65 / maxAbs;
+    for (let i = 0; i < length; i++) {
+      data[i] *= normScale;
+    }
+
+    // Equal-power crossfade loop edges so looping never clicks or pops
+    const fadeSamples = Math.min(Math.floor(sampleRate * 0.25), Math.floor(length / 4));
+    for (let i = 0; i < fadeSamples; i++) {
+      const t = i / fadeSamples;
+      const fadeIn = Math.sin(t * Math.PI * 0.5);
+      const fadeOut = Math.cos(t * Math.PI * 0.5);
+      const tailIdx = length - fadeSamples + i;
+      const headSample = data[i];
+      const tailSample = data[tailIdx];
+      data[i] = headSample * fadeIn + tailSample * fadeOut;
+      data[tailIdx] = tailSample * fadeIn + headSample * fadeOut;
+    }
+
+    if (!ctxCache) {
+      ctxCache = new Map();
+      this.noiseBufferCache.set(ctx, ctxCache);
+    }
+    ctxCache.set(cacheKey, buffer);
     return buffer;
   }
 
@@ -228,8 +271,12 @@ class AmbientSoundEngine {
       try {
         const now = ctx.currentTime;
         oldMaster.gain.cancelScheduledValues(now);
-        oldMaster.gain.setTargetAtTime(0.0001, now, 0.025);
-        window.setTimeout(cleanupNodes, 90);
+        oldMaster.gain.setTargetAtTime(0.0001, now, 0.02);
+        const timerId = window.setTimeout(() => {
+          this.pendingCleanupTimers.delete(timerId);
+          cleanupNodes();
+        }, 80);
+        this.pendingCleanupTimers.add(timerId);
         return;
       } catch {
         // fall through to immediate cleanup
@@ -241,7 +288,6 @@ class AmbientSoundEngine {
   public start(track: AmbientTrackId, volume: number): void {
     this.lastVolume = Math.max(0, Math.min(1, volume));
     if (track === 'adaptive') {
-      // Adaptive mode waits for setSceneMood(); remain silent until a mood spot is active
       if (this.currentTrack !== 'adaptive') {
         this.stopImmediate();
         this.currentTrack = 'adaptive';
@@ -265,7 +311,7 @@ class AmbientSoundEngine {
 
     const master = ctx.createGain();
     master.gain.setValueAtTime(0.0001, ctx.currentTime);
-    master.gain.setTargetAtTime(this.lastVolume * 0.28, ctx.currentTime, 0.25);
+    master.gain.setTargetAtTime(this.lastVolume * 0.22, ctx.currentTime, 0.28);
     master.connect(this.getOutputDestination(ctx));
     this.masterGain = master;
     this.activeNodes.push(master);
@@ -275,39 +321,51 @@ class AmbientSoundEngine {
     } else if (track === 'rain') {
       this.buildRainGraph(ctx, master);
     } else if (track === 'mythic_drone') {
-      this.buildDroneGraph(ctx, master, [110, 164.81, 220], 380);
+      this.buildDroneGraph(ctx, master, [110, 164.81, 220], 340);
     }
   }
 
   /**
-   * Dynamically drives soundscape from the active paragraph's mood.
+   * Dynamically drives soundscape from the active paragraph's mood & intensity.
    * Neutral/normal scenes smoothly fade to silence (zero sound).
-   * Suspense/action/storm spots smoothly swell in atmospheric cues.
+   * Redundant same-mood updates (< 0.12 intensity delta) are skipped cleanly.
    */
-  public setSceneMood(mood: SceneMood, volume: number): void {
-    this.lastVolume = Math.max(0, Math.min(1, volume));
+  public setSceneMood(mood: SceneMood, volume: number, intensity = 0.7): void {
+    const clampedVol = Math.max(0, Math.min(1, volume));
+    const normalizedIntensity = Math.max(0, Math.min(1, intensity));
     this.currentTrack = 'adaptive';
 
     if (mood === this.currentMood) {
-      if (mood !== 'neutral') {
-        this.setVolume(this.lastVolume);
+      if (mood === 'neutral') {
+        this.lastVolume = clampedVol;
+        return;
       }
+      const intensityDelta = Math.abs(normalizedIntensity - this.currentIntensity);
+      const volumeDelta = Math.abs(clampedVol - this.lastVolume);
+      if (intensityDelta < 0.12 && volumeDelta < 0.02) {
+        return;
+      }
+      this.currentIntensity = normalizedIntensity;
+      this.lastVolume = clampedVol;
+      this.setVolume(clampedVol, 0.9);
       return;
     }
 
+    this.lastVolume = clampedVol;
     this.currentMood = mood;
+    this.currentIntensity = mood === 'neutral' ? 0.2 : normalizedIntensity;
 
     if (mood === 'neutral') {
       if (this.masterGain && this.ctx) {
         const now = this.ctx.currentTime;
         this.masterGain.gain.cancelScheduledValues(now);
-        this.masterGain.gain.setTargetAtTime(0.0001, now, 0.35);
+        this.masterGain.gain.setTargetAtTime(0.0001, now, 0.95);
         this.clearFadeTimer();
         this.fadeOutCleanupTimer = window.setTimeout(() => {
           if (this.currentTrack === 'adaptive' && this.currentMood === 'neutral') {
             this.stopImmediate();
           }
-        }, 1400);
+        }, 2900);
       }
       return;
     }
@@ -318,7 +376,7 @@ class AmbientSoundEngine {
     this.stopImmediate();
     const master = ctx.createGain();
     master.gain.setValueAtTime(0.0001, ctx.currentTime);
-    master.gain.setTargetAtTime(this.lastVolume * 0.3, ctx.currentTime, 0.45);
+    master.gain.setTargetAtTime(this.lastVolume * 0.22, ctx.currentTime, 0.95);
     master.connect(this.getOutputDestination(ctx));
     this.masterGain = master;
     this.activeNodes.push(master);
@@ -332,6 +390,35 @@ class AmbientSoundEngine {
     }
   }
 
+  private getCrackleBufferPool(ctx: AudioContext): AudioBuffer[] {
+    const sampleRate = ctx.sampleRate;
+    let poolByRate = this.cracklePoolCache.get(ctx);
+    const existing = poolByRate?.get(sampleRate);
+    if (existing && existing.length > 0) {
+      return existing;
+    }
+
+    const poolSize = 6;
+    const len = Math.max(256, Math.floor(sampleRate * 0.025));
+    const pool: AudioBuffer[] = [];
+    for (let p = 0; p < poolSize; p++) {
+      const buf = ctx.createBuffer(1, len, sampleRate);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        const env = Math.sin(Math.min(1, i / (len * 0.15)) * Math.PI * 0.5) * Math.exp(-i / (len * 0.25));
+        ch[i] = (Math.random() * 2 - 1) * env * 0.6;
+      }
+      pool.push(buf);
+    }
+
+    if (!poolByRate) {
+      poolByRate = new Map();
+      this.cracklePoolCache.set(ctx, poolByRate);
+    }
+    poolByRate.set(sampleRate, pool);
+    return pool;
+  }
+
   private buildFireplaceGraph(ctx: AudioContext, master: GainNode): void {
     const rumbleSource = ctx.createBufferSource();
     rumbleSource.buffer = this.createNoiseBuffer(ctx, 4, 'brown');
@@ -339,40 +426,39 @@ class AmbientSoundEngine {
 
     const lowpass = ctx.createBiquadFilter();
     lowpass.type = 'lowpass';
-    lowpass.frequency.value = 340;
+    lowpass.frequency.value = 240;
+    lowpass.Q.value = 0.5;
 
     rumbleSource.connect(lowpass);
     lowpass.connect(master);
     rumbleSource.start();
     this.activeNodes.push(rumbleSource, lowpass);
 
+    const cracklePool = this.getCrackleBufferPool(ctx);
+
     this.crackleTimer = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       if (!this.ctx || !this.masterGain || this.currentTrack !== 'fireplace') return;
-      if (Math.random() > 0.55) return;
+      if (Math.random() > 0.42) return;
 
       const now = this.ctx.currentTime;
       const popSource = this.ctx.createBufferSource();
-      const popBuf = this.ctx.createBuffer(1, Math.floor(this.ctx.sampleRate * 0.03), this.ctx.sampleRate);
-      const ch = popBuf.getChannelData(0);
-      for (let i = 0; i < ch.length; i++) {
-        ch[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ch.length * 0.25));
-      }
-      popSource.buffer = popBuf;
+      popSource.buffer = cracklePool[Math.floor(Math.random() * cracklePool.length)];
 
-      const highpass = this.ctx.createBiquadFilter();
-      highpass.type = 'bandpass';
-      highpass.frequency.value = 1800 + Math.random() * 2400;
-      highpass.Q.value = 1.6;
+      const warmFilter = this.ctx.createBiquadFilter();
+      warmFilter.type = 'bandpass';
+      warmFilter.frequency.value = 1100 + Math.random() * 1100;
+      warmFilter.Q.value = 0.9;
 
       const popGain = this.ctx.createGain();
-      popGain.gain.setValueAtTime(0.18 + Math.random() * 0.22, now);
-      popGain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+      popGain.gain.setValueAtTime(0.04 + Math.random() * 0.04, now);
+      popGain.gain.exponentialRampToValueAtTime(0.0005, now + 0.025);
 
-      popSource.connect(highpass);
-      highpass.connect(popGain);
+      popSource.connect(warmFilter);
+      warmFilter.connect(popGain);
       popGain.connect(this.masterGain);
       popSource.start(now);
-    }, 280);
+    }, 340);
   }
 
   private buildRainGraph(ctx: AudioContext, master: GainNode, withStormGust = false): void {
@@ -380,44 +466,46 @@ class AmbientSoundEngine {
     rainSource.buffer = this.createNoiseBuffer(ctx, 5, 'pink');
     rainSource.loop = true;
 
-    const bandpass = ctx.createBiquadFilter();
-    bandpass.type = 'bandpass';
-    bandpass.frequency.value = withStormGust ? 780 : 1100;
-    bandpass.Q.value = 0.55;
+    const highpass = ctx.createBiquadFilter();
+    highpass.type = 'highpass';
+    highpass.frequency.value = 120;
+    highpass.Q.value = 0.5;
+
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = withStormGust ? 1250 : 1750;
+    lowpass.Q.value = 0.5;
 
     if (withStormGust) {
       const windLfo = ctx.createOscillator();
       windLfo.type = 'sine';
-      windLfo.frequency.value = 0.14;
+      windLfo.frequency.value = 0.12;
       const windDepth = ctx.createGain();
-      windDepth.gain.value = 320;
+      windDepth.gain.value = 180;
       windLfo.connect(windDepth);
-      windDepth.connect(bandpass.frequency);
+      windDepth.connect(lowpass.frequency);
       windLfo.start();
       this.activeNodes.push(windLfo, windDepth);
     }
 
-    const highShelf = ctx.createBiquadFilter();
-    highShelf.type = 'lowpass';
-    highShelf.frequency.value = withStormGust ? 2400 : 3200;
-
-    rainSource.connect(bandpass);
-    bandpass.connect(highShelf);
-    highShelf.connect(master);
+    rainSource.connect(highpass);
+    highpass.connect(lowpass);
+    lowpass.connect(master);
     rainSource.start();
-    this.activeNodes.push(rainSource, bandpass, highShelf);
+    this.activeNodes.push(rainSource, highpass, lowpass);
   }
 
   private buildDroneGraph(ctx: AudioContext, master: GainNode, freqs: number[], baseCutoff: number): void {
     const filter = ctx.createBiquadFilter();
     filter.type = 'lowpass';
     filter.frequency.value = baseCutoff;
+    filter.Q.value = 0.6;
 
     const lfo = ctx.createOscillator();
     lfo.type = 'sine';
-    lfo.frequency.value = 0.12;
+    lfo.frequency.value = 0.1;
     const lfoGain = ctx.createGain();
-    lfoGain.gain.value = 160;
+    lfoGain.gain.value = 90;
     lfo.connect(lfoGain);
     lfoGain.connect(filter.frequency);
     lfo.start();
@@ -427,12 +515,13 @@ class AmbientSoundEngine {
 
     freqs.forEach((f, idx) => {
       const osc = ctx.createOscillator();
-      osc.type = idx === 1 ? 'triangle' : 'sine';
+      // Pure sine waves eliminate harsh odd-harmonic speaker buzz at low frequencies
+      osc.type = 'sine';
       osc.frequency.value = f;
-      osc.detune.value = idx === 0 ? -4 : idx === 2 ? 4 : 0;
+      osc.detune.value = idx === 0 ? -2 : idx === 2 ? 2 : 0;
 
       const voiceGain = ctx.createGain();
-      voiceGain.gain.value = idx === 0 ? 0.18 : 0.09;
+      voiceGain.gain.value = idx === 0 ? 0.16 : 0.08;
 
       osc.connect(voiceGain);
       voiceGain.connect(filter);
@@ -442,19 +531,19 @@ class AmbientSoundEngine {
   }
 
   private buildSuspenseGraph(ctx: AudioContext, master: GainNode): void {
-    // 1. Subtle low heartbeat pulse (warm sub-bass C2 modulated smoothly)
+    // 1. Soft warm sub-bass breath (C2 pure sine modulated gently, never exceeding headroom)
     const subOsc = ctx.createOscillator();
     subOsc.type = 'sine';
-    subOsc.frequency.value = 65.41; // C2
+    subOsc.frequency.value = 65.41;
 
     const pulseVca = ctx.createGain();
-    pulseVca.gain.value = 0.14;
+    pulseVca.gain.value = 0.1;
 
     const pulseLfo = ctx.createOscillator();
     pulseLfo.type = 'sine';
-    pulseLfo.frequency.value = 0.85; // ~51 BPM gentle tense pulse
+    pulseLfo.frequency.value = 0.72;
     const pulseDepth = ctx.createGain();
-    pulseDepth.gain.value = 0.08;
+    pulseDepth.gain.value = 0.04;
     pulseLfo.connect(pulseDepth);
     pulseDepth.connect(pulseVca.gain);
 
@@ -464,17 +553,17 @@ class AmbientSoundEngine {
     pulseLfo.start();
     this.activeNodes.push(subOsc, pulseVca, pulseLfo, pulseDepth);
 
-    // 2. Dark minor-third & diminished-fifth atmospheric pad with gentle filter breathing
+    // 2. Smooth dark minor chord pad using pure sine tones (no harsh triangle beating)
     const padFilter = ctx.createBiquadFilter();
     padFilter.type = 'lowpass';
-    padFilter.frequency.value = 420;
-    padFilter.Q.value = 0.9;
+    padFilter.frequency.value = 360;
+    padFilter.Q.value = 0.6;
 
     const sweepLfo = ctx.createOscillator();
     sweepLfo.type = 'sine';
-    sweepLfo.frequency.value = 0.18;
+    sweepLfo.frequency.value = 0.14;
     const sweepDepth = ctx.createGain();
-    sweepDepth.gain.value = 140;
+    sweepDepth.gain.value = 90;
     sweepLfo.connect(sweepDepth);
     sweepDepth.connect(padFilter.frequency);
     sweepLfo.start();
@@ -482,15 +571,15 @@ class AmbientSoundEngine {
     padFilter.connect(master);
     this.activeNodes.push(padFilter, sweepLfo, sweepDepth);
 
-    const suspenseFreqs = [130.81, 155.56, 185.0, 246.94]; // C3, Eb3, Gb3, B3 warm eerie cluster
+    const suspenseFreqs = [130.81, 196.0, 311.13]; // C3, G3, Eb4 clean open dark minor voicing
     suspenseFreqs.forEach((f, idx) => {
       const osc = ctx.createOscillator();
-      osc.type = idx % 2 === 0 ? 'sine' : 'triangle';
+      osc.type = 'sine';
       osc.frequency.value = f;
-      osc.detune.value = idx % 2 === 0 ? -3 : 4;
+      osc.detune.value = idx === 0 ? -2 : idx === 2 ? 2 : 0;
 
       const g = ctx.createGain();
-      g.gain.value = idx === 0 ? 0.11 : idx === 3 ? 0.04 : 0.06;
+      g.gain.value = idx === 0 ? 0.11 : 0.055;
 
       osc.connect(g);
       g.connect(padFilter);
@@ -500,23 +589,23 @@ class AmbientSoundEngine {
   }
 
   private buildActionGraph(ctx: AudioContext, master: GainNode): void {
-    // Urgent muffled low percussive pulse + fifth tension drone (G2 + D3)
+    // Clean warm rhythmic pulse (pure sine G2) + open fifth tension drone
     const drumOsc = ctx.createOscillator();
-    drumOsc.type = 'triangle';
-    drumOsc.frequency.value = 73.42; // D2
+    drumOsc.type = 'sine';
+    drumOsc.frequency.value = 98.0; // G2
 
     const drumFilter = ctx.createBiquadFilter();
     drumFilter.type = 'lowpass';
-    drumFilter.frequency.value = 240;
+    drumFilter.frequency.value = 220;
 
     const drumVca = ctx.createGain();
-    drumVca.gain.value = 0.15;
+    drumVca.gain.value = 0.11;
 
     const beatLfo = ctx.createOscillator();
     beatLfo.type = 'sine';
-    beatLfo.frequency.value = 1.65;
+    beatLfo.frequency.value = 1.45;
     const beatDepth = ctx.createGain();
-    beatDepth.gain.value = 0.1;
+    beatDepth.gain.value = 0.05;
     beatLfo.connect(beatDepth);
     beatDepth.connect(drumVca.gain);
 
@@ -527,18 +616,18 @@ class AmbientSoundEngine {
     beatLfo.start();
     this.activeNodes.push(drumOsc, drumFilter, drumVca, beatLfo, beatDepth);
 
-    this.buildDroneGraph(ctx, master, [98.0, 146.83, 233.08], 460);
+    this.buildDroneGraph(ctx, master, [98.0, 146.83, 196.0], 380);
   }
 
-  public setVolume(volume: number): void {
+  public setVolume(volume: number, timeConstant = 0.05): void {
     this.lastVolume = Math.max(0, Math.min(1, volume));
     if (this.masterGain && this.ctx) {
       if (this.currentTrack === 'adaptive' && this.currentMood === 'neutral') return;
-      const scale = this.currentTrack === 'adaptive' ? 0.3 : 0.28;
+      const scale = 0.22;
       this.masterGain.gain.setTargetAtTime(
         this.lastVolume * scale,
         this.ctx.currentTime,
-        0.05
+        timeConstant
       );
     }
   }

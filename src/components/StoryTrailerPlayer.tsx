@@ -1,5 +1,13 @@
-import React, { useState, useRef } from 'react';
-import { Film, BookOpen, Download, Volume2, FileText, ChevronDown, ChevronUp } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  Film,
+  BookOpen,
+  Download,
+  Volume2,
+  FileText,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import type { Story } from '../types';
 
 interface StoryTrailerPlayerProps {
@@ -20,7 +28,6 @@ export const StoryTrailerPlayer: React.FC<StoryTrailerPlayerProps> = ({
   compact = false,
 }) => {
   const [showTranscript, setShowTranscript] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   if (!story.trailerVideoUrl) {
     return null;
@@ -35,17 +42,11 @@ export const StoryTrailerPlayer: React.FC<StoryTrailerPlayerProps> = ({
     >
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#2D142C]/10 dark:border-white/10 pb-3">
         <div>
-          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold text-[#C85A32]">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wider font-semibold text-[#C85A32]">
             <Film className="w-3.5 h-3.5" />
             <span>Official Story Trailer</span>
             <span aria-hidden="true">&middot;</span>
             <span>{story.genre}</span>
-            {story.trailerDuration && (
-              <>
-                <span aria-hidden="true">&middot;</span>
-                <span className="font-mono">{story.trailerDuration}</span>
-              </>
-            )}
           </div>
           <h3 className="font-display text-xl sm:text-2xl font-bold text-[#2D142C] dark:text-[#F9F6F0] mt-0.5">
             {story.title}
@@ -85,7 +86,6 @@ export const StoryTrailerPlayer: React.FC<StoryTrailerPlayerProps> = ({
 
       <div className="rounded-xl overflow-hidden border border-[#2D142C]/15 dark:border-white/15 bg-[#160C16] aspect-video">
         <video
-          ref={videoRef}
           key={story.trailerVideoUrl}
           src={story.trailerVideoUrl}
           poster={story.trailerPosterUrl || story.coverImage}
@@ -101,10 +101,10 @@ export const StoryTrailerPlayer: React.FC<StoryTrailerPlayerProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-[#2D142C]/70 dark:text-white/70">
         <div className="flex items-center gap-2">
           <Volume2 className="w-3.5 h-3.5 text-[#C85A32] shrink-0" />
-          <span>Narrated video trailer with atmospheric score &middot; By {story.author}</span>
+          <span>Full story narrated trailer &middot; By {story.author}</span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {story.trailerNarration && (
             <button
               type="button"

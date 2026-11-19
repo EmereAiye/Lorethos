@@ -67,21 +67,106 @@ function normalizeTtsWavAudio(
   rawMimeType?: string | null
 ): { audioBase64: string; mimeType: string } {
   const rawBuf = Buffer.from(base64Data, 'base64');
-  if (rawBuf.length >= 12 && rawBuf.subarray(0, 4).toString('ascii') === 'RIFF' && rawBuf.subarray(8, 12).toString('ascii') === 'WAVE') {
+  const mimeLower = String(rawMimeType || '').toLowerCase();
+
+  if (
+    rawBuf.length >= 12 &&
+    rawBuf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    rawBuf.subarray(8, 12).toString('ascii') === 'WAVE'
+  ) {
     return { audioBase64: base64Data, mimeType: 'audio/wav' };
   }
 
-  const mimeLower = String(rawMimeType || '').toLowerCase();
+  // Never wrap already-encoded compressed audio streams (MP3, OGG, FLAC, AAC/MP4, WebM) inside a PCM WAV header
+  const isMp3Magic =
+    (rawBuf.length >= 3 && rawBuf.subarray(0, 3).toString('ascii') === 'ID3') ||
+    (rawBuf.length >= 2 && rawBuf[0] === 0xff && (rawBuf[1] & 0xe0) === 0xe0);
+  const isOggMagic = rawBuf.length >= 4 && rawBuf.subarray(0, 4).toString('ascii') === 'OggS';
+  const isFlacMagic = rawBuf.length >= 4 && rawBuf.subarray(0, 4).toString('ascii') === 'fLaC';
+  const isMp4Magic = rawBuf.length >= 8 && rawBuf.subarray(4, 8).toString('ascii') === 'ftyp';
+  if (
+    isMp3Magic ||
+    mimeLower.includes('mpeg') ||
+    mimeLower.includes('mp3')
+  ) {
+    return { audioBase64: base64Data, mimeType: 'audio/mpeg' };
+  }
+  if (isOggMagic || mimeLower.includes('ogg')) {
+    return { audioBase64: base64Data, mimeType: 'audio/ogg' };
+  }
+  if (isFlacMagic || mimeLower.includes('flac')) {
+    return { audioBase64: base64Data, mimeType: 'audio/flac' };
+  }
+  if (isMp4Magic || mimeLower.includes('mp4') || mimeLower.includes('aac')) {
+    return { audioBase64: base64Data, mimeType: 'audio/mp4' };
+  }
+  if (mimeLower.includes('webm')) {
+    return { audioBase64: base64Data, mimeType: 'audio/webm' };
+  }
+
   const rateMatch = mimeLower.match(/rate=(\d+)/);
+  const channelsMatch = mimeLower.match(/channels=(\d+)/);
   const sampleRate = rateMatch ? Math.max(8000, Math.min(48000, Number(rateMatch[1]))) : 24000;
-  const channels = 1;
+  const channels = channelsMatch ? Math.max(1, Math.min(2, Number(channelsMatch[1]))) : 1;
   const bitsPerSample = 16;
   const byteRate = sampleRate * channels * (bitsPerSample / 8);
   const blockAlign = channels * (bitsPerSample / 8);
 
+  // Align to whole 16-bit samples, empirically verify LE vs BE byte smoothness,
+  // remove DC offset, cap headroom at -2.5dB (24500), and apply 15ms fade-in/out to prevent clicks.
+  const evenLen = rawBuf.length - (rawBuf.length % 2);
+  const pcmBuf = Buffer.from(rawBuf.subarray(0, evenLen));
+  const sampleCount = Math.floor(pcmBuf.length / 2);
+
+  if (sampleCount >= 4) {
+    let leDiff = 0;
+    let beDiff = 0;
+    const checkBytes = Math.min(pcmBuf.length - 4, 48000);
+    for (let i = 0; i < checkBytes; i += 2) {
+      leDiff += Math.abs(pcmBuf.readInt16LE(i + 2) - pcmBuf.readInt16LE(i));
+      beDiff += Math.abs(pcmBuf.readInt16BE(i + 2) - pcmBuf.readInt16BE(i));
+    }
+    const hintLE = mimeLower.includes('little') || mimeLower.includes('le');
+    const shouldSwapToLE = !hintLE && beDiff < leDiff * 0.7;
+    if (shouldSwapToLE) {
+      for (let i = 0; i < pcmBuf.length; i += 2) {
+        pcmBuf.writeInt16LE(pcmBuf.readInt16BE(i), i);
+      }
+    }
+
+    let sum = 0;
+    for (let i = 0; i < pcmBuf.length; i += 2) {
+      sum += pcmBuf.readInt16LE(i);
+    }
+    const mean = sum / sampleCount;
+    let maxAbs = 0;
+    for (let i = 0; i < pcmBuf.length; i += 2) {
+      const centered = Math.max(-32768, Math.min(32767, Math.round(pcmBuf.readInt16LE(i) - mean)));
+      pcmBuf.writeInt16LE(centered, i);
+      const abs = Math.abs(centered);
+      if (abs > maxAbs) maxAbs = abs;
+    }
+
+    if (maxAbs > 24500) {
+      const scale = 24500 / maxAbs;
+      for (let i = 0; i < pcmBuf.length; i += 2) {
+        pcmBuf.writeInt16LE(Math.round(pcmBuf.readInt16LE(i) * scale), i);
+      }
+    }
+
+    const fadeSamples = Math.min(Math.floor(sampleRate * 0.015), Math.floor(sampleCount / 8));
+    for (let s = 0; s < fadeSamples; s += 1) {
+      const gain = s / Math.max(1, fadeSamples);
+      const headIdx = s * 2;
+      const tailIdx = (sampleCount - 1 - s) * 2;
+      pcmBuf.writeInt16LE(Math.round(pcmBuf.readInt16LE(headIdx) * gain), headIdx);
+      pcmBuf.writeInt16LE(Math.round(pcmBuf.readInt16LE(tailIdx) * gain), tailIdx);
+    }
+  }
+
   const header = Buffer.alloc(44);
   header.write('RIFF', 0, 'ascii');
-  header.writeUInt32LE(36 + rawBuf.length, 4);
+  header.writeUInt32LE(36 + pcmBuf.length, 4);
   header.write('WAVE', 8, 'ascii');
   header.write('fmt ', 12, 'ascii');
   header.writeUInt32LE(16, 16);
@@ -92,10 +177,10 @@ function normalizeTtsWavAudio(
   header.writeUInt16LE(blockAlign, 32);
   header.writeUInt16LE(bitsPerSample, 34);
   header.write('data', 36, 'ascii');
-  header.writeUInt32LE(rawBuf.length, 40);
+  header.writeUInt32LE(pcmBuf.length, 40);
 
   return {
-    audioBase64: Buffer.concat([header, rawBuf]).toString('base64'),
+    audioBase64: Buffer.concat([header, pcmBuf]).toString('base64'),
     mimeType: 'audio/wav',
   };
 }
@@ -108,7 +193,7 @@ function buildCleanTrailerNarrationScript(options: {
   durationSeconds: number;
 }): string {
   const { scenePrompt, storyTitle, storyNarration, mood, durationSeconds } = options;
-  const maxWords = Math.max(22, Math.min(68, Math.round(durationSeconds * 2.15)));
+  const maxWords = Math.max(20, Math.min(58, Math.round(durationSeconds * 1.85)));
 
   const stripProductionCues = (text: string) =>
     text
@@ -744,28 +829,113 @@ export async function createApp(options?: {
       chapterTitle?: string;
       paragraphIndex?: number;
       excerpt?: string;
+      selectedText?: string;
+      startOffset?: number;
+      endOffset?: number;
       color?: HighlightColor;
       note?: string;
     };
-    if (!body.storyId || !body.chapterId || typeof body.paragraphIndex !== 'number' || !body.excerpt) {
+
+    const storyId = typeof body.storyId === 'string' ? body.storyId.trim() : '';
+    const chapterId = typeof body.chapterId === 'string' ? body.chapterId.trim() : '';
+    const paragraphIndex = body.paragraphIndex;
+    const rawSelected = typeof body.selectedText === 'string' ? body.selectedText.trim() : '';
+    const rawExcerpt = typeof body.excerpt === 'string' ? body.excerpt.trim() : rawSelected;
+
+    if (
+      !storyId ||
+      !chapterId ||
+      typeof paragraphIndex !== 'number' ||
+      !Number.isInteger(paragraphIndex) ||
+      paragraphIndex < 0 ||
+      !rawExcerpt
+    ) {
       res.status(400).json({ error: 'Invalid highlight payload.' });
       return;
     }
+
+    const story = repo.getStoryById(storyId);
+    const chapter = story?.chapters.find((c) => c.id === chapterId);
+    if (!story || !chapter) {
+      res.status(404).json({ error: 'Story or chapter not found.' });
+      return;
+    }
+
+    if (!repo.hasAccessToChapter(req.currentUser, story, chapter)) {
+      res.status(403).json({ error: 'You do not have access to highlight this chapter.' });
+      return;
+    }
+
+    if (chapter.content.length > 0 && paragraphIndex >= chapter.content.length) {
+      res.status(400).json({ error: 'Invalid paragraph index.' });
+      return;
+    }
+
+    const validOffsets =
+      typeof body.startOffset === 'number' &&
+      typeof body.endOffset === 'number' &&
+      Number.isInteger(body.startOffset) &&
+      Number.isInteger(body.endOffset) &&
+      body.startOffset >= 0 &&
+      body.endOffset > body.startOffset;
+
+    const safeId =
+      typeof body.id === 'string' && body.id.trim().length > 0 && body.id.trim().length <= 100
+        ? body.id.trim()
+        : `hl_${crypto.randomUUID()}`;
+    const cleanedNote = typeof body.note === 'string' ? body.note.trim().slice(0, 1000) : '';
+
     const highlights = repo.saveHighlight(req.currentUser!.id, {
-      id: body.id || `hl_${crypto.randomUUID()}`,
-      storyId: body.storyId,
-      storyTitle: String(body.storyTitle || '').slice(0, 120),
-      storySlug: String(body.storySlug || '').slice(0, 120),
-      chapterId: body.chapterId,
-      chapterNumber: Number(body.chapterNumber || 1),
-      chapterTitle: String(body.chapterTitle || '').slice(0, 160),
-      paragraphIndex: body.paragraphIndex,
-      excerpt: String(body.excerpt).slice(0, 1200),
+      id: safeId,
+      storyId: story.id,
+      storyTitle: story.title.slice(0, 120),
+      storySlug: story.slug.slice(0, 120),
+      chapterId: chapter.id,
+      chapterNumber: chapter.chapterNumber,
+      chapterTitle: chapter.title.slice(0, 160),
+      paragraphIndex,
+      excerpt: rawExcerpt.slice(0, 1200),
+      selectedText: rawSelected ? rawSelected.slice(0, 800) : undefined,
+      startOffset: validOffsets ? body.startOffset : undefined,
+      endOffset: validOffsets ? body.endOffset : undefined,
       color: (['terracotta', 'gold', 'sage'].includes(String(body.color)) ? body.color : 'terracotta') as HighlightColor,
-      note: body.note ? String(body.note).slice(0, 600) : undefined,
+      note: cleanedNote || undefined,
       createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     });
     res.json({ highlights });
+  });
+
+  app.patch('/api/account/highlights/:id', requireAuth, (req: AuthedRequest, res) => {
+    const body = req.body as {
+      color?: HighlightColor;
+      note?: string | null;
+    };
+
+    const nextColor =
+      body.color && ['terracotta', 'gold', 'sage'].includes(String(body.color))
+        ? (body.color as HighlightColor)
+        : undefined;
+    const nextNote =
+      body.note === null
+        ? null
+        : typeof body.note === 'string'
+        ? body.note.trim().slice(0, 1000) || null
+        : undefined;
+
+    if (nextColor === undefined && nextNote === undefined) {
+      res.status(400).json({ error: 'Provide color or note updates.' });
+      return;
+    }
+
+    const updated = repo.updateHighlight(req.currentUser!.id, req.params.id, {
+      color: nextColor,
+      note: nextNote,
+    });
+    if (!updated) {
+      res.status(404).json({ error: 'Highlight not found.' });
+      return;
+    }
+    res.json({ highlights: updated });
   });
 
   app.delete('/api/account/highlights/:id', requireAuth, (req: AuthedRequest, res) => {
@@ -1757,7 +1927,7 @@ export async function createApp(options?: {
       let mimeType: string | null = null;
       let source: 'gemini-tts' | 'browser-speech-fallback' = 'browser-speech-fallback';
 
-      const targetWords = Math.max(20, Math.min(68, Math.round(durationSeconds * 2.15)));
+      const targetWords = Math.max(20, Math.min(58, Math.round(durationSeconds * 1.85)));
       const speechStyleByMood: Record<VideoSceneMood, string> = {
         storm: 'Clear, resonant, dramatic cinema trailer narrator speaking with steady diction',
         action: 'Crisp, dynamic, confident literary trailer narrator with clear articulation',

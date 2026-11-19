@@ -16,9 +16,15 @@ import {
   XCircle,
   Eye,
   EyeOff,
-  Award
+  Award,
+  BarChart3,
+  Search,
+  Pencil,
+  Check,
+  X,
+  MessageSquare
 } from 'lucide-react';
-import { ReadingActivityChart } from '../components/ReadingActivityChart';
+import { ReadingStatisticsDashboard } from '../components/ReadingStatisticsDashboard';
 import { ReadingGoal } from '../components/ReadingGoal';
 import { getDisplayName, computeReaderRank, READER_RANK_TIERS } from '../utils/readerProfile';
 
@@ -40,6 +46,7 @@ export const AccountView: React.FC = () => {
     openPaystackCheckout,
     toggleBookmark,
     highlights,
+    updateHighlight,
     removeHighlight,
     paragraphBookmarks,
     removeParagraphBookmark,
@@ -51,7 +58,14 @@ export const AccountView: React.FC = () => {
     completePostAuthRedirect
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'library' | 'goals' | 'highlights' | 'bookmarks' | 'subscription' | 'settings'>('library');
+  const [activeTab, setActiveTab] = useState<'library' | 'stats' | 'goals' | 'highlights' | 'bookmarks' | 'subscription' | 'settings'>('library');
+  const [hlSearch, setHlSearch] = useState('');
+  const [hlColorFilter, setHlColorFilter] = useState<'all' | 'terracotta' | 'gold' | 'sage'>('all');
+  const [hlNotesOnly, setHlNotesOnly] = useState(false);
+  const [editingHlId, setEditingHlId] = useState<string | null>(null);
+  const [editingHlNote, setEditingHlNote] = useState('');
+  const [editingHlColor, setEditingHlColor] = useState<'terracotta' | 'gold' | 'sage'>('terracotta');
+  const [savingHlEdit, setSavingHlEdit] = useState(false);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [authName, setAuthName] = useState('');
   const [authNickname, setAuthNickname] = useState('');
@@ -72,19 +86,8 @@ export const AccountView: React.FC = () => {
   }, [isAuthenticated, authLoading, readingPromptOpen, pendingRedirectTarget, completePostAuthRedirect]);
 
   const isPatron = isAuthenticated && user.subscription.status === 'active';
-  const goal = user.readingGoal;
   const displayName = getDisplayName(user);
   const rank = computeReaderRank(user, stories);
-
-  const dailyTargetForChart = goal.frequency === 'weekly'
-    ? Math.max(1, Math.ceil(goal.targetChapters / 7))
-    : goal.targetChapters;
-
-  const chartHistory = (goal.history || []).map((day, idx, arr) =>
-    idx === arr.length - 1
-      ? { ...day, chaptersRead: goal.currentProgress, metTarget: goal.currentProgress >= dailyTargetForChart }
-      : day
-  );
 
   const unlockedStories = stories.filter(s =>
     isAuthenticated &&
@@ -529,6 +532,19 @@ export const AccountView: React.FC = () => {
 
           <button
             type="button"
+            onClick={() => setActiveTab('stats')}
+            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
+              activeTab === 'stats'
+                ? 'border-[#C85A32] text-[#C85A32] font-semibold'
+                : 'border-transparent text-[#2D142C]/70 dark:text-white/70 hover:text-[#C85A32]'
+            }`}
+          >
+            <BarChart3 className="w-3.5 h-3.5 text-[#C85A32]" />
+            <span>Reading Statistics</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('goals')}
             className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
               activeTab === 'goals'
@@ -691,89 +707,305 @@ export const AccountView: React.FC = () => {
             )}
 
             <div className="pt-4">
-              <ReadingActivityChart
-                history={chartHistory}
-                dailyTarget={dailyTargetForChart}
+              <ReadingStatisticsDashboard
+                user={user}
+                stories={stories}
                 theme={readerSettings.theme}
+                onBrowseStories={() => navigate('stories')}
                 onConfigureGoal={() => setActiveTab('goals')}
+                showSeriesTable={false}
               />
             </div>
           </div>
+        )}
+
+        {/* Tab 1b: Full Reading Statistics */}
+        {activeTab === 'stats' && (
+          <ReadingStatisticsDashboard
+            user={user}
+            stories={stories}
+            theme={readerSettings.theme}
+            onBrowseStories={() => navigate('stories')}
+            onConfigureGoal={() => setActiveTab('goals')}
+            showSeriesTable
+          />
         )}
 
         {/* Tab 2: Reading Goals */}
         {activeTab === 'goals' && <ReadingGoal variant="full" />}
 
         {/* Tab 3: Highlights */}
-        {activeTab === 'highlights' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="font-display text-2xl font-bold">Highlights &amp; Margin Notes</h2>
-                <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
-                  Passages saved while reading chapters.
-                </p>
-              </div>
-              <a
-                href={buildHref('stories')}
-                onClick={(e) => handleLink(e, 'stories')}
-                className="text-xs font-semibold text-[#C85A32] hover:underline"
-              >
-                Open Library &rarr;
-              </a>
-            </div>
+        {activeTab === 'highlights' && (() => {
+          const query = hlSearch.trim().toLowerCase();
+          const filteredHighlights = highlights.filter((hl) => {
+            if (hlColorFilter !== 'all' && hl.color !== hlColorFilter) return false;
+            if (hlNotesOnly && !hl.note?.trim()) return false;
+            if (!query) return true;
+            return (
+              hl.storyTitle.toLowerCase().includes(query) ||
+              hl.chapterTitle.toLowerCase().includes(query) ||
+              hl.excerpt.toLowerCase().includes(query) ||
+              (hl.selectedText && hl.selectedText.toLowerCase().includes(query)) ||
+              (hl.note && hl.note.toLowerCase().includes(query))
+            );
+          });
 
-            {highlights.length === 0 ? (
-              <div className="p-8 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center text-xs text-[#2D142C]/65 dark:text-white/65 space-y-2">
-                <Highlighter className="w-7 h-7 mx-auto text-[#C85A32]/60" />
-                <p>No highlights saved yet.</p>
+          const startEditingHighlight = (hl: (typeof highlights)[number]) => {
+            setEditingHlId(hl.id);
+            setEditingHlNote(hl.note || '');
+            setEditingHlColor(hl.color);
+          };
+
+          const handleSaveHighlightEdit = async (highlightId: string) => {
+            setSavingHlEdit(true);
+            try {
+              await updateHighlight(highlightId, {
+                note: editingHlNote.trim() ? editingHlNote.trim() : null,
+                color: editingHlColor,
+              });
+              setEditingHlId(null);
+            } finally {
+              setSavingHlEdit(false);
+            }
+          };
+
+          const colorBorderMap: Record<'terracotta' | 'gold' | 'sage', string> = {
+            terracotta: 'border-l-[#C85A32]',
+            gold: 'border-l-[#D4AF37]',
+            sage: 'border-l-[#10B981]',
+          };
+
+          const colorDotMap: Record<'terracotta' | 'gold' | 'sage', string> = {
+            terracotta: 'bg-[#C85A32]',
+            gold: 'bg-[#D4AF37]',
+            sage: 'bg-[#10B981]',
+          };
+
+          const colorNameMap: Record<'terracotta' | 'gold' | 'sage', string> = {
+            terracotta: 'Ember',
+            gold: 'Gold',
+            sage: 'Sage',
+          };
+
+          return (
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-2xl font-bold">Highlights &amp; Margin Notes</h2>
+                  <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                    Selected passages and personal notes saved to your account. Revisit any passage right where you marked it.
+                  </p>
+                </div>
+                <a
+                  href={buildHref('stories')}
+                  onClick={(e) => handleLink(e, 'stories')}
+                  className="text-xs font-semibold text-[#C85A32] hover:underline"
+                >
+                  Open Library &rarr;
+                </a>
               </div>
-            ) : (
-              <div className="space-y-4">
-                {highlights.map(hl => (
-                  <div
-                    key={hl.id}
-                    className="p-5 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 border-l-4 border-l-[#C85A32] space-y-3"
-                  >
-                    <div className="flex items-center justify-between gap-3 text-xs font-sans-ui">
-                      <div>
-                        <span className="font-semibold text-[#C85A32]">{hl.storyTitle}</span>
-                        <span className="mx-1.5 opacity-40">&middot;</span>
-                        <span>Ch. {hl.chapterNumber}: {hl.chapterTitle}</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeHighlight(hl.id)}
-                        aria-label="Delete highlight"
-                        className="opacity-65 hover:text-red-500 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <blockquote className="font-reader text-sm italic">
-                      &ldquo;{hl.excerpt}&rdquo;
-                    </blockquote>
-                    {hl.note && (
-                      <div className="p-3 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] text-xs font-sans-ui">
-                        <strong className="text-[#C85A32] mr-1.5">Note:</strong>
-                        <span>{hl.note}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-end">
-                      <a
-                        href={buildHref('reader', { slug: hl.storySlug, chapterNumber: hl.chapterNumber })}
-                        onClick={(e) => handleLink(e, 'reader', { slug: hl.storySlug, chapterNumber: hl.chapterNumber })}
-                        className="text-xs font-semibold text-[#C85A32] hover:underline"
-                      >
-                        Open Chapter {hl.chapterNumber} &rarr;
-                      </a>
-                    </div>
+
+              {highlights.length > 0 && (
+                <div className="p-4 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                  <div className="relative flex-1 min-w-0">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[#2D142C]/45 dark:text-white/45" />
+                    <input
+                      type="text"
+                      value={hlSearch}
+                      onChange={(e) => setHlSearch(e.target.value)}
+                      placeholder="Search passages, thoughts, or story titles..."
+                      className="w-full pl-8 pr-3 py-1.5 rounded-lg text-xs bg-[#F9F6F0] dark:bg-[#160C16] border border-[#2D142C]/15 dark:border-white/15 focus:outline-none focus:border-[#C85A32]"
+                    />
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-sans-ui">
+                    {(['all', 'terracotta', 'gold', 'sage'] as const).map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setHlColorFilter(c)}
+                        className={`px-2.5 py-1 rounded-md border flex items-center gap-1.5 cursor-pointer transition-colors ${
+                          hlColorFilter === c
+                            ? 'bg-[#2D142C] text-white dark:bg-white dark:text-[#160C16] border-transparent font-semibold'
+                            : 'border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32]'
+                        }`}
+                      >
+                        {c !== 'all' && <span className={`w-2 h-2 rounded-full ${colorDotMap[c]}`} />}
+                        <span className="capitalize">{c === 'all' ? 'All Colors' : colorNameMap[c]}</span>
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setHlNotesOnly((prev) => !prev)}
+                      className={`px-2.5 py-1 rounded-md border flex items-center gap-1.5 cursor-pointer transition-colors ${
+                        hlNotesOnly
+                          ? 'bg-[#C85A32] text-white border-[#C85A32] font-semibold'
+                          : 'border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32]'
+                      }`}
+                    >
+                      <MessageSquare className="w-3 h-3" />
+                      <span>With Notes Only</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {highlights.length === 0 ? (
+                <div className="p-8 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center text-xs text-[#2D142C]/65 dark:text-white/65 space-y-2">
+                  <Highlighter className="w-7 h-7 mx-auto text-[#C85A32]/60" />
+                  <p>No highlights or margin notes saved yet. Select any text while reading a chapter to highlight it and jot down a note.</p>
+                </div>
+              ) : filteredHighlights.length === 0 ? (
+                <div className="p-8 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center text-xs text-[#2D142C]/65 dark:text-white/65 space-y-2">
+                  <Search className="w-6 h-6 mx-auto text-[#C85A32]/60" />
+                  <p>No highlights match your current filter.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredHighlights.map((hl) => {
+                    const isEditing = editingHlId === hl.id;
+                    const primaryQuote = hl.selectedText && hl.selectedText.trim().length > 0 ? hl.selectedText : hl.excerpt;
+                    const showContextExcerpt = hl.selectedText && hl.excerpt && hl.excerpt !== hl.selectedText;
+
+                    return (
+                      <div
+                        key={hl.id}
+                        className={`p-5 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 border-l-4 ${colorBorderMap[hl.color]} space-y-3`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3 text-xs font-sans-ui">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${colorDotMap[hl.color]}`} title={colorNameMap[hl.color]} />
+                            <span className="font-semibold text-[#C85A32]">{hl.storyTitle}</span>
+                            <span className="opacity-40">&middot;</span>
+                            <span>Ch. {hl.chapterNumber}: {hl.chapterTitle}</span>
+                            <span className="opacity-40">&middot;</span>
+                            <span className="font-mono text-[11px] opacity-70">Para. {hl.paragraphIndex + 1}</span>
+                            {hl.createdAt && (
+                              <>
+                                <span className="opacity-40">&middot;</span>
+                                <span className="opacity-60">{hl.createdAt}</span>
+                              </>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {!isEditing && (
+                              <button
+                                type="button"
+                                onClick={() => startEditingHighlight(hl)}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium text-[#2D142C]/75 dark:text-white/75 hover:text-[#C85A32] hover:bg-[#C85A32]/10 cursor-pointer"
+                              >
+                                <Pencil className="w-3 h-3" />
+                                <span>{hl.note ? 'Edit Note' : 'Add Thought'}</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => removeHighlight(hl.id)}
+                              aria-label="Delete highlight"
+                              className="p-1 opacity-65 hover:text-red-500 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <blockquote className="font-reader text-sm italic">
+                          &ldquo;{primaryQuote}&rdquo;
+                        </blockquote>
+
+                        {showContextExcerpt && (
+                          <p className="text-[11px] font-sans-ui text-[#2D142C]/55 dark:text-white/55 line-clamp-2">
+                            Context: {hl.excerpt}
+                          </p>
+                        )}
+
+                        {isEditing ? (
+                          <div className="p-3 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] border border-[#C85A32]/30 space-y-2.5">
+                            <div className="flex items-center justify-between gap-2 text-[11px] font-sans-ui">
+                              <span className="font-semibold text-[#C85A32]">Edit Annotation &amp; Highlight Color</span>
+                              <div className="flex items-center gap-1.5">
+                                {(['terracotta', 'gold', 'sage'] as const).map((c) => (
+                                  <button
+                                    key={c}
+                                    type="button"
+                                    onClick={() => setEditingHlColor(c)}
+                                    aria-label={`Set highlight color ${colorNameMap[c]}`}
+                                    className={`w-4 h-4 rounded-full ${colorDotMap[c]} cursor-pointer ${
+                                      editingHlColor === c ? 'ring-2 ring-offset-1 ring-[#C85A32]' : 'opacity-60 hover:opacity-100'
+                                    }`}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                            <textarea
+                              rows={2}
+                              value={editingHlNote}
+                              onChange={(e) => setEditingHlNote(e.target.value)}
+                              placeholder="Write your reflection or margin note on this passage..."
+                              className="w-full px-3 py-2 rounded-md text-xs bg-white dark:bg-[#1E111E] border border-[#2D142C]/15 dark:border-white/15 focus:outline-none focus:border-[#C85A32]"
+                            />
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setEditingHlId(null)}
+                                className="px-2.5 py-1 rounded text-[11px] font-medium text-[#2D142C]/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <X className="w-3 h-3" />
+                                <span>Cancel</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={savingHlEdit}
+                                onClick={() => handleSaveHighlightEdit(hl.id)}
+                                className="px-3 py-1 rounded text-[11px] font-semibold bg-[#C85A32] text-white hover:bg-[#b54e29] disabled:opacity-60 inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Check className="w-3 h-3" />
+                                <span>{savingHlEdit ? 'Saving...' : 'Save Note'}</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          hl.note && (
+                            <div className="p-3 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] text-xs font-sans-ui">
+                              <strong className="text-[#C85A32] mr-1.5">Note:</strong>
+                              <span>{hl.note}</span>
+                            </div>
+                          )
+                        )}
+
+                        <div className="flex items-center justify-between pt-1">
+                          {hl.updatedAt && (
+                            <span className="text-[11px] text-[#2D142C]/45 dark:text-white/45 font-sans-ui">
+                              Updated {hl.updatedAt}
+                            </span>
+                          )}
+                          <a
+                            href={buildHref('reader', {
+                              slug: hl.storySlug,
+                              chapterNumber: hl.chapterNumber,
+                              paragraph: hl.paragraphIndex,
+                              highlight: hl.id,
+                            })}
+                            onClick={(e) =>
+                              handleLink(e, 'reader', {
+                                slug: hl.storySlug,
+                                chapterNumber: hl.chapterNumber,
+                                paragraph: hl.paragraphIndex,
+                                highlight: hl.id,
+                              })
+                            }
+                            className="ml-auto text-xs font-semibold text-[#C85A32] hover:underline"
+                          >
+                            Revisit Passage &rarr;
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Tab 4: Saved Bookmarks */}
         {activeTab === 'bookmarks' && (

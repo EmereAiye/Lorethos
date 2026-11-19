@@ -1075,7 +1075,8 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     assert.equal(rankMax.progressToNextPercent, 100);
   });
 
-  test('every existing catalog story includes an official narrated trailer video and poster asset on disk', async () => {
+  test('every existing catalog story includes an official unified narrated trailer video with AAC audio on disk', async () => {
+    const { execFileSync } = await import('node:child_process');
     const res = await fetch(`${baseUrl}/api/stories`);
     assert.equal(res.status, 200);
     const data = await res.json();
@@ -1094,15 +1095,390 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       assert.ok(story, `Expected story ${slug} in catalog`);
       assert.equal(story.trailerVideoUrl, `/assets/trailers/${slug}.mp4`);
       assert.equal(story.trailerPosterUrl, `/assets/images/trailers/${slug}.jpg`);
-      assert.ok(story.trailerDuration, `Expected trailerDuration on ${slug}`);
+      assert.equal(story.trailerDuration, '21s', `Expected 21s duration on ${slug}`);
       assert.ok(story.trailerNarration && story.trailerNarration.length > 30, `Expected trailerNarration on ${slug}`);
 
-      const videoStat = await fs.stat(path.join(process.cwd(), 'public', story.trailerVideoUrl));
-      assert.ok(videoStat.size > 50_000, `Expected playable MP4 trailer file for ${slug}`);
+      const videoFile = path.join(process.cwd(), 'public', story.trailerVideoUrl);
+      const videoStat = await fs.stat(videoFile);
+      assert.ok(videoStat.size > 100_000, `Expected playable unified MP4 trailer file for ${slug}`);
+
+      const probeJson = execFileSync('ffprobe', [
+        '-v', 'error',
+        '-show_entries', 'stream=codec_type,codec_name,channels,sample_rate:format=duration',
+        '-of', 'json',
+        videoFile,
+      ]).toString();
+      const probe = JSON.parse(probeJson) as {
+        streams?: Array<{ codec_type?: string; codec_name?: string; channels?: number; sample_rate?: string }>;
+        format?: { duration?: string };
+      };
+      const videoStream = probe.streams?.find((st) => st.codec_type === 'video');
+      const audioStream = probe.streams?.find((st) => st.codec_type === 'audio');
+      assert.ok(videoStream, `Expected video stream in ${slug} trailer`);
+      assert.ok(audioStream, `Expected audio stream in ${slug} trailer`);
+      assert.equal(audioStream.codec_name, 'aac');
+      assert.equal(audioStream.channels, 2);
+      assert.ok(Number(probe.format?.duration || 0) >= 15, `Expected unified trailer >= 15s for ${slug}`);
 
       const posterStat = await fs.stat(path.join(process.cwd(), 'public', story.trailerPosterUrl));
       assert.ok(posterStat.size > 10_000, `Expected poster image file for ${slug}`);
     }
+  });
+
+  test('readingTime utilities compute chapter reading time from word count and story average word count', async () => {
+    const {
+      AVERAGE_READING_WPM,
+      calculateReadingTimeMinutes,
+      estimateChapterReadingTime,
+      summarizeStoryReadingTime,
+    } = await import('../src/utils/readingTime');
+
+    assert.equal(AVERAGE_READING_WPM, 250);
+    assert.equal(calculateReadingTimeMinutes(2500), 10);
+    assert.equal(calculateReadingTimeMinutes(420), 2);
+    assert.equal(calculateReadingTimeMinutes(100), 1);
+    // Falls back to story average word count when a draft chapter has 0 words
+    assert.equal(calculateReadingTimeMinutes(0, 1500), 6);
+
+    const summary = summarizeStoryReadingTime([
+      { wordCount: 2500, content: [], excerpt: '' },
+      { wordCount: 3000, content: [], excerpt: '' },
+      { wordCount: 2000, content: [], excerpt: '' },
+    ]);
+    assert.equal(summary.chapterCount, 3);
+    assert.equal(summary.totalWordCount, 7500);
+    assert.equal(summary.averageWordCount, 2500);
+    assert.equal(summary.averageChapterMinutes, 10);
+    assert.equal(summary.totalStoryMinutes, 30);
+
+    const draftEstimate = estimateChapterReadingTime(
+      { wordCount: 0, content: [], excerpt: '' },
+      summary.averageWordCount
+    );
+    assert.equal(draftEstimate.usedAverageFallback, true);
+    assert.equal(draftEstimate.wordCount, 2500);
+    assert.equal(draftEstimate.estimatedMinutes, 10);
+  });
+
+  test('readingStats computes total reading time, chapters finished, and genres explored', async () => {
+    const { computeUserReadingStats, formatReadingDuration } = await import('../src/utils/readingStats');
+    const { AUTHORITATIVE_STORIES } = await import('../server/catalog');
+
+    assert.equal(formatReadingDuration(0), '0 min');
+    assert.equal(formatReadingDuration(45), '45 min');
+    assert.equal(formatReadingDuration(60), '1 hr');
+    assert.equal(formatReadingDuration(95), '1h 35m');
+
+    const obsidian = AUTHORITATIVE_STORIES[0];
+    const baobab = AUTHORITATIVE_STORIES[1];
+
+    const stats = computeUserReadingStats(
+      {
+        id: 'usr_stats_test',
+        name: 'Amina Reader',
+        nickname: 'AminaInk',
+        email: 'amina@example.com',
+        role: 'reader',
+        subscription: { plan: 'free', status: 'none', amountNgn: 0 },
+        unlockedStoryIds: [obsidian.id],
+        bookmarkedChapterIds: [],
+        readingProgress: {
+          [obsidian.id]: {
+            chapterId: obsidian.chapters[1].id,
+            chapterNumber: 2,
+            progressPercent: 50,
+            lastReadAt: '2026-11-18T12:00:00.000Z',
+          },
+          [baobab.id]: {
+            chapterId: baobab.chapters[0].id,
+            chapterNumber: 1,
+            progressPercent: 100,
+            lastReadAt: '2026-11-18T14:00:00.000Z',
+          },
+        },
+        readingGoal: {
+          frequency: 'daily',
+          targetChapters: 2,
+          currentProgress: 2,
+          streakDays: 3,
+          bestStreakDays: 5,
+          lastUpdatedDate: '2026-11-18',
+          completedChapterIds: [obsidian.chapters[0].id],
+          history: [
+            { dayName: 'Tue', dateStr: 'Nov 17', chaptersRead: 1, metTarget: false },
+            { dayName: 'Wed', dateStr: 'Nov 18', chaptersRead: 2, metTarget: true },
+          ],
+        },
+      },
+      AUTHORITATIVE_STORIES
+    );
+
+    // Ch1 of Obsidian (2450w -> 10m) + Ch1 of Baobab (2800w -> 11m) + 50% of Ch2 Obsidian (3100w -> 12m * 0.5 = 6m)
+    assert.equal(stats.chaptersFinished, 2);
+    assert.equal(stats.chaptersInProgress, 1);
+    assert.equal(stats.totalMinutesRead, 27);
+    assert.equal(stats.formattedTotalTime, '27 min');
+    assert.equal(stats.genresExploredCount, 2);
+    assert.equal(stats.topGenre, 'Epic Fantasy');
+    assert.equal(stats.dailyActivity.length, 2);
+    assert.equal(stats.dailyActivity[1].isToday, true);
+    assert.equal(stats.dailyActivity[1].chaptersFinished, 2);
+    assert.ok(stats.dailyActivity[1].minutesRead > 0);
+  });
+
+  test('NarrativeAudioMiddleware debounces rapid paragraph scrolling and gates updates on significant intensity changes', async () => {
+    const { NarrativeAudioMiddleware, toSceneMood } = await import('../src/utils/narrativeAudioMiddleware');
+
+    const paragraphs = [
+      'The courtyard sat quietly in warm afternoon sunlight while merchants folded linen.',
+      'A gentle breeze carried spices across the harbor wall.',
+      'Suddenly a cold blade pierced the shadow behind the throne as blood, poison, and betrayal echoed in silence!',
+      'Still watching in darkness, the assassin crept through the cold shadow with venom and dread!',
+      'Tempest and lightning thundered across the courtyard while the storm raged!'
+    ];
+
+    const middleware = new NarrativeAudioMiddleware();
+    const applied: Array<{ index: number; mood: string; intensity: number; sceneMood: string }> = [];
+
+    const trigger = (index: number, minIntensityDelta = 0.24) => {
+      middleware.evaluate(paragraphs, index, {
+        enabled: true,
+        debounceMs: 60,
+        minIntensityDelta,
+        cooldownMs: 20,
+        onApply: (analysis) => {
+          applied.push({
+            index: analysis.paragraphIndex,
+            mood: analysis.mood,
+            intensity: analysis.intensity,
+            sceneMood: toSceneMood(analysis, paragraphs[analysis.paragraphIndex]),
+          });
+        },
+      });
+    };
+
+    // Rapid scrolling through paragraphs 0 -> 1 -> 2 must debounce to only paragraph 2
+    trigger(0);
+    trigger(1);
+    trigger(2);
+    assert.equal(applied.length, 0, 'Rapid updates must not fire synchronously before debounce settles');
+
+    await new Promise((r) => setTimeout(r, 110));
+    assert.equal(applied.length, 1, 'Only settled paragraph should trigger a soundtrack update');
+    assert.equal(applied[0].index, 2);
+    assert.equal(applied[0].mood, 'tense');
+    assert.equal(applied[0].sceneMood, 'suspense');
+
+    // Moving to paragraph 3 (also high-intensity tense with tiny delta) should NOT re-trigger soundtrack transition
+    trigger(3, 0.28);
+    await new Promise((r) => setTimeout(r, 90));
+    assert.equal(applied.length, 1, 'Minor intensity change below threshold must not trigger transition');
+
+    // Moving back to calm paragraph 0 represents a major intensity drop and must transition to neutral
+    trigger(0, 0.24);
+    await new Promise((r) => setTimeout(r, 90));
+    assert.equal(applied.length, 2, 'Significant drop in narrative intensity must transition back to calm/neutral');
+    assert.equal(applied[1].mood, 'calm');
+    assert.equal(applied[1].sceneMood, 'neutral');
+
+    // Moving to storm paragraph 4 transitions into storm SceneMood
+    trigger(4, 0.24);
+    await new Promise((r) => setTimeout(r, 90));
+    assert.equal(applied.length, 3);
+    assert.equal(applied[2].sceneMood, 'storm');
+
+    // Calling dispose cancels pending evaluation
+    trigger(0, 0.24);
+    middleware.dispose();
+    await new Promise((r) => setTimeout(r, 90));
+    assert.equal(applied.length, 3, 'Disposing middleware cancels pending debounced soundtrack update');
+  });
+
+  test('highlights API supports multiple span annotations per paragraph, PATCH editing, entitlement checks, and deletion', async () => {
+    // 1. Unauthenticated requests rejected
+    const unauthGet = await fetch(`${baseUrl}/api/account/highlights`);
+    assert.equal(unauthGet.status, 401);
+    const unauthPost = await fetch(`${baseUrl}/api/account/highlights`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storyId: 'x', chapterId: 'y', paragraphIndex: 0, excerpt: 'hi' }),
+    });
+    assert.equal(unauthPost.status, 401);
+
+    // 2. Register a clean reader with no paid unlocks
+    const regRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Kemi Annotator',
+        nickname: 'KemiNotes',
+        email: 'kemi.notes@example.com',
+        password: 'StrongPassword123',
+      }),
+    });
+    assert.equal(regRes.status, 201);
+    const cookie = extractSessionCookie(regRes);
+
+    const obsidian = repoRef.getStoryBySlug('the-obsidian-throne')!;
+    const ch1 = obsidian.chapters.find((c) => c.chapterNumber === 1)!;
+    const ch4 = obsidian.chapters.find((c) => c.chapterNumber === 4)!;
+    const para0 = ch1.content[0];
+
+    // 3. Locked chapter highlight blocked (403)
+    const lockedRes = await fetch(`${baseUrl}/api/account/highlights`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        storyId: obsidian.id,
+        chapterId: ch4.id,
+        paragraphIndex: 0,
+        excerpt: 'Locked passage',
+        color: 'gold',
+      }),
+    });
+    assert.equal(lockedRes.status, 403);
+
+    // 4. Two distinct span highlights inside the SAME paragraph 0
+    const spanAStart = 0;
+    const spanAEnd = Math.min(24, para0.length);
+    const spanAText = para0.slice(spanAStart, spanAEnd);
+
+    const spanBStart = Math.min(30, Math.max(spanAEnd + 1, Math.floor(para0.length / 2)));
+    const spanBEnd = Math.min(para0.length, spanBStart + 25);
+    const spanBText = para0.slice(spanBStart, spanBEnd);
+
+    const post1 = await fetch(`${baseUrl}/api/account/highlights`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        storyId: obsidian.id,
+        chapterId: ch1.id,
+        paragraphIndex: 0,
+        excerpt: para0,
+        selectedText: spanAText,
+        startOffset: spanAStart,
+        endOffset: spanAEnd,
+        note: 'Opening atmospheric motif',
+        color: 'terracotta',
+      }),
+    });
+    assert.equal(post1.status, 200);
+    const data1 = await post1.json();
+    assert.equal(data1.highlights.length, 1);
+    const hl1 = data1.highlights[0];
+    assert.equal(hl1.selectedText, spanAText);
+    assert.equal(hl1.startOffset, spanAStart);
+    assert.equal(hl1.endOffset, spanAEnd);
+    assert.equal(hl1.note, 'Opening atmospheric motif');
+
+    const post2 = await fetch(`${baseUrl}/api/account/highlights`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        storyId: obsidian.id,
+        chapterId: ch1.id,
+        paragraphIndex: 0,
+        excerpt: para0,
+        selectedText: spanBText,
+        startOffset: spanBStart,
+        endOffset: spanBEnd,
+        color: 'gold',
+      }),
+    });
+    assert.equal(post2.status, 200);
+    const data2 = await post2.json();
+    assert.equal(data2.highlights.length, 2, 'Multiple span highlights in one paragraph must coexist');
+    const hl2 = data2.highlights.find((h: { id: string }) => h.id !== hl1.id);
+    assert.ok(hl2);
+
+    // 5. PATCH updates note & color cleanly
+    const patchRes = await fetch(`${baseUrl}/api/account/highlights/${encodeURIComponent(hl2.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        note: 'Revisited this symbol during chapter review',
+        color: 'sage',
+      }),
+    });
+    assert.equal(patchRes.status, 200);
+    const patched = await patchRes.json();
+    const updatedHl2 = patched.highlights.find((h: { id: string }) => h.id === hl2.id);
+    assert.equal(updatedHl2.note, 'Revisited this symbol during chapter review');
+    assert.equal(updatedHl2.color, 'sage');
+    assert.ok(updatedHl2.updatedAt);
+
+    // 6. Unknown highlight PATCH returns 404
+    const missingPatch = await fetch(`${baseUrl}/api/account/highlights/nonexistent_hl`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ note: 'Test' }),
+    });
+    assert.equal(missingPatch.status, 404);
+
+    // 7. DELETE removes only the targeted span highlight
+    const delRes = await fetch(`${baseUrl}/api/account/highlights/${encodeURIComponent(hl1.id)}`, {
+      method: 'DELETE',
+      headers: { Cookie: cookie },
+    });
+    assert.equal(delRes.status, 200);
+    const afterDel = await delRes.json();
+    assert.equal(afterDel.highlights.length, 1);
+    assert.equal(afterDel.highlights[0].id, hl2.id);
+  });
+
+  test('highlightSpans utilities trim selections cleanly and resolve non-overlapping paragraph segments', async () => {
+    const { computeTrimmedSelectionOffsets, resolveParagraphHighlightSegments } = await import('../src/utils/highlightSpans');
+
+    const text = 'Under the blackened eclipse, ancient bronze tablets whispered in silence.';
+    // Select ' blackened eclipse, ' -> indices 9..29
+    const trimmed = computeTrimmedSelectionOffsets(text, 9, 29);
+    assert.deepEqual(trimmed, {
+      selectedText: 'blackened eclipse,',
+      startOffset: 10,
+      endOffset: 28,
+    });
+
+    const segments = resolveParagraphHighlightSegments(text, [
+      {
+        id: 'hl_a',
+        storyId: 's1',
+        storySlug: 's1',
+        storyTitle: 'S1',
+        chapterId: 'c1',
+        chapterNumber: 1,
+        chapterTitle: 'C1',
+        paragraphIndex: 0,
+        excerpt: text,
+        selectedText: 'blackened eclipse',
+        startOffset: 10,
+        endOffset: 27,
+        color: 'terracotta',
+        createdAt: '2026-11-19',
+      },
+      {
+        id: 'hl_b',
+        storyId: 's1',
+        storySlug: 's1',
+        storyTitle: 'S1',
+        chapterId: 'c1',
+        chapterNumber: 1,
+        chapterTitle: 'C1',
+        paragraphIndex: 0,
+        excerpt: text,
+        selectedText: 'ancient bronze',
+        startOffset: 29,
+        endOffset: 43,
+        color: 'gold',
+        note: 'Key artifact',
+        createdAt: '2026-11-19',
+      },
+    ]);
+
+    assert.equal(segments.map((s) => s.text).join(''), text);
+    const marked = segments.filter((s) => Boolean(s.highlight));
+    assert.equal(marked.length, 2);
+    assert.equal(marked[0].text, 'blackened eclipse');
+    assert.equal(marked[1].text, 'ancient bronze');
   });
 });
 

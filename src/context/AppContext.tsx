@@ -24,6 +24,7 @@ export interface RouteParams {
   slug?: string;
   chapterNumber?: number;
   paragraph?: number;
+  highlight?: string;
   q?: string;
   genre?: string;
   status?: string;
@@ -74,6 +75,7 @@ export interface AdminOverviewData {
 }
 
 interface HighlightInput {
+  id?: string;
   storyId: string;
   storyTitle: string;
   storySlug: string;
@@ -82,6 +84,9 @@ interface HighlightInput {
   chapterTitle: string;
   paragraphIndex: number;
   excerpt: string;
+  selectedText?: string;
+  startOffset?: number;
+  endOffset?: number;
   color: HighlightColor;
   note?: string;
 }
@@ -215,7 +220,8 @@ interface AppContextType {
 
   // Highlights, Paragraph Bookmarks, Margin Notes, Chapter Comments & Community Inquiries
   highlights: TextHighlight[];
-  saveHighlight: (input: HighlightInput) => void;
+  saveHighlight: (input: HighlightInput) => TextHighlight;
+  updateHighlight: (highlightId: string, patch: { color?: HighlightColor; note?: string | null }) => void;
   removeHighlight: (highlightId: string) => void;
   paragraphBookmarks: ParagraphBookmark[];
   saveParagraphBookmark: (input: ParagraphBookmarkInput) => void;
@@ -432,9 +438,15 @@ export function buildHref(route: string, params?: RouteParams): string {
     case 'reader': {
       if (!params?.slug) return '/stories';
       const base = `/stories/${encodeURIComponent(params.slug)}/chapters/${params.chapterNumber || 1}`;
-      return typeof params.paragraph === 'number' && Number.isInteger(params.paragraph) && params.paragraph >= 0
-        ? `${base}?paragraph=${params.paragraph}`
-        : base;
+      const qs = new URLSearchParams();
+      if (typeof params.paragraph === 'number' && Number.isInteger(params.paragraph) && params.paragraph >= 0) {
+        qs.set('paragraph', String(params.paragraph));
+      }
+      if (params.highlight) {
+        qs.set('highlight', params.highlight);
+      }
+      const queryStr = qs.toString();
+      return queryStr ? `${base}?${queryStr}` : base;
     }
     case 'pricing':
       return '/pricing';
@@ -490,12 +502,14 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
   if (chapterMatch) {
     const rawPara = qs.get('paragraph');
     const parsedPara = rawPara !== null && /^\d+$/.test(rawPara) ? Number(rawPara) : undefined;
+    const rawHighlight = qs.get('highlight') || undefined;
     return {
       route: 'reader',
       params: {
         slug: decodeURIComponent(chapterMatch[1]),
         chapterNumber: Number(chapterMatch[2]) || 1,
-        ...(parsedPara !== undefined ? { paragraph: parsedPara } : {})
+        ...(parsedPara !== undefined ? { paragraph: parsedPara } : {}),
+        ...(rawHighlight ? { highlight: rawHighlight } : {})
       }
     };
   }
@@ -578,7 +592,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  const [highlights, setHighlights] = useState<TextHighlight[]>([]);
+  const [highlights, setHighlights] = useState<TextHighlight[]>(() => {
+    try {
+      const raw = window.localStorage.getItem('lorethos_guest_highlights');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [paragraphBookmarks, setParagraphBookmarks] = useState<ParagraphBookmark[]>(() => {
     try {
       const raw = window.localStorage.getItem('lorethos_guest_paragraph_bookmarks');
@@ -631,16 +654,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [isAuthenticated, user.readingGoal]);
 
-  // Persist guest paragraph bookmarks locally when not authenticated
+  // Persist guest paragraph bookmarks & highlights locally when not authenticated
   useEffect(() => {
     if (!isAuthenticated && !authLoading) {
       try {
         localStorage.setItem('lorethos_guest_paragraph_bookmarks', JSON.stringify(paragraphBookmarks));
+        localStorage.setItem('lorethos_guest_highlights', JSON.stringify(highlights));
       } catch {
         // Ignore storage quota errors
       }
     }
-  }, [isAuthenticated, authLoading, paragraphBookmarks]);
+  }, [isAuthenticated, authLoading, paragraphBookmarks, highlights]);
 
   // Synchronize document classes based on reader theme
   useEffect(() => {
@@ -683,6 +707,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const loadAccountExtras = useCallback(async () => {
     try {
+      // If the reader created highlights while browsing as a guest before signing in, sync them to their account first
+      let guestHighlights: TextHighlight[] = [];
+      try {
+        const rawGuestHl = window.localStorage.getItem('lorethos_guest_highlights');
+        const parsed = rawGuestHl ? JSON.parse(rawGuestHl) : [];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          guestHighlights = parsed;
+        }
+      } catch {
+        // Ignore malformed guest storage
+      }
+
+      if (guestHighlights.length > 0) {
+        for (const hl of guestHighlights) {
+          await apiFetch('/api/account/highlights', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(hl),
+          }).catch(() => {});
+        }
+        try {
+          window.localStorage.removeItem('lorethos_guest_highlights');
+        } catch {
+          // Ignore storage removal errors
+        }
+      }
+
       const [txRes, hlRes, pbmRes] = await Promise.all([
         apiFetch('/api/account/transactions'),
         apiFetch('/api/account/highlights'),
@@ -996,7 +1047,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setIsAuthenticated(false);
     setTransactions([]);
-    setHighlights([]);
+    try {
+      const rawGuestHl = window.localStorage.getItem('lorethos_guest_highlights');
+      const parsedGuestHl = rawGuestHl ? JSON.parse(rawGuestHl) : [];
+      setHighlights(Array.isArray(parsedGuestHl) ? parsedGuestHl : []);
+    } catch {
+      setHighlights([]);
+    }
     try {
       const rawGuestBookmarks = window.localStorage.getItem('lorethos_guest_paragraph_bookmarks');
       const parsedGuestBookmarks = rawGuestBookmarks ? JSON.parse(rawGuestBookmarks) : [];
@@ -1212,15 +1269,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [syncGoalToServer]
   );
 
-  const saveHighlight = (input: HighlightInput) => {
-    const existing = highlights.find(
-      h => h.chapterId === input.chapterId && h.paragraphIndex === input.paragraphIndex
-    );
+  const saveHighlight = (input: HighlightInput): TextHighlight => {
+    const hasOffsets =
+      typeof input.startOffset === 'number' && typeof input.endOffset === 'number';
+    const existing = highlights.find((h) => {
+      if (input.id && h.id === input.id) return true;
+      if (!hasOffsets && typeof h.startOffset !== 'number') {
+        return h.chapterId === input.chapterId && h.paragraphIndex === input.paragraphIndex;
+      }
+      return false;
+    });
 
     const record: TextHighlight = {
-      id: existing ? existing.id : `hl-${Date.now()}`,
-      ...input,
-      createdAt: 'Just now'
+      id: existing ? existing.id : input.id || `hl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      storyId: input.storyId,
+      storyTitle: input.storyTitle,
+      storySlug: input.storySlug,
+      chapterId: input.chapterId,
+      chapterNumber: input.chapterNumber,
+      chapterTitle: input.chapterTitle,
+      paragraphIndex: input.paragraphIndex,
+      excerpt: input.excerpt,
+      selectedText: input.selectedText,
+      startOffset: input.startOffset,
+      endOffset: input.endOffset,
+      color: input.color,
+      note: input.note,
+      createdAt: existing ? existing.createdAt : 'Just now',
+      updatedAt: existing ? 'Just now' : undefined
     };
 
     setHighlights(prev =>
@@ -1239,6 +1315,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       });
     }
+
+    return record;
+  };
+
+  const updateHighlight = (
+    highlightId: string,
+    patch: { color?: HighlightColor; note?: string | null }
+  ) => {
+    setHighlights((prev) =>
+      prev.map((h) => {
+        if (h.id !== highlightId) return h;
+        return {
+          ...h,
+          color: patch.color ?? h.color,
+          note:
+            patch.note === null
+              ? undefined
+              : patch.note !== undefined
+              ? patch.note.trim() || undefined
+              : h.note,
+          updatedAt: 'Just now',
+        };
+      })
+    );
+
+    if (isAuthenticated) {
+      void apiFetch(`/api/account/highlights/${encodeURIComponent(highlightId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      }).then(async (res) => {
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.highlights)) setHighlights(data.highlights);
+        }
+      });
+    }
   };
 
   const removeHighlight = (highlightId: string) => {
@@ -1246,6 +1359,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (isAuthenticated) {
       void apiFetch(`/api/account/highlights/${encodeURIComponent(highlightId)}`, {
         method: 'DELETE',
+      }).then(async (res) => {
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.highlights)) setHighlights(data.highlights);
+        }
       });
     }
   };
@@ -1600,6 +1718,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logChapterCompleted,
         highlights,
         saveHighlight,
+        updateHighlight,
         removeHighlight,
         paragraphBookmarks,
         saveParagraphBookmark,

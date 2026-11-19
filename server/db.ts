@@ -335,11 +335,20 @@ class LorethosRepository {
         chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
         paragraph_index INTEGER NOT NULL,
         excerpt TEXT NOT NULL,
+        selected_text TEXT,
+        start_offset INTEGER,
+        end_offset INTEGER,
         color TEXT NOT NULL CHECK (color IN ('terracotta', 'gold', 'sage')),
         note TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (user_id, chapter_id, paragraph_index)
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE highlights ADD COLUMN IF NOT EXISTS selected_text TEXT;
+      ALTER TABLE highlights ADD COLUMN IF NOT EXISTS start_offset INTEGER;
+      ALTER TABLE highlights ADD COLUMN IF NOT EXISTS end_offset INTEGER;
+      ALTER TABLE highlights ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+      ALTER TABLE highlights DROP CONSTRAINT IF EXISTS highlights_user_id_chapter_id_paragraph_index_key;
+      CREATE INDEX IF NOT EXISTS idx_highlights_user_chapter ON highlights(user_id, chapter_id);
       CREATE TABLE IF NOT EXISTS paragraph_bookmarks (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -374,61 +383,58 @@ class LorethosRepository {
       );
     `);
 
-    const countRes = await pool.query('SELECT COUNT(*)::int AS cnt FROM stories');
-    if ((countRes.rows[0]?.cnt ?? 0) === 0) {
-      for (const story of AUTHORITATIVE_STORIES) {
+    for (const story of AUTHORITATIVE_STORIES) {
+      await pool.query(
+        `INSERT INTO stories (
+          id, slug, title, subtitle, author, author_bio, genre, tags,
+          cover_image, synopsis, prologue_lore, status, publication_status,
+          access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        ON CONFLICT (id) DO NOTHING`,
+        [
+          story.id,
+          story.slug,
+          story.title,
+          story.subtitle,
+          story.author,
+          story.authorBio,
+          story.genre,
+          JSON.stringify(story.tags),
+          story.coverImage,
+          story.synopsis,
+          story.prologueLore,
+          story.status,
+          story.publicationStatus || 'published',
+          story.accessTier,
+          story.priceNgn,
+          story.freeChaptersCount,
+          story.featured,
+          story.spotlightOrder ?? null,
+          story.updatedAt
+        ]
+      );
+      for (const ch of story.chapters) {
         await pool.query(
-          `INSERT INTO stories (
-            id, slug, title, subtitle, author, author_bio, genre, tags,
-            cover_image, synopsis, prologue_lore, status, publication_status,
-            access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          `INSERT INTO chapters (
+            id, story_id, chapter_number, title, slug, release_date_label,
+            word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
           ON CONFLICT (id) DO NOTHING`,
           [
+            ch.id,
             story.id,
-            story.slug,
-            story.title,
-            story.subtitle,
-            story.author,
-            story.authorBio,
-            story.genre,
-            JSON.stringify(story.tags),
-            story.coverImage,
-            story.synopsis,
-            story.prologueLore,
-            story.status,
-            story.publicationStatus || 'published',
-            story.accessTier,
-            story.priceNgn,
-            story.freeChaptersCount,
-            story.featured,
-            story.spotlightOrder ?? null,
-            story.updatedAt
+            ch.chapterNumber,
+            ch.title,
+            ch.slug,
+            ch.releaseDate,
+            ch.wordCount,
+            ch.readTimeMinutes,
+            ch.isFree,
+            ch.excerpt,
+            JSON.stringify(ch.content),
+            ch.ambientSoundscape ?? null
           ]
         );
-        for (const ch of story.chapters) {
-          await pool.query(
-            `INSERT INTO chapters (
-              id, story_id, chapter_number, title, slug, release_date_label,
-              word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
-            ON CONFLICT (id) DO NOTHING`,
-            [
-              ch.id,
-              story.id,
-              ch.chapterNumber,
-              ch.title,
-              ch.slug,
-              ch.releaseDate,
-              ch.wordCount,
-              ch.readTimeMinutes,
-              ch.isFree,
-              ch.excerpt,
-              JSON.stringify(ch.content),
-              ch.ambientSoundscape ?? null
-            ]
-          );
-        }
       }
     }
   }
@@ -594,9 +600,13 @@ class LorethosRepository {
           chapterTitle: ch?.title || '',
           paragraphIndex: Number(h.paragraph_index),
           excerpt: h.excerpt,
+          selectedText: h.selected_text || undefined,
+          startOffset: h.start_offset !== null && h.start_offset !== undefined ? Number(h.start_offset) : undefined,
+          endOffset: h.end_offset !== null && h.end_offset !== undefined ? Number(h.end_offset) : undefined,
           color: h.color,
           note: h.note || undefined,
-          createdAt: new Date(h.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          createdAt: new Date(h.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          updatedAt: h.updated_at ? new Date(h.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : undefined
         });
         this.state.highlights[h.user_id] = list;
       }
@@ -1364,36 +1374,90 @@ class LorethosRepository {
   }
 
   public saveHighlight(userId: string, highlight: TextHighlight): TextHighlight[] {
-    const existingList = this.state.highlights[userId] || [];
-    const idx = existingList.findIndex(
-      (h) => h.chapterId === highlight.chapterId && h.paragraphIndex === highlight.paragraphIndex
-    );
+    const existingList = [...(this.state.highlights[userId] || [])];
+    const hasOffsets =
+      typeof highlight.startOffset === 'number' && typeof highlight.endOffset === 'number';
+    const idx = existingList.findIndex((h) => {
+      if (h.id === highlight.id) return true;
+      if (!hasOffsets && typeof h.startOffset !== 'number') {
+        return h.chapterId === highlight.chapterId && h.paragraphIndex === highlight.paragraphIndex;
+      }
+      return false;
+    });
+    const savedRecord: TextHighlight = idx >= 0
+      ? { ...highlight, id: existingList[idx].id, createdAt: existingList[idx].createdAt }
+      : highlight;
+
     if (idx >= 0) {
-      existingList[idx] = highlight;
+      existingList[idx] = savedRecord;
     } else {
-      existingList.unshift(highlight);
+      existingList.unshift(savedRecord);
     }
     this.state.highlights[userId] = existingList;
     this.persistSnapshot();
 
     this.mirrorToPostgres(async (pool) => {
       await pool.query(
-        `INSERT INTO highlights (id, user_id, story_id, chapter_id, paragraph_index, excerpt, color, note)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (user_id, chapter_id, paragraph_index) DO UPDATE SET
+        `INSERT INTO highlights (
+           id, user_id, story_id, chapter_id, paragraph_index, excerpt,
+           selected_text, start_offset, end_offset, color, note, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+         ON CONFLICT (id) DO UPDATE SET
            excerpt = EXCLUDED.excerpt,
+           selected_text = EXCLUDED.selected_text,
+           start_offset = EXCLUDED.start_offset,
+           end_offset = EXCLUDED.end_offset,
            color = EXCLUDED.color,
-           note = EXCLUDED.note`,
+           note = EXCLUDED.note,
+           updated_at = NOW()`,
         [
-          highlight.id,
+          savedRecord.id,
           userId,
-          highlight.storyId,
-          highlight.chapterId,
-          highlight.paragraphIndex,
-          highlight.excerpt,
-          highlight.color,
-          highlight.note ?? null
+          savedRecord.storyId,
+          savedRecord.chapterId,
+          savedRecord.paragraphIndex,
+          savedRecord.excerpt,
+          savedRecord.selectedText ?? null,
+          savedRecord.startOffset ?? null,
+          savedRecord.endOffset ?? null,
+          savedRecord.color,
+          savedRecord.note ?? null
         ]
+      );
+    });
+
+    return existingList;
+  }
+
+  public updateHighlight(
+    userId: string,
+    highlightId: string,
+    patch: { color?: TextHighlight['color']; note?: string | null }
+  ): TextHighlight[] | null {
+    const existingList = [...(this.state.highlights[userId] || [])];
+    const idx = existingList.findIndex((h) => h.id === highlightId);
+    if (idx < 0) return null;
+
+    const current = existingList[idx];
+    const updated: TextHighlight = {
+      ...current,
+      color: patch.color ?? current.color,
+      note: patch.note === null ? undefined : patch.note !== undefined ? patch.note : current.note,
+      updatedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    };
+    existingList[idx] = updated;
+    this.state.highlights[userId] = existingList;
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `UPDATE highlights
+         SET color = $3,
+             note = $4,
+             updated_at = NOW()
+         WHERE id = $1 AND user_id = $2`,
+        [highlightId, userId, updated.color, updated.note ?? null]
       );
     });
 
