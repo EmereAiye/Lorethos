@@ -29,7 +29,7 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     trailerPosterUrl: '/assets/images/trailers/the-obsidian-throne.jpg',
     trailerDuration: '21s',
     trailerMood: 'action',
-    trailerNarration: 'Beneath a blackened solar eclipse, the High Citadels of Ostraka tremble. Hidden in ancient vaults, glowing tablets whisper of the First Weavers as warlords gather beside the Obsidian Throne.',
+    trailerNarration: 'As the Black Eclipse darkens Ostraka, King Vane confronts rising warlords and court betrayal. Bound to an ancient blood-pact, every decree threatens the realm. Read The Obsidian Throne on Lorethos.',
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -190,7 +190,7 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     trailerPosterUrl: '/assets/images/trailers/whisper-of-the-baobab.jpg',
     trailerDuration: '21s',
     trailerMood: 'neutral',
-    trailerNarration: 'Under the Sahel stars, young navigator Boma holds an ancient brass compass. Across the singing dunes, silver sands hum beneath shifting winds, revealing celestial highways inside the sacred Baobab.',
+    trailerNarration: 'Chosen to carry an ancestral brass compass across the Sahel sands, Boma awakens a starlit Baobab—discovering celestial highways built by her forebears. Read Whisper of the Baobab now on Lorethos.',
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -328,7 +328,7 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     trailerPosterUrl: '/assets/images/trailers/chronicles-of-the-sunken-epoch.jpg',
     trailerDuration: '21s',
     trailerMood: 'storm',
-    trailerNarration: 'Four thousand fathoms beneath ocean storms, Diver Kaelen descends into drowned Atal-Mor. Inside a golden reliquary, rotating amber awakens voices of a drowned council as the crystal dome trembles.',
+    trailerNarration: 'Four thousand fathoms beneath ocean storms, diver Kaelen uncovers drowned Atal-Mor—and a golden reliquary warning that the sea is rising again. Read the full chronicle on Lorethos.',
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -460,7 +460,7 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     trailerPosterUrl: '/assets/images/trailers/the-crimson-scribe.jpg',
     trailerDuration: '21s',
     trailerMood: 'suspense',
-    trailerNarration: 'Inside the royal scriptorium of House Valerius, statecraft is written in crimson ink. Held against candlelight, margin ciphers expose five royal tasters while armed guards bolt every palace door.',
+    trailerNarration: 'In the royal scriptorium of House Valerius, apprentice Lucien decodes a cipher in crimson ink—revealing three kings were executed by their own scribes. Read more on Lorethos.',
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -592,7 +592,7 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     trailerPosterUrl: '/assets/images/trailers/verses-of-the-harmattan.jpg',
     trailerDuration: '21s',
     trailerMood: 'neutral',
-    trailerNarration: 'When red northern dust coats the mango leaves, brass lanterns glow at dawn. Along twilight waters, an elder ferryman measures the tide as tin rooftops sing beneath clear constellations.',
+    trailerNarration: 'Tracing the Harmattan wind from ochre courtyards to Atlantic harbors, this poetry anthology weaves memory, kinship, and lantern light into evening verse. Read every canto free on Lorethos.',
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -709,7 +709,7 @@ export const AUTHORITATIVE_STORIES: Story[] = [
     trailerPosterUrl: '/assets/images/trailers/letters-across-the-lagoon.jpg',
     trailerDuration: '21s',
     trailerMood: 'neutral',
-    trailerNarration: 'Ten years after the waterfront reading hall burned, rolled blueprints cross the lagoon tide once more. Beneath pried floorboards, a salt-stained ledger exposes the truth before sunlit shutters open.',
+    trailerNarration: 'After ten years of silence, two estranged architects exchange handwritten letters tucked inside waterfront blueprints—rebuilding a burned reading hall while uncovering the truth of the night it fell. Read Letters Across the Lagoon free on Lorethos.',
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -818,15 +818,15 @@ export function withOfficialTrailerMetadata(story: Story): Story {
   if (!defaults) return story;
   return {
     ...story,
-    trailerVideoUrl: story.trailerVideoUrl || defaults.trailerVideoUrl,
-    trailerPosterUrl: story.trailerPosterUrl || defaults.trailerPosterUrl,
-    trailerDuration: story.trailerDuration || defaults.trailerDuration,
-    trailerMood: story.trailerMood || defaults.trailerMood,
-    trailerNarration: story.trailerNarration || defaults.trailerNarration,
+    trailerVideoUrl: defaults.trailerVideoUrl || story.trailerVideoUrl,
+    trailerPosterUrl: defaults.trailerPosterUrl || story.trailerPosterUrl,
+    trailerDuration: defaults.trailerDuration || story.trailerDuration,
+    trailerMood: defaults.trailerMood || story.trailerMood,
+    trailerNarration: defaults.trailerNarration || story.trailerNarration,
     trailerScenes:
-      story.trailerScenes && story.trailerScenes.length > 0
-        ? story.trailerScenes
-        : defaults.trailerScenes,
+      defaults.trailerScenes && defaults.trailerScenes.length > 0
+        ? defaults.trailerScenes
+        : story.trailerScenes,
   };
 }
 

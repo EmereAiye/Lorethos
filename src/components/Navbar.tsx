@@ -182,6 +182,19 @@ export const Navbar: React.FC = () => {
             Contact
           </a>
 
+          <a
+            href={buildHref('profile')}
+            onClick={(e) => handleNavClick(e, 'profile')}
+            aria-current={currentRoute === 'profile' ? 'page' : undefined}
+            className={`transition-colors whitespace-nowrap shrink-0 ${
+              currentRoute === 'profile'
+                ? 'text-[#C85A32] font-semibold'
+                : 'text-[#2D142C]/80 dark:text-[#F9F6F0]/80 sepia:text-[#2C1E18]/80 hover:text-[#C85A32]'
+            }`}
+          >
+            Profile
+          </a>
+
           {isOwner && (
             <a
               href={buildHref('admin')}
@@ -400,9 +413,18 @@ export const Navbar: React.FC = () => {
                 : 'border-[#2D142C]/20 dark:border-white/20 sepia:border-[#2C1E18]/20 text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] hover:bg-[#2D142C]/5 dark:hover:bg-white/5'
             }`}
           >
-            <User className="w-3.5 h-3.5 shrink-0" />
+            {user.avatar ? (
+              <img
+                src={user.avatar}
+                alt={displayName}
+                referrerPolicy="no-referrer"
+                className="w-5 h-5 rounded-full object-cover border border-[#C85A32]/60 shrink-0"
+              />
+            ) : (
+              <User className="w-3.5 h-3.5 shrink-0" />
+            )}
             <span className="hidden sm:inline max-w-[115px] truncate">
-              {!isAuthenticated ? 'Sign In' : displayName}
+              {!isAuthenticated ? (user.nickname || user.avatar ? displayName : 'Sign In') : displayName}
             </span>
             {isAuthenticated && (
               <span
@@ -537,6 +559,25 @@ export const Navbar: React.FC = () => {
               }`}
             >
               Contact &amp; Editorial
+            </a>
+            <a
+              href={buildHref('profile')}
+              onClick={(e) => handleNavClick(e, 'profile')}
+              className={`px-3 py-2.5 rounded-lg font-medium flex items-center gap-2 ${
+                currentRoute === 'profile' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
+              }`}
+            >
+              {user.avatar ? (
+                <img
+                  src={user.avatar}
+                  alt={displayName}
+                  referrerPolicy="no-referrer"
+                  className="w-5 h-5 rounded-full object-cover border border-[#C85A32]/60 shrink-0"
+                />
+              ) : (
+                <User className="w-4 h-4 text-[#C85A32]" />
+              )}
+              <span>My Profile &amp; Photo</span>
             </a>
             <a
               href={buildHref(

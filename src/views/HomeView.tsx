@@ -1,8 +1,12 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { getDisplayName, computeReaderRank } from '../utils/readerProfile';
-import { BookOpen, Sparkles, ArrowRight, Check, MessageSquare, Headphones, Film, Award, Play } from 'lucide-react';
+import { BookOpen, Sparkles, ArrowRight, Check, MessageSquare, Headphones, Film, Award, Play, Search, X } from 'lucide-react';
 import { StoryTrailerPlayer } from '../components/StoryTrailerPlayer';
+import { WriterStoriesFeed } from '../components/WriterStoriesFeed';
+import { StoryLikeButton } from '../components/StoryLikeButton';
+import { fetchLikesForStories } from '../lib/storyLikes';
+import { supabase } from '../lib/supabase';
 
 export const HomeView: React.FC = () => {
   const {
@@ -18,6 +22,44 @@ export const HomeView: React.FC = () => {
 
   const flagshipStory = stories.find(s => s.id === 'story-obsidian-throne') || stories[0];
   const featuredStories = stories.filter(s => s.featured);
+  const [feedSearchQuery, setFeedSearchQuery] = React.useState('');
+  const [catalogLikeCounts, setCatalogLikeCounts] = React.useState<Record<string, number>>({});
+  const [catalogLikedIds, setCatalogLikedIds] = React.useState<Set<string>>(new Set());
+
+  const trimmedFeedSearch = feedSearchQuery.trim().toLowerCase();
+  const visibleCatalogStories = React.useMemo(() => {
+    if (!trimmedFeedSearch) return featuredStories;
+    return stories.filter(
+      (story) =>
+        story.title.toLowerCase().includes(trimmedFeedSearch) ||
+        story.subtitle.toLowerCase().includes(trimmedFeedSearch) ||
+        story.author.toLowerCase().includes(trimmedFeedSearch) ||
+        story.genre.toLowerCase().includes(trimmedFeedSearch) ||
+        story.synopsis.toLowerCase().includes(trimmedFeedSearch) ||
+        story.tags.some((t) => t.toLowerCase().includes(trimmedFeedSearch))
+    );
+  }, [stories, featuredStories, trimmedFeedSearch]);
+
+  React.useEffect(() => {
+    if (stories.length === 0) return;
+    let cancelled = false;
+    const loadLikes = async () => {
+      const res = await fetchLikesForStories(stories.map((s) => s.id));
+      if (!cancelled) {
+        setCatalogLikeCounts(res.state.counts);
+        setCatalogLikedIds(res.state.likedStoryIds);
+      }
+    };
+    void loadLikes();
+    const sub = supabase?.auth.onAuthStateChange(() => {
+      void loadLikes();
+    });
+    return () => {
+      cancelled = true;
+      sub?.data?.subscription?.unsubscribe();
+    };
+  }, [stories, isAuthenticated]);
+
   const trailerStories = React.useMemo(() => stories.filter((s) => Boolean(s.trailerVideoUrl)), [stories]);
   const [selectedTrailerSlug, setSelectedTrailerSlug] = React.useState<string>('');
   const activeTrailerStory =
@@ -296,6 +338,47 @@ export const HomeView: React.FC = () => {
         </section>
       )}
 
+      {/* Reader Feed Story Search */}
+      <section className="py-6 border-b border-[#2D142C]/10 dark:border-white/10 bg-white/60 dark:bg-white/[0.02]">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-0.5">
+            <span className="text-[11px] uppercase tracking-wider font-semibold text-[#C85A32] font-sans-ui">
+              Search Reader Feed
+            </span>
+            <p className="text-xs text-[#2D142C]/70 dark:text-white/70 font-reader">
+              Find stories by title, author, genre, or keyword across writer releases and serialized works.
+            </p>
+          </div>
+          <div className="relative w-full sm:max-w-md">
+            <label htmlFor="home-feed-search" className="sr-only">
+              Search stories by title, author, genre, or keyword
+            </label>
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-[#2D142C]/45 dark:text-white/45 pointer-events-none" />
+            <input
+              id="home-feed-search"
+              type="search"
+              value={feedSearchQuery}
+              onChange={(e) => setFeedSearchQuery(e.target.value)}
+              placeholder="Search stories by title, author, genre..."
+              className="w-full pl-10 pr-9 py-2.5 text-xs sm:text-sm rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-white dark:bg-[#1E111E] focus:outline-none focus:border-[#C85A32] font-sans-ui"
+            />
+            {feedSearchQuery && (
+              <button
+                type="button"
+                onClick={() => setFeedSearchQuery('')}
+                aria-label="Clear story search"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#2D142C]/55 dark:text-white/55 hover:text-[#C85A32] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Published Writer Releases (Newest First from Supabase) */}
+      <WriterStoriesFeed externalQuery={feedSearchQuery} />
+
       {/* Curated Featured Series */}
       <section className="py-16 border-b border-[#2D142C]/10 dark:border-white/10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -303,15 +386,19 @@ export const HomeView: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-end justify-between mb-10 gap-4">
             <div>
               <div className="text-xs tracking-wider uppercase text-[#C85A32] font-semibold font-sans-ui mb-1">
-                Curated Catalog
+                {trimmedFeedSearch ? 'Matching Catalog Stories' : 'Curated Catalog'}
               </div>
               <h2 className="font-display text-3xl sm:text-4xl font-semibold tracking-tight">
-                Featured Serialized Works
+                {trimmedFeedSearch
+                  ? `Search Results (${visibleCatalogStories.length})`
+                  : 'Featured Serialized Works'}
               </h2>
             </div>
             <a
-              href={buildHref('stories')}
-              onClick={(e) => handleNav(e, 'stories')}
+              href={buildHref('stories', trimmedFeedSearch ? { q: feedSearchQuery.trim() } : undefined)}
+              onClick={(e) =>
+                handleNav(e, 'stories', trimmedFeedSearch ? { q: feedSearchQuery.trim() } : undefined)
+              }
               className="text-xs font-semibold text-[#C85A32] hover:text-[#b04d28] flex items-center gap-1.5 self-start sm:self-auto"
             >
               <span>View complete catalog ({stories.length} stories)</span>
@@ -319,37 +406,53 @@ export const HomeView: React.FC = () => {
             </a>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-            {featuredStories.map((story) => (
-              <a
-                key={story.id}
-                href={buildHref('story-detail', { slug: story.slug })}
-                onClick={(e) => handleNav(e, 'story-detail', { slug: story.slug })}
-                className="group flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C85A32] rounded-lg"
+          {visibleCatalogStories.length === 0 ? (
+            <div className="p-10 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 text-center space-y-3">
+              <p className="font-display text-lg font-semibold">
+                No catalog stories matching &ldquo;{feedSearchQuery.trim()}&rdquo;
+              </p>
+              <button
+                type="button"
+                onClick={() => setFeedSearchQuery('')}
+                className="text-xs font-semibold text-[#C85A32] hover:underline cursor-pointer"
               >
-                <div className="relative aspect-[3/4] rounded-lg overflow-hidden border border-[#2D142C]/10 dark:border-white/10 shadow-md group-hover:shadow-xl transition-all duration-200 group-hover:-translate-y-1 mb-4">
-                  <img
-                    src={story.coverImage}
-                    alt={`${story.title} cover`}
-                    loading="lazy"
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
-                  <div className="absolute top-3 right-3">
-                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-[#2D142C]/85 text-white">
-                      {story.status}
-                    </span>
+                Reset search
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+              {visibleCatalogStories.map((story) => (
+              <article
+                key={story.id}
+                className="group flex flex-col justify-between"
+              >
+                <a
+                  href={buildHref('story-detail', { slug: story.slug })}
+                  onClick={(e) => handleNav(e, 'story-detail', { slug: story.slug })}
+                  className="flex-1 flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C85A32] rounded-lg"
+                >
+                  <div className="relative aspect-[3/4] rounded-lg overflow-hidden border border-[#2D142C]/10 dark:border-white/10 shadow-md group-hover:shadow-xl transition-all duration-200 group-hover:-translate-y-1 mb-4">
+                    <img
+                      src={story.coverImage}
+                      alt={`${story.title} cover`}
+                      loading="lazy"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                    <div className="absolute top-3 right-3">
+                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-[#2D142C]/85 text-white">
+                        {story.status}
+                      </span>
+                    </div>
+                    <div className="absolute bottom-3 left-3">
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-[#C85A32] text-white">
+                        {story.accessTier === 'free'
+                          ? 'Free Access'
+                          : `Chapters 1-${story.freeChaptersCount} Free`}
+                      </span>
+                    </div>
                   </div>
-                  <div className="absolute bottom-3 left-3">
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-[#C85A32] text-white">
-                      {story.accessTier === 'free'
-                        ? 'Free Access'
-                        : `Chapters 1-${story.freeChaptersCount} Free`}
-                    </span>
-                  </div>
-                </div>
 
-                <div className="space-y-1.5 flex-1 flex flex-col justify-between">
-                  <div>
+                  <div className="space-y-1.5 flex-1">
                     <div className="text-[11px] text-[#C85A32] font-medium tracking-wide uppercase font-sans-ui">
                       {story.genre}
                     </div>
@@ -359,35 +462,57 @@ export const HomeView: React.FC = () => {
                     <p className="text-xs text-[#2D142C]/70 dark:text-[#F9F6F0]/70 font-reader line-clamp-2 mt-1">
                       {story.synopsis}
                     </p>
+
+                    {user.readingProgress[story.id] && (
+                      <div className="pt-2 space-y-1">
+                        <div className="flex items-center justify-between text-[10px] font-sans-ui text-[#C85A32] font-semibold">
+                          <span>Ch. {user.readingProgress[story.id].chapterNumber} in progress</span>
+                          <span className="font-mono">{user.readingProgress[story.id].progressPercent}%</span>
+                        </div>
+                        <div className="w-full bg-[#2D142C]/10 dark:bg-white/10 h-1.5 rounded-full overflow-hidden">
+                          <div
+                            className="bg-[#C85A32] h-full rounded-full transition-all"
+                            style={{ width: `${user.readingProgress[story.id].progressPercent}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
+                </a>
 
-                  {user.readingProgress[story.id] && (
-                    <div className="pt-2 space-y-1">
-                      <div className="flex items-center justify-between text-[10px] font-sans-ui text-[#C85A32] font-semibold">
-                        <span>Ch. {user.readingProgress[story.id].chapterNumber} in progress</span>
-                        <span className="font-mono">{user.readingProgress[story.id].progressPercent}%</span>
-                      </div>
-                      <div className="w-full bg-[#2D142C]/10 dark:bg-white/10 h-1.5 rounded-full overflow-hidden">
-                        <div
-                          className="bg-[#C85A32] h-full rounded-full transition-all"
-                          style={{ width: `${user.readingProgress[story.id].progressPercent}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="pt-3 border-t border-[#2D142C]/10 dark:border-white/10 flex items-center justify-between text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
-                    <span>{story.author}</span>
-                    <span className="tabular-nums">
+                <div className="pt-3 mt-3 border-t border-[#2D142C]/10 dark:border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                  <span className="truncate max-w-[110px]">{story.author}</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <StoryLikeButton
+                      storyId={story.id}
+                      storyTitle={story.title}
+                      initialCount={catalogLikeCounts[story.id] || 0}
+                      initialLiked={catalogLikedIds.has(story.id)}
+                      onUpdated={(id, liked, count) => {
+                        setCatalogLikeCounts((prev) => ({ ...prev, [id]: count }));
+                        setCatalogLikedIds((prev) => {
+                          const next = new Set(prev);
+                          if (liked) next.add(id);
+                          else next.delete(id);
+                          return next;
+                        });
+                      }}
+                    />
+                    <a
+                      href={buildHref('story-detail', { slug: story.slug })}
+                      onClick={(e) => handleNav(e, 'story-detail', { slug: story.slug })}
+                      className="tabular-nums hover:text-[#C85A32] transition-colors"
+                    >
                       {user.readingProgress[story.id]
-                        ? `Resume Ch. ${user.readingProgress[story.id].chapterNumber} →`
+                        ? `Ch. ${user.readingProgress[story.id].chapterNumber} →`
                         : `${story.chapters.length} Chs`}
-                    </span>
+                    </a>
                   </div>
                 </div>
-              </a>
+              </article>
             ))}
           </div>
+          )}
 
         </div>
       </section>

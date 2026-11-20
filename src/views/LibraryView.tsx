@@ -3,6 +3,10 @@ import { useApp } from '../context/AppContext';
 import { apiFetch, parseJsonSafe } from '../lib/apiClient';
 import { Search, Filter, BookOpen, ArrowUpDown, Sparkles, Loader2, ArrowRight, X, Film } from 'lucide-react';
 import { StoryTrailerPlayer } from '../components/StoryTrailerPlayer';
+import { WriterStoriesFeed } from '../components/WriterStoriesFeed';
+import { StoryLikeButton } from '../components/StoryLikeButton';
+import { fetchLikesForStories } from '../lib/storyLikes';
+import { supabase } from '../lib/supabase';
 import type { Story } from '../types';
 
 interface AIRecommendation {
@@ -12,7 +16,7 @@ interface AIRecommendation {
 }
 
 export const LibraryView: React.FC = () => {
-  const { stories, navigate, buildHref, routeParams, user } = useApp();
+  const { stories, navigate, buildHref, routeParams, user, isAuthenticated } = useApp();
 
   const [searchQuery, setSearchQuery] = useState(routeParams.q || '');
   const [selectedGenre, setSelectedGenre] = useState<string>(routeParams.genre || 'All');
@@ -28,6 +32,28 @@ export const LibraryView: React.FC = () => {
   const [aiCuratorNote, setAiCuratorNote] = useState<string | null>(null);
   const [aiMatches, setAiMatches] = useState<AIRecommendation[]>([]);
   const [activeTrailerStory, setActiveTrailerStory] = useState<Story | null>(null);
+  const [likeCounts, setLikeCounts] = useState<Record<string, number>>({});
+  const [likedStoryIds, setLikedStoryIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (stories.length === 0) return;
+    let cancelled = false;
+    const loadLikes = async () => {
+      const res = await fetchLikesForStories(stories.map((s) => s.id));
+      if (!cancelled) {
+        setLikeCounts(res.state.counts);
+        setLikedStoryIds(res.state.likedStoryIds);
+      }
+    };
+    void loadLikes();
+    const sub = supabase?.auth.onAuthStateChange(() => {
+      void loadLikes();
+    });
+    return () => {
+      cancelled = true;
+      sub?.data?.subscription?.unsubscribe();
+    };
+  }, [stories, isAuthenticated]);
 
   useEffect(() => {
     if (!activeTrailerStory) return;
@@ -410,46 +436,48 @@ export const LibraryView: React.FC = () => {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
             {filteredStories.map((story) => (
-              <a
+              <article
                 key={story.id}
-                href={buildHref('story-detail', { slug: story.slug })}
-                onClick={(e) => handleLink(e, 'story-detail', { slug: story.slug })}
-                className="bg-white dark:bg-[#1E111E] rounded-xl border border-[#2D142C]/10 dark:border-white/10 overflow-hidden hover:border-[#C85A32]/40 transition-all duration-200 hover:shadow-lg flex flex-col group"
+                className="bg-white dark:bg-[#1E111E] rounded-xl border border-[#2D142C]/10 dark:border-white/10 overflow-hidden hover:border-[#C85A32]/40 transition-all duration-200 hover:shadow-lg flex flex-col justify-between group"
               >
-                <div className="relative aspect-[16/10] overflow-hidden bg-[#2D142C]">
-                  <img
-                    src={story.coverImage}
-                    alt={`${story.title} cover`}
-                    loading="lazy"
-                    className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300 opacity-90"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" />
+                <a
+                  href={buildHref('story-detail', { slug: story.slug })}
+                  onClick={(e) => handleLink(e, 'story-detail', { slug: story.slug })}
+                  className="flex-1 flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-[#C85A32]"
+                >
+                  <div className="relative aspect-[16/10] overflow-hidden bg-[#2D142C]">
+                    <img
+                      src={story.coverImage}
+                      alt={`${story.title} cover`}
+                      loading="lazy"
+                      className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300 opacity-90"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" />
 
-                  <div className="absolute top-3 left-3 right-3 flex justify-between items-center text-xs">
-                    <span className="text-[10px] font-mono tracking-wider uppercase px-2 py-0.5 rounded bg-black/60 text-white">
-                      {story.status}
-                    </span>
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-[#C85A32] text-white">
-                      {story.accessTier === 'free'
-                        ? 'Free'
-                        : story.accessTier === 'subscription'
-                        ? 'Subscription'
-                        : `₦${story.priceNgn.toLocaleString('en-NG')} Unlock`}
-                    </span>
+                    <div className="absolute top-3 left-3 right-3 flex justify-between items-center text-xs">
+                      <span className="text-[10px] font-mono tracking-wider uppercase px-2 py-0.5 rounded bg-black/60 text-white">
+                        {story.status}
+                      </span>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-[#C85A32] text-white">
+                        {story.accessTier === 'free'
+                          ? 'Free'
+                          : story.accessTier === 'subscription'
+                          ? 'Subscription'
+                          : `₦${story.priceNgn.toLocaleString('en-NG')} Unlock`}
+                      </span>
+                    </div>
+
+                    <div className="absolute bottom-3 left-4 right-4">
+                      <span className="text-[10px] uppercase tracking-widest text-[#C85A32] font-semibold font-sans-ui block mb-0.5">
+                        {story.genre}
+                      </span>
+                      <h3 className="font-display text-xl font-bold text-white leading-tight">
+                        {story.title}
+                      </h3>
+                    </div>
                   </div>
 
-                  <div className="absolute bottom-3 left-4 right-4">
-                    <span className="text-[10px] uppercase tracking-widest text-[#C85A32] font-semibold font-sans-ui block mb-0.5">
-                      {story.genre}
-                    </span>
-                    <h3 className="font-display text-xl font-bold text-white leading-tight">
-                      {story.title}
-                    </h3>
-                  </div>
-                </div>
-
-                <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                  <div className="space-y-2">
+                  <div className="p-5 pb-4 flex-1 space-y-2">
                     <p className="font-reader text-xs text-[#2D142C]/75 dark:text-[#F9F6F0]/75 line-clamp-3 leading-relaxed">
                       {story.synopsis}
                     </p>
@@ -477,39 +505,58 @@ export const LibraryView: React.FC = () => {
                       </div>
                     )}
                   </div>
+                </a>
 
-                  <div className="pt-3 border-t border-[#2D142C]/10 dark:border-white/10 flex items-center justify-between gap-2 text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                <div className="px-5 pb-5">
+                  <div className="pt-3 border-t border-[#2D142C]/10 dark:border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
                     <span className="truncate">
                       {story.author} &middot; Ch. 1&ndash;{story.freeChaptersCount} Free
                     </span>
 
-                    <div className="flex items-center gap-2.5 shrink-0">
+                    <div className="flex items-center gap-2 shrink-0">
+                      <StoryLikeButton
+                        storyId={story.id}
+                        storyTitle={story.title}
+                        initialCount={likeCounts[story.id] || 0}
+                        initialLiked={likedStoryIds.has(story.id)}
+                        onUpdated={(id, liked, count) => {
+                          setLikeCounts((prev) => ({ ...prev, [id]: count }));
+                          setLikedStoryIds((prev) => {
+                            const next = new Set(prev);
+                            if (liked) next.add(id);
+                            else next.delete(id);
+                            return next;
+                          });
+                        }}
+                      />
                       {story.trailerVideoUrl && (
                         <button
                           type="button"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setActiveTrailerStory(story);
-                          }}
+                          onClick={() => setActiveTrailerStory(story)}
                           className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#C85A32]/10 hover:bg-[#C85A32] text-[#C85A32] hover:text-white font-semibold text-[11px] transition-colors cursor-pointer"
                         >
                           <Film className="w-3 h-3" />
                           <span>Trailer</span>
                         </button>
                       )}
-                      <span className="tabular-nums font-medium text-[#2D142C] dark:text-white">
+                      <a
+                        href={buildHref('story-detail', { slug: story.slug })}
+                        onClick={(e) => handleLink(e, 'story-detail', { slug: story.slug })}
+                        className="tabular-nums font-medium text-[#2D142C] dark:text-white hover:text-[#C85A32]"
+                      >
                         {story.chapters.length} Chs
-                      </span>
+                      </a>
                     </div>
                   </div>
                 </div>
-              </a>
+              </article>
             ))}
           </div>
         )}
 
       </div>
+
+      <WriterStoriesFeed externalQuery={searchQuery} />
 
       {activeTrailerStory && (
         <div

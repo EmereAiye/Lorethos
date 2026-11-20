@@ -45,7 +45,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/the-obsidian-throne.jpg",
     trailerDuration: "21s",
     trailerMood: "action",
-    trailerNarration: "Beneath a blackened solar eclipse, the High Citadels of Ostraka tremble. Hidden in ink-stained catacombs, warm cuneiform tablets whisper of the First Weavers. By midnight, twelve warlords gather beside the Obsidian Throne. Read The Obsidian Throne now on Lorethos.",
+    trailerNarration: "As the Black Eclipse darkens Ostraka, King Vane confronts rising warlords and court betrayal. Bound to an ancient blood-pact, every decree threatens the realm. Read The Obsidian Throne on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -206,7 +206,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/whisper-of-the-baobab.jpg",
     trailerDuration: "21s",
     trailerMood: "neutral",
-    trailerNarration: "Under the Sahel stars, young navigator Boma holds an ancient brass compass. Across the singing dunes, silver sands hum in five rhythms beneath shifting winds. At the starlit oasis, forgotten constellations reveal highways across the sky. Explore Whisper of the Baobab on Lorethos.",
+    trailerNarration: "Chosen to carry an ancestral brass compass across the Sahel sands, Boma awakens a starlit Baobab\u2014discovering celestial highways built by her forebears. Read Whisper of the Baobab now on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -344,7 +344,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/chronicles-of-the-sunken-epoch.jpg",
     trailerDuration: "21s",
     trailerMood: "storm",
-    trailerNarration: "Four thousand fathoms beneath ocean storms, Diver Kaelen descends into drowned Atal-Mor. Inside a sea-serpent casket, rotating amber awakens with voices of a drowned council. Above the dry library, the crystal dome trembles against rising waters. Read on Lorethos.",
+    trailerNarration: "Four thousand fathoms beneath ocean storms, diver Kaelen uncovers drowned Atal-Mor\u2014and a golden reliquary warning that the sea is rising again. Read the full chronicle on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -476,7 +476,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/the-crimson-scribe.jpg",
     trailerDuration: "21s",
     trailerMood: "suspense",
-    trailerNarration: "Inside the royal scriptorium of House Valerius, statecraft is written in crimson ink. Held against candlelight, pinprick ciphers along the Psalms betray five royal tasters. Outside, rain sweeps the flagstones as armed guards bolt every door.",
+    trailerNarration: "In the royal scriptorium of House Valerius, apprentice Lucien decodes a cipher in crimson ink\u2014revealing three kings were executed by their own scribes. Read more on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -608,7 +608,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/verses-of-the-harmattan.jpg",
     trailerDuration: "21s",
     trailerMood: "neutral",
-    trailerNarration: "When red northern dust coats the mango leaves, brass lanterns glow at dawn. Along twilight waters, an elder ferryman measures the lagoon tide with cedar oar and patience. Beneath thinning haze, tin rooftops sing under clear constellations.",
+    trailerNarration: "Tracing the Harmattan wind from ochre courtyards to Atlantic harbors, this poetry anthology weaves memory, kinship, and lantern light into evening verse. Read every canto free on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -725,7 +725,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/letters-across-the-lagoon.jpg",
     trailerDuration: "21s",
     trailerMood: "neutral",
-    trailerNarration: "Ten years after the harbor reading hall burned, rolled blueprints cross the morning tide once more. Beneath pried floorboards, a salt-stained ledger exposes the secret behind that fire. At last, wide timber shutters swing open to golden lagoon sunlight.",
+    trailerNarration: "After ten years of silence, two estranged architects exchange handwritten letters tucked inside waterfront blueprints\u2014rebuilding a burned reading hall while uncovering the truth of the night it fell. Read Letters Across the Lagoon free on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -832,12 +832,12 @@ function withOfficialTrailerMetadata(story) {
   if (!defaults) return story;
   return {
     ...story,
-    trailerVideoUrl: story.trailerVideoUrl || defaults.trailerVideoUrl,
-    trailerPosterUrl: story.trailerPosterUrl || defaults.trailerPosterUrl,
-    trailerDuration: story.trailerDuration || defaults.trailerDuration,
-    trailerMood: story.trailerMood || defaults.trailerMood,
-    trailerNarration: story.trailerNarration || defaults.trailerNarration,
-    trailerScenes: story.trailerScenes && story.trailerScenes.length > 0 ? story.trailerScenes : defaults.trailerScenes
+    trailerVideoUrl: defaults.trailerVideoUrl || story.trailerVideoUrl,
+    trailerPosterUrl: defaults.trailerPosterUrl || story.trailerPosterUrl,
+    trailerDuration: defaults.trailerDuration || story.trailerDuration,
+    trailerMood: defaults.trailerMood || story.trailerMood,
+    trailerNarration: defaults.trailerNarration || story.trailerNarration,
+    trailerScenes: defaults.trailerScenes && defaults.trailerScenes.length > 0 ? defaults.trailerScenes : story.trailerScenes
   };
 }
 function sanitizeStoryForPublic(story) {
@@ -1106,11 +1106,20 @@ var LorethosRepository = class {
         chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
         paragraph_index INTEGER NOT NULL,
         excerpt TEXT NOT NULL,
+        selected_text TEXT,
+        start_offset INTEGER,
+        end_offset INTEGER,
         color TEXT NOT NULL CHECK (color IN ('terracotta', 'gold', 'sage')),
         note TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (user_id, chapter_id, paragraph_index)
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE highlights ADD COLUMN IF NOT EXISTS selected_text TEXT;
+      ALTER TABLE highlights ADD COLUMN IF NOT EXISTS start_offset INTEGER;
+      ALTER TABLE highlights ADD COLUMN IF NOT EXISTS end_offset INTEGER;
+      ALTER TABLE highlights ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+      ALTER TABLE highlights DROP CONSTRAINT IF EXISTS highlights_user_id_chapter_id_paragraph_index_key;
+      CREATE INDEX IF NOT EXISTS idx_highlights_user_chapter ON highlights(user_id, chapter_id);
       CREATE TABLE IF NOT EXISTS paragraph_bookmarks (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1144,61 +1153,58 @@ var LorethosRepository = class {
         submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
-    const countRes = await pool.query("SELECT COUNT(*)::int AS cnt FROM stories");
-    if ((countRes.rows[0]?.cnt ?? 0) === 0) {
-      for (const story of AUTHORITATIVE_STORIES) {
+    for (const story of AUTHORITATIVE_STORIES) {
+      await pool.query(
+        `INSERT INTO stories (
+          id, slug, title, subtitle, author, author_bio, genre, tags,
+          cover_image, synopsis, prologue_lore, status, publication_status,
+          access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        ON CONFLICT (id) DO NOTHING`,
+        [
+          story.id,
+          story.slug,
+          story.title,
+          story.subtitle,
+          story.author,
+          story.authorBio,
+          story.genre,
+          JSON.stringify(story.tags),
+          story.coverImage,
+          story.synopsis,
+          story.prologueLore,
+          story.status,
+          story.publicationStatus || "published",
+          story.accessTier,
+          story.priceNgn,
+          story.freeChaptersCount,
+          story.featured,
+          story.spotlightOrder ?? null,
+          story.updatedAt
+        ]
+      );
+      for (const ch of story.chapters) {
         await pool.query(
-          `INSERT INTO stories (
-            id, slug, title, subtitle, author, author_bio, genre, tags,
-            cover_image, synopsis, prologue_lore, status, publication_status,
-            access_tier, price_ngn, free_chapters_count, featured, spotlight_order, updated_at_label
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          `INSERT INTO chapters (
+            id, story_id, chapter_number, title, slug, release_date_label,
+            word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
           ON CONFLICT (id) DO NOTHING`,
           [
+            ch.id,
             story.id,
-            story.slug,
-            story.title,
-            story.subtitle,
-            story.author,
-            story.authorBio,
-            story.genre,
-            JSON.stringify(story.tags),
-            story.coverImage,
-            story.synopsis,
-            story.prologueLore,
-            story.status,
-            story.publicationStatus || "published",
-            story.accessTier,
-            story.priceNgn,
-            story.freeChaptersCount,
-            story.featured,
-            story.spotlightOrder ?? null,
-            story.updatedAt
+            ch.chapterNumber,
+            ch.title,
+            ch.slug,
+            ch.releaseDate,
+            ch.wordCount,
+            ch.readTimeMinutes,
+            ch.isFree,
+            ch.excerpt,
+            JSON.stringify(ch.content),
+            ch.ambientSoundscape ?? null
           ]
         );
-        for (const ch of story.chapters) {
-          await pool.query(
-            `INSERT INTO chapters (
-              id, story_id, chapter_number, title, slug, release_date_label,
-              word_count, read_time_minutes, is_free, excerpt, content, ambient_soundscape
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
-            ON CONFLICT (id) DO NOTHING`,
-            [
-              ch.id,
-              story.id,
-              ch.chapterNumber,
-              ch.title,
-              ch.slug,
-              ch.releaseDate,
-              ch.wordCount,
-              ch.readTimeMinutes,
-              ch.isFree,
-              ch.excerpt,
-              JSON.stringify(ch.content),
-              ch.ambientSoundscape ?? null
-            ]
-          );
-        }
       }
     }
   }
@@ -1352,9 +1358,13 @@ var LorethosRepository = class {
             chapterTitle: ch?.title || "",
             paragraphIndex: Number(h.paragraph_index),
             excerpt: h.excerpt,
+            selectedText: h.selected_text || void 0,
+            startOffset: h.start_offset !== null && h.start_offset !== void 0 ? Number(h.start_offset) : void 0,
+            endOffset: h.end_offset !== null && h.end_offset !== void 0 ? Number(h.end_offset) : void 0,
             color: h.color,
             note: h.note || void 0,
-            createdAt: new Date(h.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+            createdAt: new Date(h.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+            updatedAt: h.updated_at ? new Date(h.updated_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : void 0
           });
           this.state.highlights[h.user_id] = list;
         }
@@ -2018,35 +2028,77 @@ var LorethosRepository = class {
     return this.state.highlights[userId] || [];
   }
   saveHighlight(userId, highlight) {
-    const existingList = this.state.highlights[userId] || [];
-    const idx = existingList.findIndex(
-      (h) => h.chapterId === highlight.chapterId && h.paragraphIndex === highlight.paragraphIndex
-    );
+    const existingList = [...this.state.highlights[userId] || []];
+    const hasOffsets = typeof highlight.startOffset === "number" && typeof highlight.endOffset === "number";
+    const idx = existingList.findIndex((h) => {
+      if (h.id === highlight.id) return true;
+      if (!hasOffsets && typeof h.startOffset !== "number") {
+        return h.chapterId === highlight.chapterId && h.paragraphIndex === highlight.paragraphIndex;
+      }
+      return false;
+    });
+    const savedRecord = idx >= 0 ? { ...highlight, id: existingList[idx].id, createdAt: existingList[idx].createdAt } : highlight;
     if (idx >= 0) {
-      existingList[idx] = highlight;
+      existingList[idx] = savedRecord;
     } else {
-      existingList.unshift(highlight);
+      existingList.unshift(savedRecord);
     }
     this.state.highlights[userId] = existingList;
     this.persistSnapshot();
     this.mirrorToPostgres(async (pool) => {
       await pool.query(
-        `INSERT INTO highlights (id, user_id, story_id, chapter_id, paragraph_index, excerpt, color, note)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (user_id, chapter_id, paragraph_index) DO UPDATE SET
+        `INSERT INTO highlights (
+           id, user_id, story_id, chapter_id, paragraph_index, excerpt,
+           selected_text, start_offset, end_offset, color, note, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+         ON CONFLICT (id) DO UPDATE SET
            excerpt = EXCLUDED.excerpt,
+           selected_text = EXCLUDED.selected_text,
+           start_offset = EXCLUDED.start_offset,
+           end_offset = EXCLUDED.end_offset,
            color = EXCLUDED.color,
-           note = EXCLUDED.note`,
+           note = EXCLUDED.note,
+           updated_at = NOW()`,
         [
-          highlight.id,
+          savedRecord.id,
           userId,
-          highlight.storyId,
-          highlight.chapterId,
-          highlight.paragraphIndex,
-          highlight.excerpt,
-          highlight.color,
-          highlight.note ?? null
+          savedRecord.storyId,
+          savedRecord.chapterId,
+          savedRecord.paragraphIndex,
+          savedRecord.excerpt,
+          savedRecord.selectedText ?? null,
+          savedRecord.startOffset ?? null,
+          savedRecord.endOffset ?? null,
+          savedRecord.color,
+          savedRecord.note ?? null
         ]
+      );
+    });
+    return existingList;
+  }
+  updateHighlight(userId, highlightId, patch) {
+    const existingList = [...this.state.highlights[userId] || []];
+    const idx = existingList.findIndex((h) => h.id === highlightId);
+    if (idx < 0) return null;
+    const current = existingList[idx];
+    const updated = {
+      ...current,
+      color: patch.color ?? current.color,
+      note: patch.note === null ? void 0 : patch.note !== void 0 ? patch.note : current.note,
+      updatedAt: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    };
+    existingList[idx] = updated;
+    this.state.highlights[userId] = existingList;
+    this.persistSnapshot();
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `UPDATE highlights
+         SET color = $3,
+             note = $4,
+             updated_at = NOW()
+         WHERE id = $1 AND user_id = $2`,
+        [highlightId, userId, updated.color, updated.note ?? null]
       );
     });
     return existingList;
@@ -2808,21 +2860,47 @@ function normalizeTtsWavAudio(base64Data, rawMimeType) {
   const blockAlign = channels * (bitsPerSample / 8);
   const evenLen = rawBuf.length - rawBuf.length % 2;
   const pcmBuf = Buffer.from(rawBuf.subarray(0, evenLen));
-  const isBigEndianL16 = mimeLower.includes("audio/l16") && !mimeLower.includes("little") && !mimeLower.includes("le");
-  let maxAbs = 0;
-  for (let i = 0; i < pcmBuf.length; i += 2) {
-    const sample = isBigEndianL16 ? pcmBuf.readInt16BE(i) : pcmBuf.readInt16LE(i);
-    if (isBigEndianL16) {
-      pcmBuf.writeInt16LE(sample, i);
+  const sampleCount = Math.floor(pcmBuf.length / 2);
+  if (sampleCount >= 4) {
+    let leDiff = 0;
+    let beDiff = 0;
+    const checkBytes = Math.min(pcmBuf.length - 4, 48e3);
+    for (let i = 0; i < checkBytes; i += 2) {
+      leDiff += Math.abs(pcmBuf.readInt16LE(i + 2) - pcmBuf.readInt16LE(i));
+      beDiff += Math.abs(pcmBuf.readInt16BE(i + 2) - pcmBuf.readInt16BE(i));
     }
-    const abs = Math.abs(sample);
-    if (abs > maxAbs) maxAbs = abs;
-  }
-  if (maxAbs > 29500) {
-    const scale = 29500 / maxAbs;
+    const hintLE = mimeLower.includes("little") || mimeLower.includes("le");
+    const shouldSwapToLE = !hintLE && beDiff < leDiff * 0.7;
+    if (shouldSwapToLE) {
+      for (let i = 0; i < pcmBuf.length; i += 2) {
+        pcmBuf.writeInt16LE(pcmBuf.readInt16BE(i), i);
+      }
+    }
+    let sum = 0;
     for (let i = 0; i < pcmBuf.length; i += 2) {
-      const scaled = Math.round(pcmBuf.readInt16LE(i) * scale);
-      pcmBuf.writeInt16LE(scaled, i);
+      sum += pcmBuf.readInt16LE(i);
+    }
+    const mean = sum / sampleCount;
+    let maxAbs = 0;
+    for (let i = 0; i < pcmBuf.length; i += 2) {
+      const centered = Math.max(-32768, Math.min(32767, Math.round(pcmBuf.readInt16LE(i) - mean)));
+      pcmBuf.writeInt16LE(centered, i);
+      const abs = Math.abs(centered);
+      if (abs > maxAbs) maxAbs = abs;
+    }
+    if (maxAbs > 24500) {
+      const scale = 24500 / maxAbs;
+      for (let i = 0; i < pcmBuf.length; i += 2) {
+        pcmBuf.writeInt16LE(Math.round(pcmBuf.readInt16LE(i) * scale), i);
+      }
+    }
+    const fadeSamples = Math.min(Math.floor(sampleRate * 0.015), Math.floor(sampleCount / 8));
+    for (let s = 0; s < fadeSamples; s += 1) {
+      const gain = s / Math.max(1, fadeSamples);
+      const headIdx = s * 2;
+      const tailIdx = (sampleCount - 1 - s) * 2;
+      pcmBuf.writeInt16LE(Math.round(pcmBuf.readInt16LE(headIdx) * gain), headIdx);
+      pcmBuf.writeInt16LE(Math.round(pcmBuf.readInt16LE(tailIdx) * gain), tailIdx);
     }
   }
   const header = Buffer.alloc(44);
@@ -2844,35 +2922,43 @@ function normalizeTtsWavAudio(base64Data, rawMimeType) {
     mimeType: "audio/wav"
   };
 }
+function ensureLorethosClosing(text, storyTitle) {
+  const cleaned = text.trim();
+  const withStop = /[.!?]$/.test(cleaned) ? cleaned : `${cleaned}.`;
+  if (/\blorethos\b/i.test(withStop)) {
+    return withStop;
+  }
+  const cta = storyTitle ? `Read ${storyTitle} now on Lorethos.` : "Read the full story now on Lorethos.";
+  return `${withStop} ${cta}`;
+}
 function buildCleanTrailerNarrationScript(options) {
   const { scenePrompt, storyTitle, storyNarration, mood, durationSeconds } = options;
-  const maxWords = Math.max(22, Math.min(68, Math.round(durationSeconds * 2.15)));
+  const ctaReserveWords = storyTitle ? 8 : 7;
+  const maxBodyWords = Math.max(15, Math.min(50, Math.round(durationSeconds * 1.85) - ctaReserveWords));
   const stripProductionCues = (text) => text.replace(/\b(atmospheric book trailer|painterly lighting|slow camera push|dramatic mood lighting|spoken narration|cinematic|4k|8k|camera angle)\b[^,.!?]*[,.!?]?/gi, "").replace(/\[[^\]]*\]|\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
   const cleanedScene = stripProductionCues(scenePrompt).replace(/[.!?]+$/, "");
   const moodBridge = {
-    storm: "Through thunder and sweeping storm winds, every moment draws you deeper into the coming reckoning.",
-    action: "As steel meets fire in urgent motion, destiny turns upon a single breath.",
-    suspense: "In the hush of creeping shadows, an unspoken secret waits to be uncovered.",
-    neutral: "Step inside a living world of memory, wonder, and unforgettable storytelling."
+    storm: "Amid thunder and rising tempest, every choice carries a perilous price.",
+    action: "As conflict ignites, destiny turns upon a single breath.",
+    suspense: "Behind quiet shadows, a hidden truth waits to be uncovered.",
+    neutral: "Discover a gripping story of memory, wonder, and unfolding intrigue."
   };
   let rawCandidate = "";
   if (storyNarration && storyNarration.trim().length >= 30 && (!cleanedScene || scenePrompt.length > 140)) {
-    rawCandidate = storyNarration.trim();
+    return ensureLorethosClosing(storyNarration.trim(), storyTitle);
   } else {
-    const lead = storyTitle ? `From ${storyTitle}. ` : "";
-    const sceneLine = cleanedScene ? `${cleanedScene.charAt(0).toUpperCase()}${cleanedScene.slice(1)}. ` : "";
+    const lead = storyTitle ? `In ${storyTitle}, ` : "";
+    const sceneLine = cleanedScene ? `${cleanedScene.charAt(0).toLowerCase()}${cleanedScene.slice(1)}. ` : "";
     rawCandidate = `${lead}${sceneLine}${moodBridge[mood]}`.trim();
   }
   const words = rawCandidate.split(/\s+/).filter(Boolean);
-  if (words.length <= maxWords) {
-    return /[.!?]$/.test(rawCandidate) ? rawCandidate : `${rawCandidate}.`;
+  let body = rawCandidate;
+  if (words.length > maxBodyWords) {
+    const clipped = words.slice(0, maxBodyWords).join(" ");
+    const lastSentenceEnd = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
+    body = lastSentenceEnd >= Math.floor(clipped.length * 0.55) ? clipped.slice(0, lastSentenceEnd + 1).trim() : `${clipped.replace(/[,;:\-–—]+$/, "")}.`;
   }
-  const clipped = words.slice(0, maxWords).join(" ");
-  const lastSentenceEnd = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
-  if (lastSentenceEnd >= Math.floor(clipped.length * 0.55)) {
-    return clipped.slice(0, lastSentenceEnd + 1).trim();
-  }
-  return `${clipped.replace(/[,;:\-–—]+$/, "")}.`;
+  return ensureLorethosClosing(body, storyTitle);
 }
 var EPHEMERAL_DEV_SECRET = crypto2.randomBytes(32).toString("hex");
 function getSessionSecret() {
@@ -3333,25 +3419,68 @@ async function createApp(options) {
   });
   app.post("/api/account/highlights", requireAuth, (req, res) => {
     const body = req.body;
-    if (!body.storyId || !body.chapterId || typeof body.paragraphIndex !== "number" || !body.excerpt) {
+    const storyId = typeof body.storyId === "string" ? body.storyId.trim() : "";
+    const chapterId = typeof body.chapterId === "string" ? body.chapterId.trim() : "";
+    const paragraphIndex = body.paragraphIndex;
+    const rawSelected = typeof body.selectedText === "string" ? body.selectedText.trim() : "";
+    const rawExcerpt = typeof body.excerpt === "string" ? body.excerpt.trim() : rawSelected;
+    if (!storyId || !chapterId || typeof paragraphIndex !== "number" || !Number.isInteger(paragraphIndex) || paragraphIndex < 0 || !rawExcerpt) {
       res.status(400).json({ error: "Invalid highlight payload." });
       return;
     }
+    const story = repo.getStoryById(storyId);
+    const chapter = story?.chapters.find((c) => c.id === chapterId);
+    if (!story || !chapter) {
+      res.status(404).json({ error: "Story or chapter not found." });
+      return;
+    }
+    if (!repo.hasAccessToChapter(req.currentUser, story, chapter)) {
+      res.status(403).json({ error: "You do not have access to highlight this chapter." });
+      return;
+    }
+    if (chapter.content.length > 0 && paragraphIndex >= chapter.content.length) {
+      res.status(400).json({ error: "Invalid paragraph index." });
+      return;
+    }
+    const validOffsets = typeof body.startOffset === "number" && typeof body.endOffset === "number" && Number.isInteger(body.startOffset) && Number.isInteger(body.endOffset) && body.startOffset >= 0 && body.endOffset > body.startOffset;
+    const safeId = typeof body.id === "string" && body.id.trim().length > 0 && body.id.trim().length <= 100 ? body.id.trim() : `hl_${crypto2.randomUUID()}`;
+    const cleanedNote = typeof body.note === "string" ? body.note.trim().slice(0, 1e3) : "";
     const highlights = repo.saveHighlight(req.currentUser.id, {
-      id: body.id || `hl_${crypto2.randomUUID()}`,
-      storyId: body.storyId,
-      storyTitle: String(body.storyTitle || "").slice(0, 120),
-      storySlug: String(body.storySlug || "").slice(0, 120),
-      chapterId: body.chapterId,
-      chapterNumber: Number(body.chapterNumber || 1),
-      chapterTitle: String(body.chapterTitle || "").slice(0, 160),
-      paragraphIndex: body.paragraphIndex,
-      excerpt: String(body.excerpt).slice(0, 1200),
+      id: safeId,
+      storyId: story.id,
+      storyTitle: story.title.slice(0, 120),
+      storySlug: story.slug.slice(0, 120),
+      chapterId: chapter.id,
+      chapterNumber: chapter.chapterNumber,
+      chapterTitle: chapter.title.slice(0, 160),
+      paragraphIndex,
+      excerpt: rawExcerpt.slice(0, 1200),
+      selectedText: rawSelected ? rawSelected.slice(0, 800) : void 0,
+      startOffset: validOffsets ? body.startOffset : void 0,
+      endOffset: validOffsets ? body.endOffset : void 0,
       color: ["terracotta", "gold", "sage"].includes(String(body.color)) ? body.color : "terracotta",
-      note: body.note ? String(body.note).slice(0, 600) : void 0,
+      note: cleanedNote || void 0,
       createdAt: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "numeric" })
     });
     res.json({ highlights });
+  });
+  app.patch("/api/account/highlights/:id", requireAuth, (req, res) => {
+    const body = req.body;
+    const nextColor = body.color && ["terracotta", "gold", "sage"].includes(String(body.color)) ? body.color : void 0;
+    const nextNote = body.note === null ? null : typeof body.note === "string" ? body.note.trim().slice(0, 1e3) || null : void 0;
+    if (nextColor === void 0 && nextNote === void 0) {
+      res.status(400).json({ error: "Provide color or note updates." });
+      return;
+    }
+    const updated = repo.updateHighlight(req.currentUser.id, req.params.id, {
+      color: nextColor,
+      note: nextNote
+    });
+    if (!updated) {
+      res.status(404).json({ error: "Highlight not found." });
+      return;
+    }
+    res.json({ highlights: updated });
   });
   app.delete("/api/account/highlights/:id", requireAuth, (req, res) => {
     const highlights = repo.deleteHighlight(req.currentUser.id, req.params.id);
@@ -4107,7 +4236,7 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
       let audioBase64 = null;
       let mimeType = null;
       let source = "browser-speech-fallback";
-      const targetWords = Math.max(20, Math.min(68, Math.round(durationSeconds * 2.15)));
+      const targetWords = Math.max(20, Math.min(58, Math.round(durationSeconds * 1.85)));
       const speechStyleByMood = {
         storm: "Clear, resonant, dramatic cinema trailer narrator speaking with steady diction",
         action: "Crisp, dynamic, confident literary trailer narrator with clear articulation",
@@ -4121,10 +4250,10 @@ Write an immersive 3-4 paragraph opening chapter draft and a gripping 1-sentence
             const scriptRes = await withTimeout(
               ai.models.generateContent({
                 model: MODEL_NAME,
-                contents: `Write one concise, natural spoken voiceover narration script (about ${targetWords} words, paced calmly for a ${durationSeconds}-second trailer) describing the scene below. Use complete sentences, no stage directions, no brackets, no markdown, and no camera terms.
+                contents: `Write one concise, natural spoken book-trailer voiceover (about ${targetWords} words total, paced calmly for a ${durationSeconds}-second trailer). Summarize the core plot hook from the premise below without spoiling the ending so listeners want to read the full story, and ALWAYS end with a short invitation to read it on Lorethos (for example: "Read ${story ? story.title : "the full story"} now on Lorethos."). Use complete sentences, no stage directions, no brackets, no markdown, and no camera terms.
 
 Story: ${story ? `${story.title} (${story.genre})` : "Lorethos Original"}
-Scene: ${cleanPrompt}`,
+Premise: ${cleanPrompt}`,
                 config: {
                   thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
                 }
@@ -4135,13 +4264,15 @@ Scene: ${cleanPrompt}`,
             if (generatedText && generatedText.length >= 20) {
               const cleanedGenerated = generatedText.replace(/\[[^\]]*\]|\([^)]*\)/g, "").replace(/\*{1,2}|_{1,2}|`/g, "").replace(/\s+/g, " ").trim();
               const genWords = cleanedGenerated.split(/\s+/).filter(Boolean);
-              if (genWords.length > targetWords + 8) {
+              let formattedScript = "";
+              if (genWords.length > targetWords + 10) {
                 const clipped = genWords.slice(0, targetWords).join(" ");
                 const lastStop = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
-                script = lastStop >= Math.floor(clipped.length * 0.5) ? clipped.slice(0, lastStop + 1).trim() : `${clipped.replace(/[,;:\-–—]+$/, "")}.`;
+                formattedScript = lastStop >= Math.floor(clipped.length * 0.5) ? clipped.slice(0, lastStop + 1).trim() : `${clipped.replace(/[,;:\-–—]+$/, "")}.`;
               } else {
-                script = /[.!?]$/.test(cleanedGenerated) ? cleanedGenerated : `${cleanedGenerated}.`;
+                formattedScript = /[.!?]$/.test(cleanedGenerated) ? cleanedGenerated : `${cleanedGenerated}.`;
               }
+              script = ensureLorethosClosing(formattedScript, story?.title);
             }
           } catch (scriptErr) {
             const formatted = formatGeminiError(scriptErr);

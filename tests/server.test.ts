@@ -1097,6 +1097,7 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       assert.equal(story.trailerPosterUrl, `/assets/images/trailers/${slug}.jpg`);
       assert.equal(story.trailerDuration, '21s', `Expected 21s duration on ${slug}`);
       assert.ok(story.trailerNarration && story.trailerNarration.length > 30, `Expected trailerNarration on ${slug}`);
+      assert.match(story.trailerNarration, /\bLorethos\b/i, `Expected Lorethos CTA in trailerNarration on ${slug}`);
 
       const videoFile = path.join(process.cwd(), 'public', story.trailerVideoUrl);
       const videoStat = await fs.stat(videoFile);
@@ -1118,6 +1119,7 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       assert.ok(audioStream, `Expected audio stream in ${slug} trailer`);
       assert.equal(audioStream.codec_name, 'aac');
       assert.equal(audioStream.channels, 2);
+      assert.equal(audioStream.sample_rate, '44100');
       assert.ok(Number(probe.format?.duration || 0) >= 15, `Expected unified trailer >= 15s for ${slug}`);
 
       const posterStat = await fs.stat(path.join(process.cwd(), 'public', story.trailerPosterUrl));
@@ -1480,6 +1482,181 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     assert.equal(marked[0].text, 'blackened eclipse');
     assert.equal(marked[1].text, 'ancient bronze');
   });
+
+  test('story likes endpoints require authentication, persist likes per user, and toggle cleanly', async () => {
+    const storyId = 'story-obsidian-throne';
+
+    // 1. Unauthenticated POST is rejected with 401
+    const unauthLikeRes = await fetch(`${baseUrl}/api/stories/${storyId}/like`, {
+      method: 'POST',
+    });
+    assert.equal(unauthLikeRes.status, 401);
+
+    // 2. Register two readers to verify per-user like counts
+    const regA = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Like Reader One',
+        email: `like.reader.one.${Date.now()}@example.com`,
+        password: 'StrongPassword123',
+      }),
+    });
+    assert.equal(regA.status, 201);
+    const cookieA = extractSessionCookie(regA);
+
+    const regB = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Like Reader Two',
+        email: `like.reader.two.${Date.now()}@example.com`,
+        password: 'StrongPassword123',
+      }),
+    });
+    assert.equal(regB.status, 201);
+    const cookieB = extractSessionCookie(regB);
+
+    // 3. Reader A likes story -> count 1, liked true
+    const likeARes = await fetch(`${baseUrl}/api/stories/${storyId}/like`, {
+      method: 'POST',
+      headers: { Cookie: cookieA },
+    });
+    assert.equal(likeARes.status, 200);
+    const likeAData = await likeARes.json();
+    assert.equal(likeAData.liked, true);
+    assert.equal(likeAData.count, 1);
+
+    // 4. Reader B likes story -> count 2, liked true
+    const likeBRes = await fetch(`${baseUrl}/api/stories/${storyId}/like`, {
+      method: 'POST',
+      headers: { Cookie: cookieB },
+    });
+    assert.equal(likeBRes.status, 200);
+    const likeBData = await likeBRes.json();
+    assert.equal(likeBData.liked, true);
+    assert.equal(likeBData.count, 2);
+
+    // 5. GET /api/stories/likes reflects counts and current user's liked state
+    const getARes = await fetch(`${baseUrl}/api/stories/likes?storyIds=${storyId}`, {
+      headers: { Cookie: cookieA },
+    });
+    assert.equal(getARes.status, 200);
+    const getAData = await getARes.json();
+    assert.equal(getAData.counts[storyId], 2);
+    assert.deepEqual(getAData.likedStoryIds, [storyId]);
+
+    // 6. Reader A unlikes story -> count 1, liked false
+    const unlikeARes = await fetch(`${baseUrl}/api/stories/${storyId}/like`, {
+      method: 'POST',
+      headers: { Cookie: cookieA },
+    });
+    assert.equal(unlikeARes.status, 200);
+    const unlikeAData = await unlikeARes.json();
+    assert.equal(unlikeAData.liked, false);
+    assert.equal(unlikeAData.count, 1);
+  });
+
+  test('profile endpoint validates inputs, updates nickname/bio/preset & gallery avatar, and persists in session', async () => {
+    // 1. Unauthenticated PATCH returns 401
+    const unauthRes = await fetch(`${baseUrl}/api/account/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname: 'GuestEdit' }),
+    });
+    assert.equal(unauthRes.status, 401);
+
+    // 2. Register clean user
+    const regRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Sade Adeyemi',
+        email: `sade.profile.${Date.now()}@example.com`,
+        password: 'StrongPassword123',
+      }),
+    });
+    assert.equal(regRes.status, 201);
+    const cookie = extractSessionCookie(regRes);
+
+    // 3. Reject invalid inputs (short nickname, unsafe avatar protocol, oversized bio)
+    const badNickRes = await fetch(`${baseUrl}/api/account/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ nickname: 'X' }),
+    });
+    assert.equal(badNickRes.status, 400);
+
+    const badAvatarRes = await fetch(`${baseUrl}/api/account/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ avatar: 'javascript:alert(1)' }),
+    });
+    assert.equal(badAvatarRes.status, 400);
+
+    const badSvgRes = await fetch(`${baseUrl}/api/account/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ avatar: 'data:image/svg+xml;base64,PHN2Zz4=' }),
+    });
+    assert.equal(badSvgRes.status, 400);
+
+    const badBioRes = await fetch(`${baseUrl}/api/account/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ bio: 'a'.repeat(201) }),
+    });
+    assert.equal(badBioRes.status, 400);
+
+    // 4. Valid update with preset avatar, nickname, name, and bio
+    const presetUpdateRes = await fetch(`${baseUrl}/api/account/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        name: 'Sade Oladipo',
+        nickname: 'MoonlitKeeper',
+        bio: 'Collector of bronze-age chronicles and twilight verse.',
+        avatar: '/assets/avatar_moonlit_reader.jpg',
+      }),
+    });
+    assert.equal(presetUpdateRes.status, 200);
+    const presetData = await presetUpdateRes.json();
+    assert.equal(presetData.user.name, 'Sade Oladipo');
+    assert.equal(presetData.user.nickname, 'MoonlitKeeper');
+    assert.equal(presetData.user.bio, 'Collector of bronze-age chronicles and twilight verse.');
+    assert.equal(presetData.user.avatar, '/assets/avatar_moonlit_reader.jpg');
+
+    // 5. Valid update with base64 gallery image
+    const sampleDataUrl = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA==';
+    const galleryRes = await fetch(`${baseUrl}/api/account/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ avatar: sampleDataUrl }),
+    });
+    assert.equal(galleryRes.status, 200);
+    const galleryData = await galleryRes.json();
+    assert.equal(galleryData.user.avatar, sampleDataUrl);
+
+    // 6. Session endpoint returns updated profile fields
+    const sessRes = await fetch(`${baseUrl}/api/auth/session`, {
+      headers: { Cookie: cookie },
+    });
+    assert.equal(sessRes.status, 200);
+    const sessData = await sessRes.json();
+    assert.equal(sessData.user.nickname, 'MoonlitKeeper');
+    assert.equal(sessData.user.avatar, sampleDataUrl);
+
+    // 7. Clearing avatar sets avatar to undefined
+    const clearRes = await fetch(`${baseUrl}/api/account/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ avatar: null }),
+    });
+    assert.equal(clearRes.status, 200);
+    const clearData = await clearRes.json();
+    assert.equal(clearData.user.avatar, undefined);
+  });
 });
+
 
 

@@ -139,6 +139,8 @@ export interface ChapterComment {
   id: string;
   storyId: string;
   chapterId: string;
+  chapterNumber?: number;
+  userId?: string;
   authorName: string;
   tag: CommentTag;
   body: string;
@@ -162,6 +164,7 @@ export interface UserProfile {
   nickname?: string;
   email: string;
   avatar?: string;
+  bio?: string;
   role: 'reader' | 'owner';
   subscription: UserSubscription;
   unlockedStoryIds: string[];
@@ -197,3 +200,25 @@ export interface ReaderSettings {
   ambientVolume: number;
   adaptiveAudio?: boolean;
 }
+
+export type WriterRole = 'reader' | 'writer' | 'admin';
+
+export interface SupabaseProfile {
+  id: string;
+  username: string;
+  role: WriterRole;
+}
+
+export interface WriterStory {
+  id: string;
+  author_id: string;
+  author_username: string;
+  title: string;
+  summary: string;
+  body: string;
+  audio_url: string | null;
+  status: 'draft' | 'published';
+  likes_count: number;
+  created_at: string;
+}
+

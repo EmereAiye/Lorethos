@@ -19,6 +19,17 @@ import {
 } from '../types';
 import { INITIAL_STORIES } from '../data/initialStories';
 import { apiFetch, parseJsonSafe, setStoredSessionToken } from '../lib/apiClient';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import {
+  ensureSupabaseReaderProfile,
+  getCurrentSupabaseAuthAndProfile,
+  updateSupabaseUserProfile,
+} from '../lib/writerStories';
+import {
+  createCommentInSupabase,
+  deleteCommentInSupabase,
+  fetchCommentsFromSupabase,
+} from '../lib/chapterComments';
 
 export interface RouteParams {
   slug?: string;
@@ -33,6 +44,7 @@ export interface RouteParams {
   reference?: string;
   interests?: string;
   redirect?: string;
+  reauth?: string;
 }
 
 export function sanitizeInternalRedirect(target?: string | null): string | null {
@@ -106,6 +118,7 @@ interface ParagraphBookmarkInput {
 interface CommentInput {
   storyId: string;
   chapterId: string;
+  chapterNumber?: number;
   tag: CommentTag;
   body: string;
 }
@@ -144,6 +157,12 @@ interface AppContextType {
     requiresEmailVerification?: boolean;
   }>;
   logout: () => Promise<void>;
+  updateProfile: (patch: {
+    name?: string;
+    nickname?: string | null;
+    avatar?: string | null;
+    bio?: string | null;
+  }) => Promise<{ ok: boolean; error?: string; user?: UserProfile }>;
   preferredGenres: string[];
   setPreferredGenres: (genres: string[]) => void;
   readingPromptOpen: boolean;
@@ -228,7 +247,7 @@ interface AppContextType {
   removeParagraphBookmark: (bookmarkId: string) => void;
   isParagraphBookmarked: (chapterId: string, paragraphIndex: number) => boolean;
   chapterComments: ChapterComment[];
-  loadChapterComments: (chapterId: string) => Promise<void>;
+  loadChapterComments: (chapterId: string, storyId?: string) => Promise<void>;
   addChapterComment: (input: CommentInput) => Promise<{ error?: string }>;
   deleteChapterComment: (commentId: string) => Promise<void>;
   inquiries: CommunityInquiry[];
@@ -390,12 +409,49 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   ambientVolume: 0.6
 };
 
-function createGuestUser(): UserProfile {
+interface GuestProfileOverlay {
+  name?: string;
+  nickname?: string;
+  avatar?: string;
+  bio?: string;
+}
+
+function loadGuestProfileOverlay(): GuestProfileOverlay {
+  try {
+    if (typeof window === 'undefined') return {};
+    const raw = window.localStorage.getItem('lorethos_guest_profile');
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Partial<GuestProfileOverlay>;
+    return {
+      name: typeof parsed.name === 'string' && parsed.name.trim().length >= 2 ? parsed.name.trim() : undefined,
+      nickname: typeof parsed.nickname === 'string' && parsed.nickname.trim() ? parsed.nickname.trim() : undefined,
+      avatar: typeof parsed.avatar === 'string' && parsed.avatar.trim() ? parsed.avatar.trim() : undefined,
+      bio: typeof parsed.bio === 'string' && parsed.bio.trim() ? parsed.bio.trim() : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function saveGuestProfileOverlay(overlay: GuestProfileOverlay): void {
+  try {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('lorethos_guest_profile', JSON.stringify(overlay));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function createGuestUser(withSavedOverlay = false): UserProfile {
   const todayIso = getLocalIsoDate();
+  const overlay = withSavedOverlay ? loadGuestProfileOverlay() : {};
   return {
     id: 'guest',
-    name: 'Guest Reader',
+    name: overlay.name || 'Guest Reader',
+    nickname: overlay.nickname,
     email: '',
+    avatar: overlay.avatar,
+    bio: overlay.bio,
     role: 'reader',
     subscription: {
       plan: 'free',
@@ -451,8 +507,12 @@ export function buildHref(route: string, params?: RouteParams): string {
     case 'pricing':
       return '/pricing';
     case 'account': {
+      const qs = new URLSearchParams();
       const safeRedirect = sanitizeInternalRedirect(params?.redirect);
-      return safeRedirect ? `/account?redirect=${encodeURIComponent(safeRedirect)}` : '/account';
+      if (safeRedirect) qs.set('redirect', safeRedirect);
+      if (params?.reauth) qs.set('reauth', params.reauth);
+      const queryStr = qs.toString();
+      return queryStr ? `/account?${queryStr}` : '/account';
     }
     case 'contact':
       return '/contact';
@@ -460,6 +520,10 @@ export function buildHref(route: string, params?: RouteParams): string {
       return '/studio';
     case 'admin':
       return '/admin';
+    case 'writer':
+      return '/writer';
+    case 'profile':
+      return '/profile';
     default:
       return '/';
   }
@@ -535,14 +599,20 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
 
   if (cleanPath === '/account') {
     const safeRedirect = sanitizeInternalRedirect(qs.get('redirect'));
+    const reauth = qs.get('reauth') || undefined;
+    const params: RouteParams = {};
+    if (safeRedirect) params.redirect = safeRedirect;
+    if (reauth) params.reauth = reauth;
     return {
       route: 'account',
-      params: safeRedirect ? { redirect: safeRedirect } : {}
+      params
     };
   }
   if (cleanPath === '/contact') return { route: 'contact', params: {} };
   if (cleanPath === '/studio') return { route: 'studio', params: {} };
   if (cleanPath === '/admin') return { route: 'admin', params: {} };
+  if (cleanPath === '/writer') return { route: 'writer', params: {} };
+  if (cleanPath === '/profile') return { route: 'profile', params: {} };
 
   return { route: 'home', params: {} };
 }
@@ -559,7 +629,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [user, setUser] = useState<UserProfile>(() => {
     try {
       const savedGuestGoal = localStorage.getItem('lorethos_guest_goal');
-      const guest = createGuestUser();
+      const guest = createGuestUser(true);
       if (savedGuestGoal) {
         return {
           ...guest,
@@ -568,7 +638,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return guest;
     } catch {
-      return createGuestUser();
+      return createGuestUser(true);
     }
   });
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -824,6 +894,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           } else {
             setStoredSessionToken(null);
+            if (isSupabaseConfigured && supabase && mounted) {
+              const sbState = await getCurrentSupabaseAuthAndProfile();
+              if (sbState.userId && mounted) {
+                const guestBase = createGuestUser();
+                const displayName = sbState.profile?.username || sbState.email?.split('@')[0] || 'Reader';
+                const savedGenres = loadSavedPreferredGenres(sbState.userId);
+                setUser({
+                  ...guestBase,
+                  id: sbState.userId,
+                  name: sbState.profile?.name || displayName,
+                  nickname: sbState.profile?.nickname || displayName,
+                  email: sbState.email || '',
+                  avatar: sbState.profile?.avatar_url || undefined,
+                  bio: sbState.profile?.bio || undefined,
+                  role: sbState.profile?.role === 'admin' ? 'owner' : 'reader',
+                  preferredGenres: savedGenres,
+                });
+                setPreferredGenresState(savedGenres);
+                setIsAuthenticated(true);
+              }
+            }
           }
         }
       } catch {
@@ -834,8 +925,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     void bootstrap();
+
+    const sbAuthSub =
+      isSupabaseConfigured && supabase
+        ? supabase.auth.onAuthStateChange(async (event, session) => {
+            if (!mounted) return;
+            if (event === 'SIGNED_IN' && session?.user) {
+              const sbState = await getCurrentSupabaseAuthAndProfile();
+              if (!mounted || !sbState.userId) return;
+              setUser((prev) => {
+                if (prev.id !== 'guest' && prev.email) return prev;
+                const guestBase = createGuestUser();
+                const displayName = sbState.profile?.username || sbState.email?.split('@')[0] || 'Reader';
+                const savedGenres = loadSavedPreferredGenres(sbState.userId!);
+                setPreferredGenresState(savedGenres);
+                return {
+                  ...guestBase,
+                  id: sbState.userId!,
+                  name: sbState.profile?.name || displayName,
+                  nickname: sbState.profile?.nickname || displayName,
+                  email: sbState.email || '',
+                  avatar: sbState.profile?.avatar_url || undefined,
+                  bio: sbState.profile?.bio || undefined,
+                  role: sbState.profile?.role === 'admin' ? 'owner' : 'reader',
+                  preferredGenres: savedGenres,
+                };
+              });
+              setIsAuthenticated(true);
+            }
+          })
+        : null;
+
     return () => {
       mounted = false;
+      sbAuthSub?.data?.subscription?.unsubscribe();
     };
   }, [loadAccountExtras]);
 
@@ -932,11 +1055,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     email: string,
     password: string
   ): Promise<{ error?: string; message?: string; requiresEmailVerification?: boolean }> => {
+    const cleanEmail = email.trim();
     try {
       const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password })
+        body: JSON.stringify({ email: cleanEmail, password })
       });
       const data = await parseJsonSafe<{
         user?: UserProfile;
@@ -945,9 +1069,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         message?: string;
         requiresEmailVerification?: boolean;
       }>(res);
+
+      // Synchronize Supabase Auth session alongside Express login
+      let sbLoginOk = false;
+      let sbUserId: string | null = null;
+      let sbEmail: string | null = null;
+      let sbRole: 'reader' | 'writer' | 'admin' = 'reader';
+      let sbUsername = '';
+
+      if (isSupabaseConfigured && supabase) {
+        try {
+          const { data: sbData, error: sbErr } = await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password,
+          });
+          if (!sbErr && sbData.user) {
+            sbLoginOk = true;
+            sbUserId = sbData.user.id;
+            sbEmail = sbData.user.email || cleanEmail;
+            const ensured = await ensureSupabaseReaderProfile(
+              sbData.user.id,
+              data?.user?.nickname ||
+                data?.user?.name ||
+                (typeof sbData.user.user_metadata?.username === 'string'
+                  ? sbData.user.user_metadata.username
+                  : '') ||
+                cleanEmail.split('@')[0],
+              sbEmail
+            );
+            if (ensured) {
+              sbRole = ensured.role;
+              sbUsername = ensured.username;
+            }
+          }
+        } catch {
+          // Keep Express flow independent if Supabase is unavailable
+        }
+      }
+
       if (!res.ok || !data?.user) {
+        if (sbLoginOk && sbUserId) {
+          const guestBase = createGuestUser();
+          const displayName = sbUsername || sbEmail?.split('@')[0] || 'Reader';
+          const savedGenres = loadSavedPreferredGenres(sbUserId);
+          setUser({
+            ...guestBase,
+            id: sbUserId,
+            name: displayName,
+            nickname: displayName,
+            email: sbEmail || cleanEmail,
+            role: sbRole === 'admin' ? 'owner' : 'reader',
+            preferredGenres: savedGenres,
+          });
+          setPreferredGenresState(savedGenres);
+          setIsAuthenticated(true);
+          await refreshStories();
+          return { message: 'Signed in successfully.' };
+        }
         return { error: data?.error || `Sign-in failed (${res.status}).` };
       }
+
       if (data.token) {
         setStoredSessionToken(data.token);
       }
@@ -977,14 +1158,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     password: string,
     nickname?: string
   ): Promise<{ error?: string; message?: string; requiresEmailVerification?: boolean }> => {
+    const cleanName = name.trim();
+    const cleanNickname = nickname?.trim() || '';
+    const cleanEmail = email.trim();
     try {
       const res = await apiFetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: name.trim(),
-          nickname: nickname?.trim() || undefined,
-          email: email.trim(),
+          name: cleanName,
+          nickname: cleanNickname || undefined,
+          email: cleanEmail,
           password
         })
       });
@@ -995,6 +1179,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         message?: string;
         requiresEmailVerification?: boolean;
       }>(res);
+
+      // Register matching Supabase user defaulting strictly to 'reader' in profiles
+      let sbRequiresVerification = false;
+      if (isSupabaseConfigured && supabase && res.ok) {
+        try {
+          const derivedUsername = cleanNickname || cleanName || cleanEmail.split('@')[0];
+          const { data: sbData, error: sbErr } = await supabase.auth.signUp({
+            email: cleanEmail,
+            password,
+            options: {
+              data: {
+                username: derivedUsername,
+                full_name: cleanName,
+              },
+            },
+          });
+          if (!sbErr && sbData.user) {
+            if (sbData.session) {
+              await ensureSupabaseReaderProfile(sbData.user.id, derivedUsername, cleanEmail);
+            } else {
+              sbRequiresVerification = true;
+            }
+          }
+        } catch {
+          // Non-blocking if Supabase user already exists or offline
+        }
+      }
+
       if (!res.ok) {
         return { error: data?.error || `Registration failed (${res.status}).` };
       }
@@ -1032,7 +1244,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setReadingPromptOpen(true);
       }
       await Promise.all([loadAccountExtras(), refreshStories()]);
-      return { message: data.message || 'Account created and signed in.' };
+      return {
+        message: sbRequiresVerification
+          ? 'Account created. Check your email if your Supabase project requires confirmation.'
+          : data.message || 'Account created and signed in.'
+      };
     } catch {
       return { error: 'Network error while creating account.' };
     }
@@ -1044,6 +1260,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch {
       // Ignore network errors
+    }
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // Ignore Supabase signout errors
+      }
     }
     setIsAuthenticated(false);
     setTransactions([]);
@@ -1065,9 +1288,134 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPreferredGenresState([]);
     setReadingPromptOpen(false);
     setPendingAuthRedirect(null);
-    setUser(createGuestUser());
+    setUser(createGuestUser(true));
     await refreshStories();
   };
+
+  const updateProfile = useCallback(
+    async (patch: {
+      name?: string;
+      nickname?: string | null;
+      avatar?: string | null;
+      bio?: string | null;
+    }): Promise<{ ok: boolean; error?: string; user?: UserProfile }> => {
+      if (patch.name !== undefined) {
+        const trimmed = patch.name.trim();
+        if (trimmed.length < 2 || trimmed.length > 80) {
+          return { ok: false, error: 'Name must be between 2 and 80 characters.' };
+        }
+      }
+      if (patch.nickname !== undefined && patch.nickname !== null && patch.nickname.trim() !== '') {
+        const trimmed = patch.nickname.trim();
+        if (trimmed.length < 2 || trimmed.length > 40) {
+          return { ok: false, error: 'Nickname must be between 2 and 40 characters.' };
+        }
+      }
+      if (patch.bio !== undefined && patch.bio !== null && patch.bio.trim().length > 200) {
+        return { ok: false, error: 'Bio must be 200 characters or fewer.' };
+      }
+
+      if (!isAuthenticated) {
+        const nextUser: UserProfile = {
+          ...user,
+          name: patch.name !== undefined ? patch.name.trim() : user.name,
+          nickname:
+            patch.nickname === null
+              ? undefined
+              : patch.nickname !== undefined
+              ? patch.nickname.trim() || undefined
+              : user.nickname,
+          avatar:
+            patch.avatar === null
+              ? undefined
+              : patch.avatar !== undefined
+              ? patch.avatar.trim() || undefined
+              : user.avatar,
+          bio:
+            patch.bio === null
+              ? undefined
+              : patch.bio !== undefined
+              ? patch.bio.trim() || undefined
+              : user.bio,
+        };
+        saveGuestProfileOverlay({
+          name: nextUser.name,
+          nickname: nextUser.nickname,
+          avatar: nextUser.avatar,
+          bio: nextUser.bio,
+        });
+        setUser(nextUser);
+        return { ok: true, user: nextUser };
+      }
+
+      try {
+        const res = await apiFetch('/api/account/profile', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        const data = await parseJsonSafe<{ user?: UserProfile; error?: string }>(res);
+
+        if (res.ok && data?.user) {
+          const nextUser: UserProfile = {
+            ...user,
+            ...data.user,
+            preferredGenres: user.preferredGenres,
+            readingGoal: user.readingGoal,
+          };
+          setUser(nextUser);
+
+          if (isSupabaseConfigured && supabase) {
+            const { data: sbSess } = await supabase.auth.getSession();
+            if (sbSess.session?.user?.id) {
+              void updateSupabaseUserProfile(sbSess.session.user.id, patch);
+            }
+          }
+
+          return { ok: true, user: nextUser };
+        }
+
+        if (res.status === 401 && isSupabaseConfigured && supabase) {
+          const { data: sbSess } = await supabase.auth.getSession();
+          if (sbSess.session?.user?.id) {
+            const sbRes = await updateSupabaseUserProfile(sbSess.session.user.id, patch);
+            if (!sbRes.ok) {
+              return { ok: false, error: sbRes.error || 'Could not update your profile.' };
+            }
+            const nextUser: UserProfile = {
+              ...user,
+              name: patch.name !== undefined ? patch.name.trim() : user.name,
+              nickname:
+                patch.nickname === null
+                  ? undefined
+                  : patch.nickname !== undefined
+                  ? patch.nickname.trim() || undefined
+                  : user.nickname,
+              avatar:
+                patch.avatar === null
+                  ? undefined
+                  : patch.avatar !== undefined
+                  ? patch.avatar.trim() || undefined
+                  : user.avatar,
+              bio:
+                patch.bio === null
+                  ? undefined
+                  : patch.bio !== undefined
+                  ? patch.bio.trim() || undefined
+                  : user.bio,
+            };
+            setUser(nextUser);
+            return { ok: true, user: nextUser };
+          }
+        }
+
+        return { ok: false, error: data?.error || `Failed to update profile (${res.status}).` };
+      } catch {
+        return { ok: false, error: 'Network error while saving profile.' };
+      }
+    },
+    [isAuthenticated, user]
+  );
 
   const openPaystackCheckout = (request: PaystackCheckoutRequest) => {
     setPaystackModal({ isOpen: true, data: request });
@@ -1430,9 +1778,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [paragraphBookmarks]
   );
 
-  const loadChapterComments = useCallback(async (chapterId: string) => {
+  const loadChapterComments = useCallback(async (chapterId: string, storyId?: string) => {
+    if (isSupabaseConfigured && supabase && storyId) {
+      const sbRes = await fetchCommentsFromSupabase(storyId, chapterId);
+      if (!sbRes.error) {
+        setChapterComments(sbRes.comments);
+        return;
+      }
+    }
+
     try {
-      const res = await apiFetch(`/api/comments?chapterId=${encodeURIComponent(chapterId)}`);
+      const query = chapterId === 'all' ? '' : `?chapterId=${encodeURIComponent(chapterId)}`;
+      const res = await apiFetch(`/api/comments${query}`);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.comments)) {
@@ -1448,6 +1805,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isAuthenticated) {
       return { error: 'Please sign in on the Account page before posting comments.' };
     }
+
+    if (isSupabaseConfigured && supabase) {
+      const displayAuthor = user.nickname?.trim() || user.name || 'Lorethos Reader';
+      const sbRes = await createCommentInSupabase({
+        storyId: input.storyId,
+        chapterId: input.chapterId,
+        chapterNumber: input.chapterNumber ?? 1,
+        authorName: displayAuthor,
+        tag: input.tag,
+        body: input.body,
+      });
+
+      if (sbRes.comment) {
+        setChapterComments(prev => [sbRes.comment!, ...prev]);
+        return {};
+      }
+      if (!sbRes.requiresAuth && sbRes.error) {
+        return { error: sbRes.error };
+      }
+      if (sbRes.requiresAuth) {
+        return { error: sbRes.error || 'Please sign in to post chapter feedback.' };
+      }
+    }
+
     try {
       const res = await apiFetch('/api/comments', {
         method: 'POST',
@@ -1467,6 +1848,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteChapterComment = async (commentId: string) => {
     setChapterComments(prev => prev.filter(c => c.id !== commentId));
+    if (isSupabaseConfigured && supabase) {
+      const sbDel = await deleteCommentInSupabase(commentId);
+      if (!sbDel.error) return;
+    }
     if (isAuthenticated) {
       await apiFetch(`/api/comments/${encodeURIComponent(commentId)}`, {
         method: 'DELETE',
@@ -1686,6 +2071,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         login,
         register,
         logout,
+        updateProfile,
         preferredGenres,
         setPreferredGenres,
         readingPromptOpen,

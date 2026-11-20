@@ -185,6 +185,16 @@ function normalizeTtsWavAudio(
   };
 }
 
+function ensureLorethosClosing(text: string, storyTitle?: string): string {
+  const cleaned = text.trim();
+  const withStop = /[.!?]$/.test(cleaned) ? cleaned : `${cleaned}.`;
+  if (/\blorethos\b/i.test(withStop)) {
+    return withStop;
+  }
+  const cta = storyTitle ? `Read ${storyTitle} now on Lorethos.` : 'Read the full story now on Lorethos.';
+  return `${withStop} ${cta}`;
+}
+
 function buildCleanTrailerNarrationScript(options: {
   scenePrompt: string;
   storyTitle?: string;
@@ -193,7 +203,8 @@ function buildCleanTrailerNarrationScript(options: {
   durationSeconds: number;
 }): string {
   const { scenePrompt, storyTitle, storyNarration, mood, durationSeconds } = options;
-  const maxWords = Math.max(20, Math.min(58, Math.round(durationSeconds * 1.85)));
+  const ctaReserveWords = storyTitle ? 8 : 7;
+  const maxBodyWords = Math.max(15, Math.min(50, Math.round(durationSeconds * 1.85) - ctaReserveWords));
 
   const stripProductionCues = (text: string) =>
     text
@@ -204,33 +215,33 @@ function buildCleanTrailerNarrationScript(options: {
 
   const cleanedScene = stripProductionCues(scenePrompt).replace(/[.!?]+$/, '');
   const moodBridge: Record<VideoSceneMood, string> = {
-    storm: 'Through thunder and sweeping storm winds, every moment draws you deeper into the coming reckoning.',
-    action: 'As steel meets fire in urgent motion, destiny turns upon a single breath.',
-    suspense: 'In the hush of creeping shadows, an unspoken secret waits to be uncovered.',
-    neutral: 'Step inside a living world of memory, wonder, and unforgettable storytelling.',
+    storm: 'Amid thunder and rising tempest, every choice carries a perilous price.',
+    action: 'As conflict ignites, destiny turns upon a single breath.',
+    suspense: 'Behind quiet shadows, a hidden truth waits to be uncovered.',
+    neutral: 'Discover a gripping story of memory, wonder, and unfolding intrigue.',
   };
 
   let rawCandidate = '';
   if (storyNarration && storyNarration.trim().length >= 30 && (!cleanedScene || scenePrompt.length > 140)) {
-    rawCandidate = storyNarration.trim();
+    return ensureLorethosClosing(storyNarration.trim(), storyTitle);
   } else {
-    const lead = storyTitle ? `From ${storyTitle}. ` : '';
-    const sceneLine = cleanedScene ? `${cleanedScene.charAt(0).toUpperCase()}${cleanedScene.slice(1)}. ` : '';
+    const lead = storyTitle ? `In ${storyTitle}, ` : '';
+    const sceneLine = cleanedScene ? `${cleanedScene.charAt(0).toLowerCase()}${cleanedScene.slice(1)}. ` : '';
     rawCandidate = `${lead}${sceneLine}${moodBridge[mood]}`.trim();
   }
 
   const words = rawCandidate.split(/\s+/).filter(Boolean);
-  if (words.length <= maxWords) {
-    return /[.!?]$/.test(rawCandidate) ? rawCandidate : `${rawCandidate}.`;
+  let body = rawCandidate;
+  if (words.length > maxBodyWords) {
+    const clipped = words.slice(0, maxBodyWords).join(' ');
+    const lastSentenceEnd = Math.max(clipped.lastIndexOf('.'), clipped.lastIndexOf('!'), clipped.lastIndexOf('?'));
+    body =
+      lastSentenceEnd >= Math.floor(clipped.length * 0.55)
+        ? clipped.slice(0, lastSentenceEnd + 1).trim()
+        : `${clipped.replace(/[,;:\-–—]+$/, '')}.`;
   }
 
-  // Trim cleanly at sentence boundary if possible, otherwise at word boundary with proper punctuation
-  const clipped = words.slice(0, maxWords).join(' ');
-  const lastSentenceEnd = Math.max(clipped.lastIndexOf('.'), clipped.lastIndexOf('!'), clipped.lastIndexOf('?'));
-  if (lastSentenceEnd >= Math.floor(clipped.length * 0.55)) {
-    return clipped.slice(0, lastSentenceEnd + 1).trim();
-  }
-  return `${clipped.replace(/[,;:\-–—]+$/, '')}.`;
+  return ensureLorethosClosing(body, storyTitle);
 }
 
 const EPHEMERAL_DEV_SECRET = crypto.randomBytes(32).toString('hex');
@@ -712,6 +723,32 @@ export async function createApp(options?: {
     res.json({ stories });
   });
 
+  app.get('/api/stories/likes', async (req, res) => {
+    const user = await getAuthenticatedUserAsync(req);
+    const rawIds = typeof req.query.storyIds === 'string' ? req.query.storyIds : '';
+    const storyIds = rawIds
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 200);
+    const data = repo.getStoryLikes(storyIds, user?.id);
+    res.json(data);
+  });
+
+  app.post('/api/stories/:id/like', requireAuth, (req: AuthedRequest, res) => {
+    const storyId = String(req.params.id || '').trim();
+    if (!storyId || storyId.length > 120) {
+      res.status(400).json({ error: 'Valid story id is required.' });
+      return;
+    }
+    const result = repo.toggleStoryLike(storyId, req.currentUser!.id);
+    res.json({
+      storyId,
+      liked: result.liked,
+      count: result.count,
+    });
+  });
+
   app.get('/api/stories/:slug', async (req, res) => {
     const user = await getAuthenticatedUserAsync(req);
     const story = repo.getStoryBySlug(req.params.slug, {
@@ -762,8 +799,120 @@ export async function createApp(options?: {
   });
 
   // =========================================================================
-  // ACCOUNT STATE, READING GOALS, HIGHLIGHTS & COMMENTS
+  // ACCOUNT STATE, PROFILE, READING GOALS, HIGHLIGHTS & COMMENTS
   // =========================================================================
+  app.patch('/api/account/profile', requireAuth, (req: AuthedRequest, res) => {
+    const body = req.body as {
+      name?: unknown;
+      nickname?: unknown;
+      avatar?: unknown;
+      bio?: unknown;
+    };
+
+    const patch: {
+      name?: string;
+      nickname?: string | null;
+      avatar?: string | null;
+      bio?: string | null;
+    } = {};
+
+    if (body.name !== undefined) {
+      if (typeof body.name !== 'string') {
+        res.status(400).json({ error: 'Name must be a string.' });
+        return;
+      }
+      const trimmed = body.name.trim();
+      if (trimmed.length < 2 || trimmed.length > 80) {
+        res.status(400).json({ error: 'Name must be between 2 and 80 characters.' });
+        return;
+      }
+      patch.name = trimmed;
+    }
+
+    if (body.nickname !== undefined) {
+      if (body.nickname === null || body.nickname === '') {
+        patch.nickname = null;
+      } else if (typeof body.nickname === 'string') {
+        const trimmed = body.nickname.trim();
+        if (!trimmed) {
+          patch.nickname = null;
+        } else if (trimmed.length < 2 || trimmed.length > 40) {
+          res.status(400).json({ error: 'Nickname must be between 2 and 40 characters.' });
+          return;
+        } else {
+          patch.nickname = trimmed;
+        }
+      } else {
+        res.status(400).json({ error: 'Invalid nickname format.' });
+        return;
+      }
+    }
+
+    if (body.bio !== undefined) {
+      if (body.bio === null || body.bio === '') {
+        patch.bio = null;
+      } else if (typeof body.bio === 'string') {
+        const trimmed = body.bio.trim();
+        if (trimmed.length > 200) {
+          res.status(400).json({ error: 'Bio must be 200 characters or fewer.' });
+          return;
+        }
+        patch.bio = trimmed || null;
+      } else {
+        res.status(400).json({ error: 'Invalid bio format.' });
+        return;
+      }
+    }
+
+    if (body.avatar !== undefined) {
+      if (body.avatar === null || body.avatar === '') {
+        patch.avatar = null;
+      } else if (typeof body.avatar === 'string') {
+        const val = body.avatar.trim();
+        if (!val) {
+          patch.avatar = null;
+        } else {
+          const isSafeDataImage =
+            val.length <= 500_000 &&
+            /^data:image\/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$/i.test(val);
+          const isSafeLocalAsset =
+            val.length <= 512 &&
+            /^\/(assets|src\/assets)\/[A-Za-z0-9/_.-]+\.(png|jpe?g|webp|gif)(\?[A-Za-z0-9=&_-]*)?$/i.test(val);
+          const isSafeHttpsUrl =
+            val.length <= 1024 &&
+            /^https:\/\/[^\s<>"']+$/i.test(val);
+
+          if (!isSafeDataImage && !isSafeLocalAsset && !isSafeHttpsUrl) {
+            res.status(400).json({ error: 'Invalid profile image format or size.' });
+            return;
+          }
+          patch.avatar = val;
+        }
+      } else {
+        res.status(400).json({ error: 'Invalid profile image payload.' });
+        return;
+      }
+    }
+
+    if (
+      patch.name === undefined &&
+      patch.nickname === undefined &&
+      patch.bio === undefined &&
+      patch.avatar === undefined
+    ) {
+      res.status(400).json({ error: 'Provide at least one profile field to update.' });
+      return;
+    }
+
+    const updated = repo.updateUserProfile(req.currentUser!.id, patch);
+    if (!updated) {
+      res.status(404).json({ error: 'Account not found.' });
+      return;
+    }
+
+    res.json({ user: repo.toPublicProfile(updated) });
+  });
+
   app.get('/api/account/transactions', requireAuth, (req: AuthedRequest, res) => {
     res.json({ transactions: repo.getUserTransactions(req.currentUser!.id) });
   });
@@ -1945,9 +2094,9 @@ export async function createApp(options?: {
           const scriptRes = await withTimeout(
             ai.models.generateContent({
               model: MODEL_NAME,
-              contents: `Write one concise, natural spoken voiceover narration script (about ${targetWords} words, paced calmly for a ${durationSeconds}-second trailer) describing the scene below. Use complete sentences, no stage directions, no brackets, no markdown, and no camera terms.\n\nStory: ${
+              contents: `Write one concise, natural spoken book-trailer voiceover (about ${targetWords} words total, paced calmly for a ${durationSeconds}-second trailer). Summarize the core plot hook from the premise below without spoiling the ending so listeners want to read the full story, and ALWAYS end with a short invitation to read it on Lorethos (for example: "Read ${story ? story.title : 'the full story'} now on Lorethos."). Use complete sentences, no stage directions, no brackets, no markdown, and no camera terms.\n\nStory: ${
                 story ? `${story.title} (${story.genre})` : 'Lorethos Original'
-              }\nScene: ${cleanPrompt}`,
+              }\nPremise: ${cleanPrompt}`,
               config: {
                 thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
               },
@@ -1962,15 +2111,17 @@ export async function createApp(options?: {
               .replace(/\s+/g, ' ')
               .trim();
             const genWords = cleanedGenerated.split(/\s+/).filter(Boolean);
-            if (genWords.length > targetWords + 8) {
+            let formattedScript = '';
+            if (genWords.length > targetWords + 10) {
               const clipped = genWords.slice(0, targetWords).join(' ');
               const lastStop = Math.max(clipped.lastIndexOf('.'), clipped.lastIndexOf('!'), clipped.lastIndexOf('?'));
-              script = lastStop >= Math.floor(clipped.length * 0.5)
+              formattedScript = lastStop >= Math.floor(clipped.length * 0.5)
                 ? clipped.slice(0, lastStop + 1).trim()
                 : `${clipped.replace(/[,;:\-–—]+$/, '')}.`;
             } else {
-              script = /[.!?]$/.test(cleanedGenerated) ? cleanedGenerated : `${cleanedGenerated}.`;
+              formattedScript = /[.!?]$/.test(cleanedGenerated) ? cleanedGenerated : `${cleanedGenerated}.`;
             }
+            script = ensureLorethosClosing(formattedScript, story?.title);
           }
           } catch (scriptErr) {
             const formatted = formatGeminiError(scriptErr);

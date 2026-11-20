@@ -35,7 +35,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/the-obsidian-throne.jpg",
     trailerDuration: "21s",
     trailerMood: "action",
-    trailerNarration: "Beneath a blackened solar eclipse, the High Citadels of Ostraka tremble. Hidden in ink-stained catacombs, warm cuneiform tablets whisper of the First Weavers. By midnight, twelve warlords gather beside the Obsidian Throne. Read The Obsidian Throne now on Lorethos.",
+    trailerNarration: "As the Black Eclipse darkens Ostraka, King Vane confronts rising warlords and court betrayal. Bound to an ancient blood-pact, every decree threatens the realm. Read The Obsidian Throne on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -196,7 +196,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/whisper-of-the-baobab.jpg",
     trailerDuration: "21s",
     trailerMood: "neutral",
-    trailerNarration: "Under the Sahel stars, young navigator Boma holds an ancient brass compass. Across the singing dunes, silver sands hum in five rhythms beneath shifting winds. At the starlit oasis, forgotten constellations reveal highways across the sky. Explore Whisper of the Baobab on Lorethos.",
+    trailerNarration: "Chosen to carry an ancestral brass compass across the Sahel sands, Boma awakens a starlit Baobab\u2014discovering celestial highways built by her forebears. Read Whisper of the Baobab now on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -334,7 +334,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/chronicles-of-the-sunken-epoch.jpg",
     trailerDuration: "21s",
     trailerMood: "storm",
-    trailerNarration: "Four thousand fathoms beneath ocean storms, Diver Kaelen descends into drowned Atal-Mor. Inside a sea-serpent casket, rotating amber awakens with voices of a drowned council. Above the dry library, the crystal dome trembles against rising waters. Read on Lorethos.",
+    trailerNarration: "Four thousand fathoms beneath ocean storms, diver Kaelen uncovers drowned Atal-Mor\u2014and a golden reliquary warning that the sea is rising again. Read the full chronicle on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -466,7 +466,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/the-crimson-scribe.jpg",
     trailerDuration: "21s",
     trailerMood: "suspense",
-    trailerNarration: "Inside the royal scriptorium of House Valerius, statecraft is written in crimson ink. Held against candlelight, pinprick ciphers along the Psalms betray five royal tasters. Outside, rain sweeps the flagstones as armed guards bolt every door.",
+    trailerNarration: "In the royal scriptorium of House Valerius, apprentice Lucien decodes a cipher in crimson ink\u2014revealing three kings were executed by their own scribes. Read more on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -598,7 +598,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/verses-of-the-harmattan.jpg",
     trailerDuration: "21s",
     trailerMood: "neutral",
-    trailerNarration: "When red northern dust coats the mango leaves, brass lanterns glow at dawn. Along twilight waters, an elder ferryman measures the lagoon tide with cedar oar and patience. Beneath thinning haze, tin rooftops sing under clear constellations.",
+    trailerNarration: "Tracing the Harmattan wind from ochre courtyards to Atlantic harbors, this poetry anthology weaves memory, kinship, and lantern light into evening verse. Read every canto free on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,
@@ -715,7 +715,7 @@ var AUTHORITATIVE_STORIES = [
     trailerPosterUrl: "/assets/images/trailers/letters-across-the-lagoon.jpg",
     trailerDuration: "21s",
     trailerMood: "neutral",
-    trailerNarration: "Ten years after the harbor reading hall burned, rolled blueprints cross the morning tide once more. Beneath pried floorboards, a salt-stained ledger exposes the secret behind that fire. At last, wide timber shutters swing open to golden lagoon sunlight.",
+    trailerNarration: "After ten years of silence, two estranged architects exchange handwritten letters tucked inside waterfront blueprints\u2014rebuilding a burned reading hall while uncovering the truth of the night it fell. Read Letters Across the Lagoon free on Lorethos.",
     trailerScenes: [
       {
         sceneNumber: 1,

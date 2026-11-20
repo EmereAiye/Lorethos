@@ -27,6 +27,7 @@ import {
 import { ReadingStatisticsDashboard } from '../components/ReadingStatisticsDashboard';
 import { ReadingGoal } from '../components/ReadingGoal';
 import { getDisplayName, computeReaderRank, READER_RANK_TIERS } from '../utils/readerProfile';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
 
 export const AccountView: React.FC = () => {
   const {
@@ -76,14 +77,68 @@ export const AccountView: React.FC = () => {
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [cancelingSub, setCancelingSub] = useState(false);
+  const [needsSupabaseReauth, setNeedsSupabaseReauth] = useState(
+    routeParams.reauth === '1' && isSupabaseConfigured
+  );
+  const [reauthChecked, setReauthChecked] = useState(
+    !(routeParams.reauth === '1' && isSupabaseConfigured)
+  );
 
   const pendingRedirectTarget = sanitizeInternalRedirect(routeParams.redirect || pendingAuthRedirect);
 
   useEffect(() => {
-    if (isAuthenticated && !authLoading && !readingPromptOpen && pendingRedirectTarget) {
+    const sb = supabase;
+    if (routeParams.reauth !== '1' || !isSupabaseConfigured || !sb) {
+      setNeedsSupabaseReauth(false);
+      setReauthChecked(true);
+      return;
+    }
+
+    let cancelled = false;
+    const verifySupabaseSession = async () => {
+      const { data } = await sb.auth.getSession();
+      if (cancelled) return;
+      const missing = !data.session?.user;
+      setNeedsSupabaseReauth(missing);
+      setReauthChecked(true);
+      if (missing && user.email) {
+        setAuthEmail((prev) => prev || user.email);
+      }
+    };
+    void verifySupabaseSession();
+
+    const sub = sb.auth.onAuthStateChange((_event, session) => {
+      if (!cancelled && session?.user) {
+        setNeedsSupabaseReauth(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      sub.data.subscription.unsubscribe();
+    };
+  }, [routeParams.reauth, user.email]);
+
+  useEffect(() => {
+    if (
+      isAuthenticated &&
+      !authLoading &&
+      !readingPromptOpen &&
+      reauthChecked &&
+      !needsSupabaseReauth &&
+      pendingRedirectTarget
+    ) {
       completePostAuthRedirect();
     }
-  }, [isAuthenticated, authLoading, readingPromptOpen, pendingRedirectTarget, completePostAuthRedirect]);
+  }, [
+    isAuthenticated,
+    authLoading,
+    readingPromptOpen,
+    reauthChecked,
+    needsSupabaseReauth,
+    pendingRedirectTarget,
+    completePostAuthRedirect
+  ]);
 
   const isPatron = isAuthenticated && user.subscription.status === 'active';
   const displayName = getDisplayName(user);
@@ -175,7 +230,7 @@ export const AccountView: React.FC = () => {
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
 
         {/* Account Banner or Sign-In Card */}
-        {!isAuthenticated ? (
+        {!isAuthenticated || needsSupabaseReauth ? (
           <div className="p-8 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             <div className="lg:col-span-6 space-y-3">
               <span className="text-xs font-semibold uppercase tracking-wider text-[#C85A32] font-sans-ui">
@@ -185,7 +240,9 @@ export const AccountView: React.FC = () => {
                 {authMode === 'signin' ? 'Sign In to Lorethos' : 'Create Your Lorethos Account'}
               </h1>
               <p className="font-reader text-sm text-[#2D142C]/75 dark:text-white/75 leading-relaxed">
-                Sign in to unlock paid chapters after checkout, keep bookmarks and reading progress across devices, and post chapter notes.
+                {needsSupabaseReauth
+                  ? 'Please sign in with your email and password to connect your session for story likes and chapter comments.'
+                  : 'Sign in to unlock paid chapters after checkout, keep bookmarks and reading progress across devices, and post chapter notes.'}
               </p>
               {pendingRedirectTarget && (
                 <div className="p-3 rounded-lg bg-[#C85A32]/10 border border-[#C85A32]/25 text-xs font-sans-ui text-[#2D142C] dark:text-[#F9F6F0]">
@@ -345,8 +402,17 @@ export const AccountView: React.FC = () => {
         ) : (
           <div className="p-8 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-full bg-[#2D142C] text-[#F9F6F0] flex items-center justify-center font-display text-2xl font-bold border-2 border-[#C85A32]">
-                {displayName.charAt(0).toUpperCase()}
+              <div className="w-16 h-16 rounded-full overflow-hidden bg-[#2D142C] text-[#F9F6F0] flex items-center justify-center font-display text-2xl font-bold border-2 border-[#C85A32] shrink-0">
+                {user.avatar ? (
+                  <img
+                    src={user.avatar}
+                    alt={displayName}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  displayName.charAt(0).toUpperCase()
+                )}
               </div>
               <div className="space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -375,6 +441,11 @@ export const AccountView: React.FC = () => {
                     ? `${user.name} · ${user.email}`
                     : user.email}
                 </p>
+                {user.bio && (
+                  <p className="text-xs font-reader text-[#2D142C]/80 dark:text-white/80 max-w-xl pt-0.5">
+                    {user.bio}
+                  </p>
+                )}
                 {preferredGenres.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px] font-sans-ui">
                     <span className="opacity-65">Reading mood:</span>
@@ -392,6 +463,14 @@ export const AccountView: React.FC = () => {
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
+              <a
+                href={buildHref('profile')}
+                onClick={(e) => handleLink(e, 'profile')}
+                className="px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] hover:text-[#C85A32] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+              >
+                <Pencil className="w-3.5 h-3.5 text-[#C85A32]" />
+                <span>Edit Profile</span>
+              </a>
               <button
                 type="button"
                 onClick={openReadingPrompt}

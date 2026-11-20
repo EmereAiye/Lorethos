@@ -15,6 +15,8 @@ const AccountView = lazy(() => import('./views/AccountView').then((m) => ({ defa
 const ContactView = lazy(() => import('./views/ContactView').then((m) => ({ default: m.ContactView })));
 const VideoStudioView = lazy(() => import('./views/VideoStudioView').then((m) => ({ default: m.VideoStudioView })));
 const AdminView = lazy(() => import('./views/AdminView').then((m) => ({ default: m.AdminView })));
+const WriterStudioView = lazy(() => import('./views/WriterStudioView').then((m) => ({ default: m.WriterStudioView })));
+const ProfileView = lazy(() => import('./views/ProfileView').then((m) => ({ default: m.ProfileView })));
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
@@ -83,6 +85,10 @@ const MainContent: React.FC = () => {
         return <VideoStudioView />;
       case 'admin':
         return <AdminView />;
+      case 'writer':
+        return <WriterStudioView />;
+      case 'profile':
+        return <ProfileView />;
       default:
         return <HomeView />;
     }

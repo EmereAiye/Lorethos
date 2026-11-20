@@ -22,6 +22,8 @@ export interface StoredUserRecord {
   name: string;
   nickname?: string;
   email: string;
+  avatar?: string;
+  bio?: string;
   passwordHash: string;
   role: 'reader' | 'owner';
   subscription: UserProfile['subscription'];
@@ -58,6 +60,7 @@ interface PersistedSnapshot {
   paragraphBookmarks: Record<string, ParagraphBookmark[]>;
   comments: ChapterComment[];
   inquiries: CommunityInquiry[];
+  storyLikes?: Record<string, string[]>;
 }
 
 export const PLAN_PRICES_NGN: Record<'monthly' | 'annual', { amountNgn: number; label: string }> = {
@@ -172,7 +175,8 @@ class LorethosRepository {
             highlights: parsed.highlights || {},
             paragraphBookmarks: parsed.paragraphBookmarks || {},
             comments: parsed.comments || [],
-            inquiries: parsed.inquiries || []
+            inquiries: parsed.inquiries || [],
+            storyLikes: parsed.storyLikes || {}
           };
         }
       }
@@ -192,7 +196,8 @@ class LorethosRepository {
       highlights: {},
       paragraphBookmarks: {},
       comments: [],
-      inquiries: []
+      inquiries: [],
+      storyLikes: {}
     };
   }
 
@@ -225,6 +230,8 @@ class LorethosRepository {
         name TEXT NOT NULL,
         nickname TEXT,
         email TEXT NOT NULL UNIQUE,
+        avatar TEXT,
+        bio TEXT,
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('reader', 'owner')),
         reading_goal JSONB,
@@ -232,6 +239,8 @@ class LorethosRepository {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS reading_goal JSONB;
       CREATE TABLE IF NOT EXISTS stories (
         id TEXT PRIMARY KEY,
@@ -381,6 +390,12 @@ class LorethosRepository {
         message TEXT NOT NULL,
         submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      CREATE TABLE IF NOT EXISTS story_likes (
+        story_id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (story_id, user_id)
+      );
     `);
 
     for (const story of AUTHORITATIVE_STORIES) {
@@ -461,7 +476,8 @@ class LorethosRepository {
         cmtRes,
         ordRes,
         evRes,
-        inqRes
+        inqRes,
+        likesRes
       ] = await Promise.all([
         this.pool.query('SELECT * FROM stories ORDER BY spotlight_order ASC NULLS LAST, created_at DESC'),
         this.pool.query('SELECT * FROM chapters ORDER BY chapter_number ASC'),
@@ -475,7 +491,8 @@ class LorethosRepository {
         this.pool.query('SELECT * FROM chapter_comments ORDER BY created_at DESC'),
         this.pool.query('SELECT * FROM orders ORDER BY created_at DESC'),
         this.pool.query('SELECT event_id FROM payment_events'),
-        this.pool.query('SELECT * FROM contacts ORDER BY submitted_at DESC')
+        this.pool.query('SELECT * FROM contacts ORDER BY submitted_at DESC'),
+        this.pool.query('SELECT story_id, user_id FROM story_likes')
       ]);
 
       if (storiesRes.rows.length > 0) {
@@ -574,6 +591,8 @@ class LorethosRepository {
         name: u.name,
         nickname: u.nickname || undefined,
         email: u.email,
+        avatar: u.avatar || undefined,
+        bio: u.bio || undefined,
         passwordHash: u.password_hash,
         role: u.role,
         subscription: subByUser.get(u.id) || { plan: 'free', status: 'none', amountNgn: 0 },
@@ -676,6 +695,15 @@ class LorethosRepository {
           minute: '2-digit'
         })
       }));
+
+      this.state.storyLikes = {};
+      for (const row of likesRes.rows) {
+        const list = this.state.storyLikes[row.story_id] || [];
+        if (!list.includes(row.user_id)) {
+          list.push(row.user_id);
+        }
+        this.state.storyLikes[row.story_id] = list;
+      }
       } catch (err) {
         console.warn(
           'PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:',
@@ -706,6 +734,8 @@ class LorethosRepository {
       name: user.name,
       nickname: user.nickname || undefined,
       email: user.email,
+      avatar: user.avatar || undefined,
+      bio: user.bio || undefined,
       role: user.role,
       subscription: user.subscription,
       unlockedStoryIds: user.unlockedStoryIds,
@@ -765,6 +795,8 @@ class LorethosRepository {
         name: u.name,
         nickname: u.nickname || undefined,
         email: String(u.email).trim().toLowerCase(),
+        avatar: u.avatar || undefined,
+        bio: u.bio || undefined,
         passwordHash: u.password_hash,
         role: u.role === 'owner' || String(u.email).trim().toLowerCase() === getOwnerEmail() ? 'owner' : 'reader',
         subscription,
@@ -840,6 +872,55 @@ class LorethosRepository {
     this.persistSnapshot();
 
     return record;
+  }
+
+  public updateUserProfile(
+    userId: string,
+    patch: {
+      name?: string;
+      nickname?: string | null;
+      avatar?: string | null;
+      bio?: string | null;
+    }
+  ): StoredUserRecord | null {
+    const user = this.getUserById(userId);
+    if (!user) return null;
+
+    if (patch.name !== undefined) {
+      user.name = patch.name.trim();
+    }
+    if (patch.nickname !== undefined) {
+      user.nickname = patch.nickname === null ? undefined : patch.nickname.trim() || undefined;
+    }
+    if (patch.avatar !== undefined) {
+      user.avatar = patch.avatar === null ? undefined : patch.avatar.trim() || undefined;
+    }
+    if (patch.bio !== undefined) {
+      user.bio = patch.bio === null ? undefined : patch.bio.trim() || undefined;
+    }
+
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `UPDATE users
+         SET name = $2,
+             nickname = $3,
+             avatar = $4,
+             bio = $5,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [
+          userId,
+          user.name,
+          user.nickname ?? null,
+          user.avatar ?? null,
+          user.bio ?? null,
+        ]
+      );
+    });
+
+    return user;
   }
 
   public getStories(options?: { includeUnpublished?: boolean }): Story[] {
@@ -1589,6 +1670,65 @@ class LorethosRepository {
     });
 
     return inquiry;
+  }
+
+  public getStoryLikes(
+    storyIds?: string[],
+    userId?: string
+  ): { counts: Record<string, number>; likedStoryIds: string[] } {
+    const map = this.state.storyLikes || {};
+    const targetIds = storyIds && storyIds.length > 0 ? storyIds : Object.keys(map);
+    const counts: Record<string, number> = {};
+    const likedStoryIds: string[] = [];
+
+    for (const id of targetIds) {
+      const users = map[id] || [];
+      counts[id] = users.length;
+      if (userId && users.includes(userId)) {
+        likedStoryIds.push(id);
+      }
+    }
+
+    return { counts, likedStoryIds };
+  }
+
+  public toggleStoryLike(storyId: string, userId: string): { liked: boolean; count: number } {
+    if (!this.state.storyLikes) {
+      this.state.storyLikes = {};
+    }
+    const existing = this.state.storyLikes[storyId] || [];
+    const alreadyLiked = existing.includes(userId);
+    let updated: string[];
+    let liked: boolean;
+
+    if (alreadyLiked) {
+      updated = existing.filter((uid) => uid !== userId);
+      liked = false;
+    } else {
+      updated = [...existing, userId];
+      liked = true;
+    }
+
+    this.state.storyLikes[storyId] = updated;
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      if (liked) {
+        await pool.query(
+          `INSERT INTO story_likes (story_id, user_id)
+           VALUES ($1, $2)
+           ON CONFLICT (story_id, user_id) DO NOTHING`,
+          [storyId, userId]
+        );
+      } else {
+        await pool.query(
+          `DELETE FROM story_likes WHERE story_id = $1 AND user_id = $2`,
+          [storyId, userId]
+        );
+      }
+    });
+
+    return { liked, count: updated.length };
   }
 }
 

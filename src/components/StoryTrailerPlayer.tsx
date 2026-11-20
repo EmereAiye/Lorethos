@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import {
   Film,
   BookOpen,
@@ -9,6 +9,11 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import type { Story } from '../types';
+import {
+  claimExclusiveAudio,
+  registerExclusiveAudio,
+  releaseExclusiveAudio,
+} from '../utils/exclusiveAudio';
 
 interface StoryTrailerPlayerProps {
   story: Story;
@@ -28,6 +33,20 @@ export const StoryTrailerPlayer: React.FC<StoryTrailerPlayerProps> = ({
   compact = false,
 }) => {
   const [showTranscript, setShowTranscript] = useState(false);
+  const playerId = useId();
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const unregister = registerExclusiveAudio(playerId, () => {
+      if (videoRef.current && !videoRef.current.paused) {
+        videoRef.current.pause();
+      }
+    });
+    return () => {
+      unregister();
+      releaseExclusiveAudio(playerId);
+    };
+  }, [playerId]);
 
   if (!story.trailerVideoUrl) {
     return null;
@@ -86,12 +105,17 @@ export const StoryTrailerPlayer: React.FC<StoryTrailerPlayerProps> = ({
 
       <div className="rounded-xl overflow-hidden border border-[#2D142C]/15 dark:border-white/15 bg-[#160C16] aspect-video">
         <video
+          ref={videoRef}
           key={story.trailerVideoUrl}
           src={story.trailerVideoUrl}
           poster={story.trailerPosterUrl || story.coverImage}
           controls
           playsInline
           preload="metadata"
+          data-exclusive-id={playerId}
+          onPlay={() => claimExclusiveAudio(playerId)}
+          onPause={() => releaseExclusiveAudio(playerId)}
+          onEnded={() => releaseExclusiveAudio(playerId)}
           className="w-full h-full object-cover"
         >
           Your browser does not support video playback.

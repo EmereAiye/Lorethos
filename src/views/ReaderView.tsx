@@ -155,6 +155,9 @@ export const ReaderView: React.FC = () => {
   const [commentTag, setCommentTag] = useState<CommentTag>('Reaction');
   const [commentDraft, setCommentDraft] = useState('');
   const [commentError, setCommentError] = useState<string | null>(null);
+  const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [commentFilterChapterId, setCommentFilterChapterId] = useState<string>('current');
+  const [commentTargetChapterId, setCommentTargetChapterId] = useState<string>('');
 
   // Scene-adaptive mood tracking state & debounced middleware
   const [activeParagraphIdx, setActiveParagraphIdx] = useState(0);
@@ -171,6 +174,7 @@ export const ReaderView: React.FC = () => {
   const storySlug = routeParams.slug || '';
   const chapterNumber = routeParams.chapterNumber || 1;
   const chapterId = chapterData?.chapter.id || '';
+  const storyId = chapterData?.story.id || '';
 
   // Load authoritative chapter body & comments from server
   useEffect(() => {
@@ -198,9 +202,17 @@ export const ReaderView: React.FC = () => {
 
   useEffect(() => {
     if (chapterId) {
-      void loadChapterComments(chapterId);
+      setCommentFilterChapterId('current');
+      setCommentTargetChapterId(chapterId);
     }
-  }, [chapterId, loadChapterComments]);
+  }, [chapterId]);
+
+  useEffect(() => {
+    if (!chapterId) return;
+    const scopeChapterId =
+      commentFilterChapterId === 'current' ? chapterId : commentFilterChapterId;
+    void loadChapterComments(scopeChapterId, storyId);
+  }, [chapterId, storyId, commentFilterChapterId, loadChapterComments]);
 
   const isChapterLogged = Boolean(
     chapterId && user.readingGoal.completedChapterIds?.includes(chapterId)
@@ -680,7 +692,14 @@ export const ReaderView: React.FC = () => {
   const storyOtherParagraphBookmarks = paragraphBookmarks
     .filter(b => b.storyId === story.id && b.chapterId !== chapter.id)
     .sort((a, b) => a.chapterNumber - b.chapterNumber || a.paragraphIndex - b.paragraphIndex);
-  const activeComments = chapterComments.filter(c => c.chapterId === chapter.id);
+  const effectiveFilterChapterId =
+    commentFilterChapterId === 'current' ? chapter.id : commentFilterChapterId;
+  const activeComments =
+    effectiveFilterChapterId === 'all'
+      ? chapterComments.filter(c => c.storyId === story.id)
+      : chapterComments.filter(c => c.chapterId === effectiveFilterChapterId);
+  const targetPostChapter =
+    story.chapters.find(c => c.id === commentTargetChapterId) || chapter;
 
   const themeStyles = {
     day: {
@@ -2295,152 +2314,6 @@ export const ReaderView: React.FC = () => {
                   </button>
                 </div>
               </div>
-
-              {/* Chapter Discussion */}
-              <section className="pt-8 border-t border-current/15 space-y-5 font-sans-ui">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h2 className="font-display text-2xl font-bold flex items-center gap-2">
-                      <MessageSquare className="w-5 h-5 text-[#C85A32]" />
-                      <span>Chapter {chapter.chapterNumber} Discussion</span>
-                    </h2>
-                    <p className="text-xs opacity-70 mt-0.5">
-                      Share reactions and theories with fellow readers.
-                    </p>
-                  </div>
-                  <span className="text-xs font-mono opacity-65">
-                    {activeComments.length} Note{activeComments.length === 1 ? '' : 's'}
-                  </span>
-                </div>
-
-                {!isAuthenticated ? (
-                  <div className="p-4 rounded-xl border border-current/15 bg-current/[0.03] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                    <span>Sign in to post a comment or theory on this chapter.</span>
-                    <a
-                      href={buildHref('account')}
-                      onClick={(e) => handleLink(e, 'account')}
-                      className="px-4 py-2 rounded-lg bg-[#C85A32] text-white font-semibold self-start sm:self-auto"
-                    >
-                      Sign In &rarr;
-                    </a>
-                  </div>
-                ) : (
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      if (!commentDraft.trim()) return;
-                      setCommentError(null);
-                      const res = await addChapterComment({
-                        storyId: story.id,
-                        chapterId: chapter.id,
-                        tag: commentTag,
-                        body: commentDraft
-                      });
-                      if (res.error) {
-                        setCommentError(res.error);
-                      } else {
-                        setCommentDraft('');
-                      }
-                    }}
-                    className="p-4 rounded-xl border border-current/15 bg-current/[0.03] space-y-3 text-xs"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold">
-                        Posting as {getDisplayName(user)} &middot; Rank {computeReaderRank(user, stories).roman}
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        {(['Reaction', 'Lore', 'Theory'] as const).map(tag => (
-                          <button
-                            key={tag}
-                            type="button"
-                            onClick={() => setCommentTag(tag)}
-                            className={`px-2.5 py-1 rounded-md border text-[11px] font-semibold cursor-pointer transition-colors ${
-                              commentTag === tag
-                                ? 'bg-[#C85A32] text-white border-[#C85A32]'
-                                : 'border-current/20 opacity-75 hover:opacity-100'
-                            }`}
-                          >
-                            {tag}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <label htmlFor="chapter-comment-input" className="sr-only">
-                      Write your chapter note
-                    </label>
-                    <textarea
-                      id="chapter-comment-input"
-                      rows={3}
-                      value={commentDraft}
-                      onChange={(e) => setCommentDraft(e.target.value)}
-                      placeholder={`Share your ${commentTag.toLowerCase()} on Chapter ${chapter.chapterNumber}...`}
-                      className="w-full px-3.5 py-2.5 rounded-lg border border-current/20 bg-transparent focus:outline-none focus:border-[#C85A32] font-reader text-sm"
-                    />
-
-                    {commentError && (
-                      <p role="alert" className="text-red-600 dark:text-red-400">
-                        {commentError}
-                      </p>
-                    )}
-
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <VoiceDictationButton
-                        compact
-                        label="Dictate Comment"
-                        contextHint={`Reader comment on ${story.title}, Chapter ${chapter.chapterNumber}`}
-                        onTranscript={(text) => setCommentDraft((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))}
-                      />
-                      <button
-                        type="submit"
-                        disabled={!commentDraft.trim()}
-                        className="px-4 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] disabled:opacity-50 text-white font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                        <span>Post Note</span>
-                      </button>
-                    </div>
-                  </form>
-                )}
-
-                {activeComments.length === 0 ? (
-                  <p className="text-xs opacity-65 italic py-2">
-                    No reader notes yet for Chapter {chapter.chapterNumber}.
-                  </p>
-                ) : (
-                  <div className="space-y-3">
-                    {activeComments.map(cmt => (
-                      <div
-                        key={cmt.id}
-                        className="p-4 rounded-xl border border-current/12 bg-current/[0.02] space-y-2 text-xs"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold">{cmt.authorName}</span>
-                            <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#C85A32]/15 text-[#C85A32] font-semibold">
-                              {cmt.tag}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[11px] opacity-60">{cmt.createdAt}</span>
-                            {((cmt.authorName === getDisplayName(user) || cmt.authorName === user.name) || user.role === 'owner') && isAuthenticated && (
-                              <button
-                                type="button"
-                                onClick={() => deleteChapterComment(cmt.id)}
-                                aria-label="Delete note"
-                                className="opacity-60 hover:text-red-500 hover:opacity-100 cursor-pointer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <p className="font-reader text-sm leading-relaxed opacity-90">{cmt.body}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
             </div>
           ) : (
             /* Server-Enforced Paywall Container */
@@ -2508,6 +2381,271 @@ export const ReaderView: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* Story & Chapter Reader Comments Section */}
+          <section
+            aria-labelledby="reader-comments-heading"
+            className="pt-8 border-t border-current/15 space-y-5 font-sans-ui"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+              <div>
+                <h2
+                  id="reader-comments-heading"
+                  className="font-display text-2xl font-bold flex items-center gap-2"
+                >
+                  <MessageSquare className="w-5 h-5 text-[#C85A32]" />
+                  <span>
+                    {effectiveFilterChapterId === 'all'
+                      ? `${story.title} Comments`
+                      : `Chapter ${
+                          story.chapters.find(c => c.id === effectiveFilterChapterId)?.chapterNumber ||
+                          chapter.chapterNumber
+                        } Comments`}
+                  </span>
+                </h2>
+                <p className="text-xs opacity-70 mt-0.5">
+                  Post text feedback on specific chapters and read thoughts from other Lorethos readers.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 self-start sm:self-auto">
+                <label htmlFor="comment-chapter-filter" className="sr-only">
+                  Filter comments by chapter
+                </label>
+                <select
+                  id="comment-chapter-filter"
+                  value={commentFilterChapterId}
+                  onChange={(e) => {
+                    const nextVal = e.target.value;
+                    setCommentFilterChapterId(nextVal);
+                    if (nextVal !== 'all') {
+                      setCommentTargetChapterId(nextVal === 'current' ? chapter.id : nextVal);
+                    }
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg border border-current/20 bg-transparent text-xs focus:outline-none focus:border-[#C85A32] cursor-pointer"
+                >
+                  <option value="current" className="bg-white dark:bg-[#1E111E] sepia:bg-[#EDE3D5]">
+                    Current: Chapter {chapter.chapterNumber}
+                  </option>
+                  <option value="all" className="bg-white dark:bg-[#1E111E] sepia:bg-[#EDE3D5]">
+                    All Chapters ({story.chapters.length})
+                  </option>
+                  {story.chapters.map((ch) => (
+                    <option
+                      key={ch.id}
+                      value={ch.id}
+                      className="bg-white dark:bg-[#1E111E] sepia:bg-[#EDE3D5]"
+                    >
+                      Ch. {ch.chapterNumber}: {ch.title}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-xs font-mono opacity-65 tabular-nums whitespace-nowrap">
+                  {activeComments.length} {activeComments.length === 1 ? 'Comment' : 'Comments'}
+                </span>
+              </div>
+            </div>
+
+            {!isAuthenticated ? (
+              <div className="p-4 rounded-xl border border-current/15 bg-current/[0.03] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <span>
+                  Log in as a Lorethos reader to share chapter feedback on {story.title}.
+                </span>
+                <a
+                  href={buildHref('account', {
+                    redirect: buildHref('reader', { slug: story.slug, chapterNumber: chapter.chapterNumber })
+                  })}
+                  onClick={(e) =>
+                    handleLink(e, 'account', {
+                      redirect: buildHref('reader', { slug: story.slug, chapterNumber: chapter.chapterNumber })
+                    })
+                  }
+                  className="px-4 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold self-start sm:self-auto whitespace-nowrap transition-colors"
+                >
+                  Log In to Comment &rarr;
+                </a>
+              </div>
+            ) : (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!commentDraft.trim() || commentSubmitting) return;
+                  setCommentError(null);
+                  setCommentSubmitting(true);
+                  const res = await addChapterComment({
+                    storyId: story.id,
+                    chapterId: targetPostChapter.id,
+                    chapterNumber: targetPostChapter.chapterNumber,
+                    tag: commentTag,
+                    body: commentDraft
+                  });
+                  setCommentSubmitting(false);
+                  if (res.error) {
+                    setCommentError(res.error);
+                  } else {
+                    setCommentDraft('');
+                  }
+                }}
+                className="p-4 rounded-xl border border-current/15 bg-current/[0.03] space-y-3 text-xs"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold">
+                      Posting as {getDisplayName(user)} &middot; Rank {computeReaderRank(user, stories).roman}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {(['Reaction', 'Lore', 'Theory'] as const).map(tag => (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => setCommentTag(tag)}
+                        className={`px-2.5 py-1 rounded-md border text-[11px] font-semibold cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
+                          commentTag === tag
+                            ? 'bg-[#C85A32] text-white border-[#C85A32]'
+                            : 'border-current/20 opacity-75 hover:opacity-100'
+                        }`}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <label htmlFor="comment-target-chapter" className="text-[11px] opacity-75 font-medium">
+                    Chapter feedback target:
+                  </label>
+                  <select
+                    id="comment-target-chapter"
+                    value={targetPostChapter.id}
+                    onChange={(e) => setCommentTargetChapterId(e.target.value)}
+                    className="px-2.5 py-1 rounded-md border border-current/20 bg-transparent text-[11px] font-medium focus:outline-none focus:border-[#C85A32] cursor-pointer"
+                  >
+                    {story.chapters.map((ch) => (
+                      <option
+                        key={ch.id}
+                        value={ch.id}
+                        className="bg-white dark:bg-[#1E111E] sepia:bg-[#EDE3D5]"
+                      >
+                        Chapter {ch.chapterNumber}: {ch.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <label htmlFor="chapter-comment-input" className="sr-only">
+                  Write your chapter feedback
+                </label>
+                <textarea
+                  id="chapter-comment-input"
+                  rows={3}
+                  maxLength={1000}
+                  value={commentDraft}
+                  onChange={(e) => setCommentDraft(e.target.value)}
+                  placeholder={`Share your feedback on Chapter ${targetPostChapter.chapterNumber}: ${targetPostChapter.title}...`}
+                  className="w-full px-3.5 py-2.5 rounded-lg border border-current/20 bg-transparent focus:outline-none focus:border-[#C85A32] font-reader text-sm"
+                />
+
+                {commentError && (
+                  <p role="alert" className="text-red-600 dark:text-red-400">
+                    {commentError}
+                  </p>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-3">
+                    <VoiceDictationButton
+                      compact
+                      label="Dictate Comment"
+                      contextHint={`Reader feedback on ${story.title}, Chapter ${targetPostChapter.chapterNumber}`}
+                      onTranscript={(text) => setCommentDraft((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))}
+                    />
+                    <span className="text-[11px] opacity-55 tabular-nums">
+                      {commentDraft.trim().length}/1000
+                    </span>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={commentSubmitting || commentDraft.trim().length < 2}
+                    className="px-4 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] disabled:opacity-50 text-white font-semibold flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap shrink-0"
+                  >
+                    {commentSubmitting ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Posting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-3.5 h-3.5" />
+                        <span>Post Comment</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {activeComments.length === 0 ? (
+              <p className="text-xs opacity-65 italic py-2">
+                No reader comments yet for{' '}
+                {effectiveFilterChapterId === 'all'
+                  ? story.title
+                  : `Chapter ${
+                      story.chapters.find(c => c.id === effectiveFilterChapterId)?.chapterNumber ||
+                      chapter.chapterNumber
+                    }`}
+                .
+              </p>
+            ) : (
+              <div className="divide-y divide-current/10 border border-current/12 rounded-xl overflow-hidden bg-current/[0.015]">
+                {activeComments.map((cmt) => {
+                  const matchedChapter = story.chapters.find(c => c.id === cmt.chapterId);
+                  const chapterNum = cmt.chapterNumber || matchedChapter?.chapterNumber;
+                  const canDelete =
+                    isAuthenticated &&
+                    ((cmt.userId && cmt.userId === user.id) ||
+                      cmt.authorName === getDisplayName(user) ||
+                      cmt.authorName === user.name ||
+                      user.role === 'owner');
+
+                  return (
+                    <div key={cmt.id} className="p-4 space-y-2 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="font-bold">{cmt.authorName}</span>
+                          <span aria-hidden="true" className="opacity-40">&middot;</span>
+                          <span className="text-[#C85A32] font-semibold">{cmt.tag}</span>
+                          {chapterNum && (
+                            <>
+                              <span aria-hidden="true" className="opacity-40">&middot;</span>
+                              <span className="opacity-70 tabular-nums">Chapter {chapterNum}</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-[11px] opacity-60">{cmt.createdAt}</span>
+                          {canDelete && (
+                            <button
+                              type="button"
+                              onClick={() => void deleteChapterComment(cmt.id)}
+                              aria-label="Delete comment"
+                              className="opacity-60 hover:text-red-500 hover:opacity-100 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <p className="font-reader text-sm leading-relaxed opacity-90 whitespace-pre-line">
+                        {cmt.body}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
 
           {/* Navigation Between Chapters */}
           <div className="pt-10 border-t border-current/10 flex items-center justify-between gap-4 font-sans-ui text-xs">

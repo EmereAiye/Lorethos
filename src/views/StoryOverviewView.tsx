@@ -15,6 +15,9 @@ import {
 } from 'lucide-react';
 import { StoryTrailerPlayer } from '../components/StoryTrailerPlayer';
 import { VideoTrailerStudio } from '../components/VideoTrailerStudio';
+import { StoryLikeButton } from '../components/StoryLikeButton';
+import { fetchLikesForStories } from '../lib/storyLikes';
+import { supabase } from '../lib/supabase';
 import {
   AVERAGE_READING_WPM,
   estimateChapterReadingTime,
@@ -35,7 +38,29 @@ export const StoryOverviewView: React.FC = () => {
   } = useApp();
 
   const [shareCopied, setShareCopied] = useState(false);
+  const [likeCount, setLikeCount] = useState(0);
+  const [isLiked, setIsLiked] = useState(false);
   const story = getStoryBySlug(routeParams.slug || '');
+
+  React.useEffect(() => {
+    if (!story?.id) return;
+    let cancelled = false;
+    const loadLikes = async () => {
+      const res = await fetchLikesForStories([story.id]);
+      if (!cancelled) {
+        setLikeCount(res.state.counts[story.id] || 0);
+        setIsLiked(res.state.likedStoryIds.has(story.id));
+      }
+    };
+    void loadLikes();
+    const sub = supabase?.auth.onAuthStateChange(() => {
+      void loadLikes();
+    });
+    return () => {
+      cancelled = true;
+      sub?.data?.subscription?.unsubscribe();
+    };
+  }, [story?.id, isAuthenticated]);
 
   const handleLink = (
     e: React.MouseEvent<HTMLAnchorElement>,
@@ -118,7 +143,7 @@ export const StoryOverviewView: React.FC = () => {
               </div>
             </div>
 
-            <div className="w-full max-w-xs mt-4 flex items-center justify-between gap-2 text-xs">
+            <div className="w-full max-w-xs mt-4 flex flex-wrap items-center justify-between gap-2 text-xs">
               <button
                 type="button"
                 onClick={handleShare}
@@ -146,6 +171,18 @@ export const StoryOverviewView: React.FC = () => {
                 <Bookmark className="w-3.5 h-3.5" />
                 <span>Bookmark</span>
               </button>
+
+              <StoryLikeButton
+                storyId={story.id}
+                storyTitle={story.title}
+                size="md"
+                initialCount={likeCount}
+                initialLiked={isLiked}
+                onUpdated={(_id, liked, count) => {
+                  setIsLiked(liked);
+                  setLikeCount(count);
+                }}
+              />
             </div>
             <div role="status" aria-live="polite" className="sr-only">
               {shareCopied ? 'Story link copied to clipboard.' : ''}
