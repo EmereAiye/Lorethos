@@ -13,21 +13,25 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import { apiFetch, parseJsonSafe } from '../lib/apiClient';
 import {
   canAccessWriterStudio,
   createWriterStory,
   deleteWriterStory,
+  fetchLatestSupabaseUserRole,
   fetchManageableWriterStories,
   formatTrailerSummaryWithLorethosCta,
   getCurrentSupabaseAuthAndProfile,
+  isWriterStudioAdmin,
+  normalizeWriterRole,
   updateWriterStory,
   uploadTrailerAudioToBucket,
 } from '../lib/writerStories';
-import type { SupabaseProfile, WriterStory } from '../types';
+import type { SupabaseProfile, UserProfile, WriterStory } from '../types';
 import { ExclusiveAudioPlayer } from '../components/ExclusiveAudioPlayer';
 
 export const WriterStudioView: React.FC = () => {
-  const { navigate, buildHref } = useApp();
+  const { navigate, buildHref, refreshUserRole } = useApp();
 
   const [checkingAccess, setCheckingAccess] = useState(true);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
@@ -66,17 +70,88 @@ export const WriterStudioView: React.FC = () => {
 
   const refreshAccessAndData = useCallback(async () => {
     setCheckingAccess(true);
-    const state = await getCurrentSupabaseAuthAndProfile();
-    setAuthUserId(state.userId);
-    setProfile(state.profile);
-    setCheckingAccess(false);
+    try {
+      const sbState = await getCurrentSupabaseAuthAndProfile();
+      let effectiveUserId: string | null = sbState.userId;
+      let effectiveProfile: SupabaseProfile | null = sbState.profile
+        ? {
+            id: sbState.profile.id,
+            username: sbState.profile.username,
+            role: normalizeWriterRole(sbState.profile.role),
+          }
+        : null;
 
-    if (state.userId && state.profile && canAccessWriterStudio(state.profile.role)) {
-      await loadStories(state.userId, state.profile.role === 'admin');
-    } else {
+      if (effectiveUserId) {
+        const liveLookup = await fetchLatestSupabaseUserRole(effectiveUserId, sbState.email);
+        const liveRole =
+          liveLookup.source !== 'none'
+            ? liveLookup.role
+            : normalizeWriterRole(effectiveProfile?.role);
+        effectiveProfile = {
+          id: effectiveProfile?.id || effectiveUserId,
+          username:
+            effectiveProfile?.username || sbState.email?.split('@')[0] || 'Writer',
+          role: liveRole,
+        };
+      } else {
+        // Check Express session and resolve live role directly from Supabase public.users
+        try {
+          const sessionRes = await apiFetch('/api/auth/session');
+          if (sessionRes.ok) {
+            const sessionJson = await parseJsonSafe<{
+              authenticated?: boolean;
+              user?: UserProfile;
+            }>(sessionRes);
+            if (sessionJson?.authenticated && sessionJson.user) {
+              effectiveUserId = sessionJson.user.id;
+              const liveLookup = await fetchLatestSupabaseUserRole(
+                sessionJson.user.id,
+                sessionJson.user.email
+              );
+              const expressRole = normalizeWriterRole(sessionJson.user.role);
+              const liveRole =
+                liveLookup.source === 'users'
+                  ? liveLookup.role
+                  : liveLookup.source === 'profiles' && expressRole !== 'owner'
+                  ? liveLookup.role
+                  : expressRole;
+              effectiveProfile = {
+                id: sessionJson.user.id,
+                username:
+                  sessionJson.user.nickname || sessionJson.user.name || 'Writer',
+                role: liveRole,
+              };
+            }
+          }
+        } catch {
+          // Keep effectiveUserId = null if session endpoint is unavailable
+        }
+      }
+
+      setAuthUserId(effectiveUserId);
+      setProfile(effectiveProfile);
+      setCheckingAccess(false);
+
+      if (effectiveUserId) {
+        void refreshUserRole();
+      }
+
+      if (
+        effectiveUserId &&
+        effectiveProfile &&
+        canAccessWriterStudio(effectiveProfile.role)
+      ) {
+        await loadStories(effectiveUserId, isWriterStudioAdmin(effectiveProfile.role));
+      } else {
+        setSubmittedStories([]);
+      }
+    } catch {
+      setAuthUserId(null);
+      setProfile(null);
       setSubmittedStories([]);
+      setCheckingAccess(false);
     }
-  }, [loadStories]);
+  }, [loadStories, refreshUserRole]);
 
   useEffect(() => {
     void refreshAccessAndData();
@@ -190,7 +265,7 @@ export const WriterStudioView: React.FC = () => {
       }
 
       resetForm();
-      await loadStories(authUserId, profile.role === 'admin');
+      await loadStories(authUserId, isWriterStudioAdmin(profile.role));
     } finally {
       setUploadingAudio(false);
       setSubmitting(false);
@@ -483,10 +558,10 @@ export const WriterStudioView: React.FC = () => {
           <div className="flex items-center justify-between gap-2">
             <div>
               <h2 className="font-display text-2xl font-bold">
-                {profile.role === 'admin' ? 'All Submitted Stories' : 'Your Submitted Stories'}
+                {isWriterStudioAdmin(profile.role) ? 'All Submitted Stories' : 'Your Submitted Stories'}
               </h2>
               <p className="text-xs font-sans-ui text-[#2D142C]/65 dark:text-white/65">
-                {profile.role === 'admin'
+                {isWriterStudioAdmin(profile.role)
                   ? 'Admin view: manage stories submitted across all writers.'
                   : 'Edit or remove any story you have published.'}
               </p>

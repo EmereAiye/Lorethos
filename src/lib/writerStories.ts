@@ -11,12 +11,111 @@ export interface SupabaseAuthProfileState {
 export function normalizeWriterRole(rawRole: unknown): WriterRole {
   const val = typeof rawRole === 'string' ? rawRole.trim().toLowerCase() : '';
   if (val === 'writer') return 'writer';
-  if (val === 'admin' || val === 'owner') return 'admin';
+  if (val === 'owner') return 'owner';
+  if (val === 'admin') return 'admin';
   return 'reader';
 }
 
-export function canAccessWriterStudio(role: WriterRole | null | undefined): boolean {
-  return role === 'writer' || role === 'admin';
+export function canAccessWriterStudio(role: string | WriterRole | null | undefined): boolean {
+  const val = typeof role === 'string' ? role.trim().toLowerCase() : '';
+  return val === 'writer' || val === 'owner' || val === 'admin';
+}
+
+export function isWriterStudioAdmin(role: string | WriterRole | null | undefined): boolean {
+  const val = typeof role === 'string' ? role.trim().toLowerCase() : '';
+  return val === 'owner' || val === 'admin';
+}
+
+export interface SupabaseRoleLookupResult {
+  role: WriterRole;
+  userRow: Record<string, unknown> | null;
+  source: 'users' | 'profiles' | 'none';
+}
+
+async function querySupabaseTableRow(
+  table: 'users' | 'profiles',
+  userId?: string | null,
+  email?: string | null
+): Promise<Record<string, unknown> | null> {
+  if (!isSupabaseConfigured || !supabase) return null;
+
+  const columnVariants =
+    table === 'users'
+      ? [
+          'id, role, email, username, name, nickname, avatar_url, bio',
+          'id, role, email',
+          'id, role',
+        ]
+      : [
+          'id, username, name, nickname, avatar_url, bio, role, email',
+          'id, username, name, nickname, avatar_url, bio, role',
+          'id, username, role',
+        ];
+
+  if (userId) {
+    for (const cols of columnVariants) {
+      try {
+        const res = await supabase.from(table).select(cols).eq('id', userId).maybeSingle();
+        if (!res.error) {
+          if (res.data) return res.data as unknown as Record<string, unknown>;
+          break;
+        }
+      } catch {
+        // Try next column set or email lookup
+      }
+    }
+  }
+
+  const cleanEmail = email?.trim().toLowerCase();
+  if (cleanEmail) {
+    for (const cols of columnVariants) {
+      if (!cols.includes('email')) continue;
+      try {
+        const res = await supabase.from(table).select(cols).ilike('email', cleanEmail).maybeSingle();
+        if (!res.error) {
+          if (res.data) return res.data as unknown as Record<string, unknown>;
+          break;
+        }
+      } catch {
+        // Try next fallback
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Fetches the user's latest role directly from `public.users` in Supabase
+ * (never relying on localStorage), falling back to `public.profiles` only if needed.
+ */
+export async function fetchLatestSupabaseUserRole(
+  userId?: string | null,
+  email?: string | null
+): Promise<SupabaseRoleLookupResult> {
+  if (!isSupabaseConfigured || !supabase || (!userId && !email?.trim())) {
+    return { role: 'reader', userRow: null, source: 'none' };
+  }
+
+  const usersRow = await querySupabaseTableRow('users', userId, email);
+  if (usersRow) {
+    return {
+      role: normalizeWriterRole(usersRow.role),
+      userRow: usersRow,
+      source: 'users',
+    };
+  }
+
+  const profilesRow = await querySupabaseTableRow('profiles', userId, email);
+  if (profilesRow) {
+    return {
+      role: normalizeWriterRole(profilesRow.role),
+      userRow: profilesRow,
+      source: 'profiles',
+    };
+  }
+
+  return { role: 'reader', userRow: null, source: 'none' };
 }
 
 /**
@@ -44,6 +143,7 @@ export async function ensureSupabaseReaderProfile(
   if (!isSupabaseConfigured || !supabase || !userId) return null;
 
   try {
+    const liveRole = await fetchLatestSupabaseUserRole(userId, email);
     const { data: existing, error: selectErr } = await supabase
       .from('profiles')
       .select('id, username, role')
@@ -54,7 +154,7 @@ export async function ensureSupabaseReaderProfile(
       return {
         id: existing.id,
         username: existing.username || username || 'Lorethos Reader',
-        role: normalizeWriterRole(existing.role),
+        role: liveRole.source === 'users' ? liveRole.role : normalizeWriterRole(existing.role),
       };
     }
 
@@ -71,17 +171,19 @@ export async function ensureSupabaseReaderProfile(
       .single();
 
     if (insertErr) {
-      // Retry select in case trigger already inserted the row concurrently
       const { data: fallback } = await supabase
         .from('profiles')
         .select('id, username, role')
         .eq('id', userId)
         .maybeSingle();
-      if (fallback) {
+      if (fallback || liveRole.source !== 'none') {
         return {
-          id: fallback.id,
-          username: fallback.username || cleanUsername,
-          role: normalizeWriterRole(fallback.role),
+          id: fallback?.id || userId,
+          username: fallback?.username || cleanUsername,
+          role:
+            liveRole.source !== 'none'
+              ? liveRole.role
+              : normalizeWriterRole(fallback?.role),
         };
       }
       return null;
@@ -90,7 +192,7 @@ export async function ensureSupabaseReaderProfile(
     return {
       id: inserted.id,
       username: inserted.username || cleanUsername,
-      role: normalizeWriterRole(inserted.role),
+      role: liveRole.source === 'users' ? liveRole.role : normalizeWriterRole(inserted.role),
     };
   } catch {
     return null;
@@ -119,53 +221,46 @@ export async function getCurrentSupabaseAuthAndProfile(): Promise<SupabaseAuthPr
     }
 
     const authUser = sessionData.session.user;
-    let profileRow: Record<string, unknown> | null = null;
+    const [latestRole, profileRow] = await Promise.all([
+      fetchLatestSupabaseUserRole(authUser.id, authUser.email),
+      querySupabaseTableRow('profiles', authUser.id, authUser.email),
+    ]);
 
-    const fullQuery = await supabase
-      .from('profiles')
-      .select('id, username, name, nickname, avatar_url, bio, role')
-      .eq('id', authUser.id)
-      .maybeSingle();
+    const userRow = latestRole.userRow;
+    const rowUsername =
+      (profileRow && typeof profileRow.username === 'string' && profileRow.username) ||
+      (userRow && typeof userRow.username === 'string' && userRow.username) ||
+      (typeof authUser.user_metadata?.username === 'string' && authUser.user_metadata.username) ||
+      authUser.email?.split('@')[0] ||
+      'Writer';
 
-    if (!fullQuery.error && fullQuery.data) {
-      profileRow = fullQuery.data as Record<string, unknown>;
-    } else {
-      const basicQuery = await supabase
-        .from('profiles')
-        .select('id, username, role')
-        .eq('id', authUser.id)
-        .maybeSingle();
-      if (!basicQuery.error && basicQuery.data) {
-        profileRow = basicQuery.data as Record<string, unknown>;
-      }
-    }
+    const resolvedRole =
+      latestRole.source !== 'none'
+        ? latestRole.role
+        : profileRow
+        ? normalizeWriterRole(profileRow.role)
+        : 'reader';
 
-    if (!profileRow) {
-      return {
-        configured: true,
-        userId: authUser.id,
-        email: authUser.email || null,
-        profile: null,
-      };
-    }
-
-    const rowUsername = typeof profileRow.username === 'string' ? profileRow.username : '';
     return {
       configured: true,
       userId: authUser.id,
       email: authUser.email || null,
       profile: {
-        id: String(profileRow.id),
-        username:
-          rowUsername ||
-          (typeof authUser.user_metadata?.username === 'string' && authUser.user_metadata.username) ||
-          authUser.email?.split('@')[0] ||
-          'Writer',
-        name: typeof profileRow.name === 'string' ? profileRow.name : null,
-        nickname: typeof profileRow.nickname === 'string' ? profileRow.nickname : null,
-        avatar_url: typeof profileRow.avatar_url === 'string' ? profileRow.avatar_url : null,
-        bio: typeof profileRow.bio === 'string' ? profileRow.bio : null,
-        role: normalizeWriterRole(profileRow.role),
+        id: String(profileRow?.id || userRow?.id || authUser.id),
+        username: rowUsername,
+        name:
+          (profileRow && typeof profileRow.name === 'string' ? profileRow.name : null) ||
+          (userRow && typeof userRow.name === 'string' ? userRow.name : null),
+        nickname:
+          (profileRow && typeof profileRow.nickname === 'string' ? profileRow.nickname : null) ||
+          (userRow && typeof userRow.nickname === 'string' ? userRow.nickname : null),
+        avatar_url:
+          (profileRow && typeof profileRow.avatar_url === 'string' ? profileRow.avatar_url : null) ||
+          (userRow && typeof userRow.avatar_url === 'string' ? userRow.avatar_url : null),
+        bio:
+          (profileRow && typeof profileRow.bio === 'string' ? profileRow.bio : null) ||
+          (userRow && typeof userRow.bio === 'string' ? userRow.bio : null),
+        role: resolvedRole,
       },
     };
   } catch {

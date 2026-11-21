@@ -15,14 +15,17 @@ import {
   ParagraphBookmark,
   ChapterComment,
   CommentTag,
-  CommunityInquiry
+  CommunityInquiry,
+  WriterRole
 } from '../types';
 import { INITIAL_STORIES } from '../data/initialStories';
 import { apiFetch, parseJsonSafe, setStoredSessionToken } from '../lib/apiClient';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import {
   ensureSupabaseReaderProfile,
+  fetchLatestSupabaseUserRole,
   getCurrentSupabaseAuthAndProfile,
+  normalizeWriterRole,
   updateSupabaseUserProfile,
 } from '../lib/writerStories';
 import {
@@ -30,6 +33,7 @@ import {
   deleteCommentInSupabase,
   fetchCommentsFromSupabase,
 } from '../lib/chapterComments';
+import { recordNightReadingTelemetry } from '../utils/readerAchievements';
 
 export interface RouteParams {
   slug?: string;
@@ -157,6 +161,7 @@ interface AppContextType {
     requiresEmailVerification?: boolean;
   }>;
   logout: () => Promise<void>;
+  refreshUserRole: () => Promise<WriterRole>;
   updateProfile: (patch: {
     name?: string;
     nickname?: string | null;
@@ -851,8 +856,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               Array.isArray(sessionJson.user.preferredGenres) && sessionJson.user.preferredGenres.length > 0
                 ? sessionJson.user.preferredGenres
                 : loadSavedPreferredGenres(sessionJson.user.id);
+
+            let resolvedRole = normalizeWriterRole(sessionJson.user.role);
+            if (isSupabaseConfigured && supabase) {
+              try {
+                const { data: sbSession } = await supabase.auth.getSession();
+                const sbAuthId = sbSession.session?.user?.id;
+                const sbLookup = await fetchLatestSupabaseUserRole(
+                  sbAuthId || sessionJson.user.id,
+                  sbSession.session?.user?.email || sessionJson.user.email
+                );
+                if (sbLookup.source !== 'none') {
+                  resolvedRole =
+                    sbLookup.source === 'users'
+                      ? sbLookup.role
+                      : resolvedRole === 'owner'
+                      ? 'owner'
+                      : sbLookup.role;
+                }
+              } catch {
+                // Keep Express session role if Supabase lookup fails
+              }
+            }
+
             const serverUser: UserProfile = {
               ...sessionJson.user,
+              role: resolvedRole,
               preferredGenres: savedGenres,
               readingGoal: reconcileReadingGoalRollover(
                 sessionJson.user.readingGoal || createGuestUser().readingGoal
@@ -877,6 +906,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 if (verifyRes.ok && verifyJson.user && mounted) {
                   setUser({
                     ...verifyJson.user,
+                    role: resolvedRole,
                     readingGoal: reconcileReadingGoalRollover(
                       verifyJson.user.readingGoal || serverUser.readingGoal
                     )
@@ -908,7 +938,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   email: sbState.email || '',
                   avatar: sbState.profile?.avatar_url || undefined,
                   bio: sbState.profile?.bio || undefined,
-                  role: sbState.profile?.role === 'admin' ? 'owner' : 'reader',
+                  role: normalizeWriterRole(sbState.profile?.role),
                   preferredGenres: savedGenres,
                 });
                 setPreferredGenresState(savedGenres);
@@ -930,11 +960,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isSupabaseConfigured && supabase
         ? supabase.auth.onAuthStateChange(async (event, session) => {
             if (!mounted) return;
-            if (event === 'SIGNED_IN' && session?.user) {
+            if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
               const sbState = await getCurrentSupabaseAuthAndProfile();
               if (!mounted || !sbState.userId) return;
+              const liveRole = normalizeWriterRole(sbState.profile?.role);
               setUser((prev) => {
-                if (prev.id !== 'guest' && prev.email) return prev;
+                if (prev.id !== 'guest' && prev.email) {
+                  return prev.role === liveRole ? prev : { ...prev, role: liveRole };
+                }
                 const guestBase = createGuestUser();
                 const displayName = sbState.profile?.username || sbState.email?.split('@')[0] || 'Reader';
                 const savedGenres = loadSavedPreferredGenres(sbState.userId!);
@@ -947,7 +980,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   email: sbState.email || '',
                   avatar: sbState.profile?.avatar_url || undefined,
                   bio: sbState.profile?.bio || undefined,
-                  role: sbState.profile?.role === 'admin' ? 'owner' : 'reader',
+                  role: liveRole,
                   preferredGenres: savedGenres,
                 };
               });
@@ -1070,11 +1103,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         requiresEmailVerification?: boolean;
       }>(res);
 
-      // Synchronize Supabase Auth session alongside Express login
+      // Synchronize Supabase Auth session & live role from public.users alongside Express login
       let sbLoginOk = false;
       let sbUserId: string | null = null;
       let sbEmail: string | null = null;
-      let sbRole: 'reader' | 'writer' | 'admin' = 'reader';
+      let sbRole: WriterRole = 'reader';
+      let sbRoleSource: 'users' | 'profiles' | 'none' = 'none';
       let sbUsername = '';
 
       if (isSupabaseConfigured && supabase) {
@@ -1098,9 +1132,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               sbEmail
             );
             if (ensured) {
-              sbRole = ensured.role;
+              sbRole = normalizeWriterRole(ensured.role);
               sbUsername = ensured.username;
             }
+          }
+
+          // Always fetch live role directly from public.users in Supabase (never rely on localStorage)
+          const liveLookup = await fetchLatestSupabaseUserRole(
+            sbUserId || data?.user?.id,
+            sbEmail || cleanEmail
+          );
+          if (liveLookup.source !== 'none') {
+            sbRole = liveLookup.role;
+            sbRoleSource = liveLookup.source;
           }
         } catch {
           // Keep Express flow independent if Supabase is unavailable
@@ -1118,7 +1162,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             name: displayName,
             nickname: displayName,
             email: sbEmail || cleanEmail,
-            role: sbRole === 'admin' ? 'owner' : 'reader',
+            role: sbRole,
             preferredGenres: savedGenres,
           });
           setPreferredGenresState(savedGenres);
@@ -1132,12 +1176,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (data.token) {
         setStoredSessionToken(data.token);
       }
+      const expressRole = normalizeWriterRole(data.user.role);
+      const finalRole: WriterRole =
+        sbRoleSource === 'users'
+          ? sbRole
+          : sbRoleSource === 'profiles' && expressRole !== 'owner'
+          ? sbRole
+          : expressRole;
       const savedGenres =
         Array.isArray(data.user.preferredGenres) && data.user.preferredGenres.length > 0
           ? data.user.preferredGenres
           : loadSavedPreferredGenres(data.user.id);
       setUser({
         ...data.user,
+        role: finalRole,
         preferredGenres: savedGenres,
         readingGoal: reconcileReadingGoalRollover(
           data.user.readingGoal || createGuestUser().readingGoal
@@ -1291,6 +1343,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUser(createGuestUser(true));
     await refreshStories();
   };
+
+  const refreshUserRole = useCallback(async (): Promise<WriterRole> => {
+    let resolvedRole: WriterRole = normalizeWriterRole(user.role);
+    let lookupUserId: string | null = user.id !== 'guest' ? user.id : null;
+    let lookupEmail: string | null = user.email || null;
+
+    if (!lookupEmail) {
+      try {
+        const sessionRes = await apiFetch('/api/auth/session');
+        if (sessionRes.ok) {
+          const sessionJson = await parseJsonSafe<{ authenticated?: boolean; user?: UserProfile }>(sessionRes);
+          if (sessionJson?.authenticated && sessionJson.user) {
+            lookupUserId = sessionJson.user.id;
+            lookupEmail = sessionJson.user.email || null;
+            resolvedRole = normalizeWriterRole(sessionJson.user.role);
+          }
+        }
+      } catch {
+        // Ignore session fallback error
+      }
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const sbUser = sessionData.session?.user;
+        const sbLookup = await fetchLatestSupabaseUserRole(
+          sbUser?.id || lookupUserId,
+          sbUser?.email || lookupEmail
+        );
+        if (sbLookup.source === 'users') {
+          resolvedRole = sbLookup.role;
+        } else if (sbLookup.source === 'profiles' && resolvedRole !== 'owner') {
+          resolvedRole = sbLookup.role;
+        }
+      } catch {
+        // Keep current resolvedRole if Supabase check fails
+      }
+    }
+
+    setUser((prev) => (prev.role === resolvedRole ? prev : { ...prev, role: resolvedRole }));
+    return resolvedRole;
+  }, [user.id, user.email, user.role]);
 
   const updateProfile = useCallback(
     async (patch: {
@@ -1493,6 +1588,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       });
 
+      if (rounded >= 10) {
+        recordNightReadingTelemetry(user.id);
+      }
+
       if (isAuthenticated) {
         if (progressSaveTimerRef.current) {
           window.clearTimeout(progressSaveTimerRef.current);
@@ -1506,7 +1605,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }, 2500);
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, user.id]
   );
 
   const syncGoalToServer = useCallback(
@@ -1612,9 +1711,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       });
 
+      if (wasLogged) {
+        recordNightReadingTelemetry(user.id);
+      }
+
       return wasLogged;
     },
-    [syncGoalToServer]
+    [syncGoalToServer, user.id]
   );
 
   const saveHighlight = (input: HighlightInput): TextHighlight => {
@@ -2031,7 +2134,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     (story: Story, chapter: Chapter): boolean => {
       if (chapter.isFree || story.accessTier === 'free') return true;
       if (!isAuthenticated) return false;
-      if (user.role === 'owner') return true;
+      if (user.role === 'owner' || user.role === 'admin') return true;
       if (user.subscription.status === 'active' && story.accessTier === 'subscription') return true;
       if (user.unlockedStoryIds.includes(story.id)) return true;
       return false;
@@ -2071,6 +2174,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         login,
         register,
         logout,
+        refreshUserRole,
         updateProfile,
         preferredGenres,
         setPreferredGenres,

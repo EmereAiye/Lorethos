@@ -1656,7 +1656,129 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     const clearData = await clearRes.json();
     assert.equal(clearData.user.avatar, undefined);
   });
+
+  test('writer role helpers authorize writer, owner, and admin case-insensitively and deny reader/null', async () => {
+    const {
+      normalizeWriterRole,
+      canAccessWriterStudio,
+      isWriterStudioAdmin,
+    } = await import('../src/lib/writerStories');
+
+    assert.equal(normalizeWriterRole('Writer'), 'writer');
+    assert.equal(normalizeWriterRole('  OWNER  '), 'owner');
+    assert.equal(normalizeWriterRole('Admin'), 'admin');
+    assert.equal(normalizeWriterRole('reader'), 'reader');
+    assert.equal(normalizeWriterRole(null), 'reader');
+
+    assert.equal(canAccessWriterStudio('writer'), true);
+    assert.equal(canAccessWriterStudio('Writer'), true);
+    assert.equal(canAccessWriterStudio('owner'), true);
+    assert.equal(canAccessWriterStudio('OWNER'), true);
+    assert.equal(canAccessWriterStudio('admin'), true);
+    assert.equal(canAccessWriterStudio(' Admin '), true);
+    assert.equal(canAccessWriterStudio('reader'), false);
+    assert.equal(canAccessWriterStudio(''), false);
+    assert.equal(canAccessWriterStudio(null), false);
+    assert.equal(canAccessWriterStudio(undefined), false);
+
+    assert.equal(isWriterStudioAdmin('owner'), true);
+    assert.equal(isWriterStudioAdmin('ADMIN'), true);
+    assert.equal(isWriterStudioAdmin('writer'), false);
+    assert.equal(isWriterStudioAdmin('reader'), false);
+  });
+
+  test('evaluateReaderAchievements unlocks Night Owl, Speed Reader, Completionist, and supporting badges from reading history', async () => {
+    const { evaluateReaderAchievements } = await import('../src/utils/readerAchievements');
+    const { AUTHORITATIVE_STORIES } = await import('../server/catalog');
+
+    const baseUser = {
+      id: 'usr_achievements_test',
+      name: 'Kemi Adeyemi',
+      nickname: 'LanternReader',
+      email: 'kemi@example.com',
+      role: 'reader' as const,
+      subscription: { plan: 'free' as const, status: 'none' as const, amountNgn: 0 },
+      unlockedStoryIds: [],
+      bookmarkedChapterIds: ['bm1', 'bm2'],
+      readingProgress: {
+        [AUTHORITATIVE_STORIES[0].id]: {
+          chapterId: AUTHORITATIVE_STORIES[0].chapters[0].id,
+          chapterNumber: 1,
+          progressPercent: 100,
+          lastReadAt: new Date(2026, 2, 10, 23, 30, 0).toISOString(), // 11:30 PM local -> Night Owl
+        },
+        [AUTHORITATIVE_STORIES[1].id]: {
+          chapterId: AUTHORITATIVE_STORIES[1].chapters[0].id,
+          chapterNumber: 1,
+          progressPercent: 50,
+          lastReadAt: new Date(2026, 2, 10, 14, 0, 0).toISOString(),
+        },
+        [AUTHORITATIVE_STORIES[2].id]: {
+          chapterId: AUTHORITATIVE_STORIES[2].chapters[0].id,
+          chapterNumber: 1,
+          progressPercent: 50,
+          lastReadAt: new Date(2026, 2, 10, 15, 0, 0).toISOString(),
+        },
+      },
+      readingGoal: {
+        frequency: 'daily' as const,
+        targetChapters: 2,
+        currentProgress: 3,
+        streakDays: 3,
+        bestStreakDays: 3,
+        lastUpdatedDate: '2026-03-10',
+        completedChapterIds: AUTHORITATIVE_STORIES[0].chapters.map((c) => c.id),
+        history: [
+          {
+            dayName: 'Tue',
+            dateStr: 'Mar 10',
+            dateIso: '2026-03-10',
+            chaptersRead: 3,
+            metTarget: true,
+          },
+        ],
+      },
+    };
+
+    const freshUser = {
+      ...baseUser,
+      bookmarkedChapterIds: [],
+      readingProgress: {},
+      readingGoal: {
+        ...baseUser.readingGoal,
+        currentProgress: 0,
+        streakDays: 0,
+        bestStreakDays: 0,
+        completedChapterIds: [],
+        history: [],
+      },
+    };
+
+    const lockedBadges = evaluateReaderAchievements(freshUser, AUTHORITATIVE_STORIES, {
+      telemetry: { nightReadCount: 0, fastCompletionCount: 0 },
+      highlightsCount: 0,
+      paragraphBookmarksCount: 0,
+    });
+    assert.equal(lockedBadges.length, 8);
+    assert.equal(lockedBadges.every((b) => !b.unlocked), true);
+
+    const unlockedBadges = evaluateReaderAchievements(baseUser, AUTHORITATIVE_STORIES, {
+      telemetry: { nightReadCount: 0, fastCompletionCount: 0 },
+      highlightsCount: 1,
+      paragraphBookmarksCount: 0,
+    });
+    const byId = Object.fromEntries(unlockedBadges.map((b) => [b.id, b]));
+    assert.equal(byId['first-chapter'].unlocked, true);
+    assert.equal(byId['chapter-collector'].unlocked, true);
+    assert.equal(byId['night-owl'].unlocked, true);
+    assert.equal(byId['speed-reader'].unlocked, true);
+    assert.equal(byId['completionist'].unlocked, true);
+    assert.equal(byId['flame-keeper'].unlocked, true);
+    assert.equal(byId['genre-explorer'].unlocked, true);
+    assert.equal(byId['archivist'].unlocked, true);
+  });
 });
+
 
 
 

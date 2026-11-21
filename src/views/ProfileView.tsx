@@ -4,6 +4,10 @@ import { AVATAR_PRESETS } from '../data/avatarPresets';
 import { processGalleryImageFile } from '../utils/avatarImage';
 import { computeReaderRank } from '../utils/readerProfile';
 import {
+  evaluateReaderAchievements,
+  type AchievementIconKey,
+} from '../utils/readerAchievements';
+import {
   Camera,
   Check,
   CheckCircle2,
@@ -15,13 +19,35 @@ import {
   Award,
   ArrowRight,
   Sparkles,
+  BookOpen,
+  Layers,
+  Moon,
+  Zap,
+  Trophy,
+  Flame,
+  Compass,
+  Bookmark,
+  Lock,
 } from 'lucide-react';
+
+const ACHIEVEMENT_ICON_MAP: Record<AchievementIconKey, React.ComponentType<{ className?: string }>> = {
+  book: BookOpen,
+  layers: Layers,
+  moon: Moon,
+  zap: Zap,
+  trophy: Trophy,
+  flame: Flame,
+  compass: Compass,
+  bookmark: Bookmark,
+};
 
 export const ProfileView: React.FC = () => {
   const {
     user,
     isAuthenticated,
     stories,
+    highlights,
+    paragraphBookmarks,
     updateProfile,
     navigate,
     buildHref,
@@ -37,6 +63,7 @@ export const ProfileView: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [imageLoadError, setImageLoadError] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [achievementFilter, setAchievementFilter] = useState<'all' | 'unlocked' | 'locked'>('all');
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -50,6 +77,16 @@ export const ProfileView: React.FC = () => {
 
   const previewDisplayName = (draftNickname.trim() || draftName.trim() || 'Reader');
   const rank = computeReaderRank(user, stories);
+  const achievements = evaluateReaderAchievements(user, stories, {
+    highlightsCount: highlights.length,
+    paragraphBookmarksCount: paragraphBookmarks.length,
+  });
+  const unlockedCount = achievements.filter((item) => item.unlocked).length;
+  const filteredAchievements = achievements.filter((item) => {
+    if (achievementFilter === 'unlocked') return item.unlocked;
+    if (achievementFilter === 'locked') return !item.unlocked;
+    return true;
+  });
 
   const hasUnsavedTextChanges =
     draftName.trim() !== (user.name || '').trim() ||
@@ -540,6 +577,172 @@ export const ProfileView: React.FC = () => {
             </div>
           </section>
         </div>
+
+        {/* Reader Achievements Showcase */}
+        <section
+          aria-labelledby="reader-achievements-heading"
+          className="p-6 sm:p-8 rounded-2xl bg-white dark:bg-[#1E111E] sepia:bg-[#EDE3D5] border border-[#2D142C]/12 dark:border-white/12 sepia:border-[#2C1E18]/15 shadow-xs space-y-6"
+        >
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/12 pb-5">
+            <div className="space-y-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#C85A32] font-sans-ui block">
+                Reading Milestones
+              </span>
+              <div className="flex flex-wrap items-baseline gap-3">
+                <h2
+                  id="reader-achievements-heading"
+                  className="font-display text-2xl sm:text-3xl font-bold tracking-tight"
+                >
+                  Reader Achievements
+                </h2>
+                <span className="text-xs font-sans-ui font-semibold text-[#C85A32] tabular-nums">
+                  {unlockedCount} of {achievements.length} Badges Earned
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm font-reader opacity-75 max-w-2xl">
+                Badges unlock automatically from your chapters finished, late-night sessions, reading speed, streaks, and saved margin lore.
+              </p>
+            </div>
+
+            {/* Filter Tabs */}
+            <div
+              role="tablist"
+              aria-label="Filter reader achievements"
+              className="inline-flex items-center gap-1 p-1 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] sepia:bg-[#F4ECE1] border border-[#2D142C]/12 dark:border-white/12 sepia:border-[#2C1E18]/15 font-sans-ui text-xs self-start md:self-auto"
+            >
+              {(
+                [
+                  { id: 'all', label: `All (${achievements.length})` },
+                  { id: 'unlocked', label: `Earned (${unlockedCount})` },
+                  { id: 'locked', label: `In Progress (${achievements.length - unlockedCount})` },
+                ] as const
+              ).map((tab) => {
+                const active = achievementFilter === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setAchievementFilter(tab.id)}
+                    className={`px-3 py-1.5 rounded-md font-semibold transition-colors cursor-pointer whitespace-nowrap tabular-nums ${
+                      active
+                        ? 'bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16]'
+                        : 'opacity-70 hover:opacity-100'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {filteredAchievements.length === 0 ? (
+            <div className="py-8 text-center space-y-2 font-sans-ui">
+              <p className="text-sm font-semibold">
+                {achievementFilter === 'unlocked'
+                  ? 'No badges earned yet.'
+                  : 'Every badge has been unlocked.'}
+              </p>
+              <p className="text-xs opacity-70">
+                {achievementFilter === 'unlocked'
+                  ? 'Open any chronicle and finish your first chapter to unlock your opening badge.'
+                  : 'You have mastered every reading achievement currently available on Lorethos.'}
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {filteredAchievements.map((badge) => {
+                const Icon = ACHIEVEMENT_ICON_MAP[badge.iconKey] || Award;
+                return (
+                  <article
+                    key={badge.id}
+                    className={`rounded-xl p-4 border flex flex-col justify-between gap-4 transition-colors ${
+                      badge.unlocked
+                        ? 'border-[#C85A32]/40 bg-[#F9F6F0]/80 dark:bg-[#160C16]/75 sepia:bg-[#F4ECE1]/85'
+                        : 'border-[#2D142C]/12 dark:border-white/12 sepia:border-[#2C1E18]/15 bg-[#F9F6F0]/35 dark:bg-[#160C16]/35 sepia:bg-[#F4ECE1]/40'
+                    }`}
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div
+                          className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
+                            badge.unlocked
+                              ? 'bg-[#C85A32]/15 text-[#C85A32]'
+                              : 'bg-[#2D142C]/8 dark:bg-white/10 text-[#2D142C]/55 dark:text-white/55 sepia:text-[#2C1E18]/55'
+                          }`}
+                        >
+                          <Icon className="w-5 h-5" />
+                        </div>
+
+                        <div className="text-right font-sans-ui">
+                          <span className="text-[10px] uppercase tracking-wider opacity-60 block">
+                            {badge.category}
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1 text-[11px] font-semibold mt-0.5 ${
+                              badge.unlocked
+                                ? 'text-emerald-700 dark:text-emerald-300'
+                                : 'opacity-65'
+                            }`}
+                          >
+                            {badge.unlocked ? (
+                              <>
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Earned</span>
+                              </>
+                            ) : (
+                              <>
+                                <Lock className="w-3 h-3" />
+                                <span>In Progress</span>
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <h3 className="font-display text-base font-bold leading-snug">
+                          {badge.title}
+                        </h3>
+                        <p className="font-reader text-xs opacity-75 leading-relaxed">
+                          {badge.description}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 pt-2 border-t border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/12 font-sans-ui">
+                      <div className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="opacity-70 truncate" title={badge.requirementLabel}>
+                          {badge.requirementLabel}
+                        </span>
+                        <span className="font-semibold tabular-nums shrink-0 text-[#C85A32]">
+                          {badge.progressLabel}
+                        </span>
+                      </div>
+                      <div
+                        className="w-full h-1.5 rounded-full bg-[#2D142C]/10 dark:bg-white/10 overflow-hidden"
+                        role="progressbar"
+                        aria-valuenow={badge.progressPercent}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-label={`${badge.title} progress`}
+                      >
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            badge.unlocked ? 'bg-emerald-600 dark:bg-emerald-400' : 'bg-[#C85A32]'
+                          }`}
+                          style={{ width: `${badge.progressPercent}%` }}
+                        />
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );

@@ -165,7 +165,7 @@ export interface UserProfile {
   email: string;
   avatar?: string;
   bio?: string;
-  role: 'reader' | 'owner';
+  role: WriterRole;
   subscription: UserSubscription;
   unlockedStoryIds: string[];
   bookmarkedChapterIds: string[];
@@ -201,7 +201,7 @@ export interface ReaderSettings {
   adaptiveAudio?: boolean;
 }
 
-export type WriterRole = 'reader' | 'writer' | 'admin';
+export type WriterRole = 'reader' | 'writer' | 'owner' | 'admin';
 
 export interface SupabaseProfile {
   id: string;

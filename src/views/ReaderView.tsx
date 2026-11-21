@@ -31,6 +31,10 @@ import { ambientAudio, AmbientTrackId } from '../utils/ambientAudio';
 import { NarrativeAudioMiddleware, toSceneMood } from '../utils/narrativeAudioMiddleware';
 import { getDisplayName, computeReaderRank } from '../utils/readerProfile';
 import {
+  recordChapterCompletionTelemetry,
+  recordNightReadingTelemetry,
+} from '../utils/readerAchievements';
+import {
   measureSelectionInParagraphElement,
   resolveParagraphHighlightSegments
 } from '../utils/highlightSpans';
@@ -165,6 +169,8 @@ export const ReaderView: React.FC = () => {
   const [moodPreviewActive, setMoodPreviewActive] = useState(false);
   const activeIdxRef = useRef(0);
   const lastRecordedPercentRef = useRef(-1);
+  const chapterOpenedAtRef = useRef(Date.now());
+  const nightPingedChapterRef = useRef<string | null>(null);
   const audioMiddlewareRef = useRef<NarrativeAudioMiddleware | null>(null);
   if (!audioMiddlewareRef.current) {
     audioMiddlewareRef.current = new NarrativeAudioMiddleware();
@@ -274,11 +280,19 @@ export const ReaderView: React.FC = () => {
               chapterData.chapter.chapterNumber,
               rounded
             );
+            if (rounded >= 10 && nightPingedChapterRef.current !== chapterData.chapter.id) {
+              nightPingedChapterRef.current = chapterData.chapter.id;
+              recordNightReadingTelemetry(user.id);
+            }
             if (
               bounded >= 92 &&
               !user.readingGoal.completedChapterIds?.includes(chapterData.chapter.id)
             ) {
               const newlyLogged = logChapterCompleted(chapterData.chapter.id);
+              recordChapterCompletionTelemetry(user.id, {
+                elapsedMs: Date.now() - chapterOpenedAtRef.current,
+                estimatedMinutes: chapterData.chapter.readTimeMinutes || 6,
+              });
               if (newlyLogged) {
                 setAutoCompletedToast(true);
                 window.setTimeout(() => setAutoCompletedToast(false), 3800);
@@ -305,6 +319,7 @@ export const ReaderView: React.FC = () => {
     chapterData,
     chapterLocked,
     hasAccessToChapter,
+    user.id,
     user.readingGoal.completedChapterIds,
     logChapterCompleted,
     recordReadingProgress
@@ -324,6 +339,8 @@ export const ReaderView: React.FC = () => {
     setAutoCompletedToast(false);
     activeIdxRef.current = 0;
     lastRecordedPercentRef.current = -1;
+    chapterOpenedAtRef.current = Date.now();
+    nightPingedChapterRef.current = null;
     setActiveParagraphIdx(0);
     setDetectedMood('neutral');
     setMoodPreviewActive(false);
@@ -2291,6 +2308,10 @@ export const ReaderView: React.FC = () => {
                     onClick={() => {
                       if (!isChapterLogged) {
                         logChapterCompleted(chapter.id);
+                        recordChapterCompletionTelemetry(user.id, {
+                          elapsedMs: Date.now() - chapterOpenedAtRef.current,
+                          estimatedMinutes: chapter.readTimeMinutes || 6,
+                        });
                       }
                     }}
                     disabled={isChapterLogged}
