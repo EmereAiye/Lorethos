@@ -1,13 +1,31 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { apiFetch, parseJsonSafe } from '../lib/apiClient';
-import { Search, Filter, BookOpen, ArrowUpDown, Sparkles, Loader2, ArrowRight, X, Film } from 'lucide-react';
+import {
+  Search,
+  Filter,
+  BookOpen,
+  ArrowUpDown,
+  Sparkles,
+  Loader2,
+  ArrowRight,
+  X,
+  Film,
+  Library,
+  Plus,
+  Lock,
+  Globe,
+  BookmarkPlus,
+  Check,
+  Pencil,
+  Trash2,
+} from 'lucide-react';
 import { StoryTrailerPlayer } from '../components/StoryTrailerPlayer';
 import { WriterStoriesFeed } from '../components/WriterStoriesFeed';
 import { StoryLikeButton } from '../components/StoryLikeButton';
 import { fetchLikesForStories } from '../lib/storyLikes';
 import { supabase } from '../lib/supabase';
-import type { Story } from '../types';
+import type { BookshelfVisibility, Story, StoryBookshelf } from '../types';
 
 interface AIRecommendation {
   slug: string;
@@ -16,7 +34,20 @@ interface AIRecommendation {
 }
 
 export const LibraryView: React.FC = () => {
-  const { stories, navigate, buildHref, routeParams, user, isAuthenticated } = useApp();
+  const {
+    stories,
+    navigate,
+    buildHref,
+    routeParams,
+    user,
+    isAuthenticated,
+    myBookshelves,
+    publicBookshelves,
+    createBookshelf,
+    updateBookshelf,
+    deleteBookshelf,
+    toggleStoryInBookshelf,
+  } = useApp();
 
   const [searchQuery, setSearchQuery] = useState(routeParams.q || '');
   const [selectedGenre, setSelectedGenre] = useState<string>(routeParams.genre || 'All');
@@ -25,6 +56,28 @@ export const LibraryView: React.FC = () => {
   const [sortBy, setSortBy] = useState<'popular' | 'chapters'>(
     routeParams.sort === 'chapters' ? 'chapters' : 'popular'
   );
+  const [selectedShelfId, setSelectedShelfId] = useState<string | null>(routeParams.shelf || null);
+  const [shelfDirectoryTab, setShelfDirectoryTab] = useState<'mine' | 'public'>('mine');
+
+  // Create bookshelf panel state
+  const [showCreateShelfForm, setShowCreateShelfForm] = useState(false);
+  const [newShelfName, setNewShelfName] = useState('');
+  const [newShelfDescription, setNewShelfDescription] = useState('');
+  const [newShelfVisibility, setNewShelfVisibility] = useState<BookshelfVisibility>('private');
+  const [shelfSaving, setShelfSaving] = useState(false);
+  const [shelfFeedback, setShelfFeedback] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+
+  // Edit active bookshelf state
+  const [editingShelfId, setEditingShelfId] = useState<string | null>(null);
+  const [editShelfName, setEditShelfName] = useState('');
+  const [editShelfDescription, setEditShelfDescription] = useState('');
+  const [confirmDeleteShelfId, setConfirmDeleteShelfId] = useState<string | null>(null);
+
+  // Story -> Bookshelf picker modal state
+  const [activeShelfStory, setActiveShelfStory] = useState<Story | null>(null);
+  const [quickShelfName, setQuickShelfName] = useState('');
+  const [quickShelfVisibility, setQuickShelfVisibility] = useState<BookshelfVisibility>('private');
+  const [quickShelfFeedback, setQuickShelfFeedback] = useState<string | null>(null);
 
   const [moodPrompt, setMoodPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
@@ -56,13 +109,37 @@ export const LibraryView: React.FC = () => {
   }, [stories, isAuthenticated]);
 
   useEffect(() => {
-    if (!activeTrailerStory) return;
+    if (!activeTrailerStory && !activeShelfStory) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setActiveTrailerStory(null);
+      if (e.key === 'Escape') {
+        setActiveTrailerStory(null);
+        setActiveShelfStory(null);
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeTrailerStory]);
+  }, [activeTrailerStory, activeShelfStory]);
+
+  const activeShelf: StoryBookshelf | null = useMemo(() => {
+    if (!selectedShelfId) return null;
+    return (
+      myBookshelves.find((s) => s.id === selectedShelfId) ||
+      publicBookshelves.find((s) => s.id === selectedShelfId) ||
+      null
+    );
+  }, [selectedShelfId, myBookshelves, publicBookshelves]);
+
+  const isOwnActiveShelf = Boolean(
+    activeShelf &&
+      (myBookshelves.some((s) => s.id === activeShelf.id) ||
+        (isAuthenticated && activeShelf.ownerId === user.id))
+  );
+
+  useEffect(() => {
+    if (selectedShelfId && !activeShelf && myBookshelves.length + publicBookshelves.length > 0) {
+      // Wait cleanly if still loading; clear only if shelf was deleted locally
+    }
+  }, [selectedShelfId, activeShelf, myBookshelves.length, publicBookshelves.length]);
 
   // Synchronize filter state with /stories URL query parameters
   useEffect(() => {
@@ -73,11 +150,103 @@ export const LibraryView: React.FC = () => {
         genre: selectedGenre !== 'All' ? selectedGenre : undefined,
         status: selectedStatus !== 'All' ? selectedStatus : undefined,
         tier: selectedTier !== 'All' ? selectedTier : undefined,
-        sort: sortBy !== 'popular' ? sortBy : undefined
+        sort: sortBy !== 'popular' ? sortBy : undefined,
+        shelf: selectedShelfId || undefined,
       },
       { replace: true }
     );
-  }, [searchQuery, selectedGenre, selectedStatus, selectedTier, sortBy, navigate]);
+  }, [searchQuery, selectedGenre, selectedStatus, selectedTier, sortBy, selectedShelfId, navigate]);
+
+  const handleCreateShelfSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setShelfFeedback(null);
+    setShelfSaving(true);
+    const res = await createBookshelf({
+      name: newShelfName,
+      description: newShelfDescription || undefined,
+      visibility: newShelfVisibility,
+    });
+    setShelfSaving(false);
+    if (!res.ok || !res.bookshelf) {
+      setShelfFeedback({ type: 'error', text: res.error || 'Could not create bookshelf.' });
+      return;
+    }
+    setNewShelfName('');
+    setNewShelfDescription('');
+    setNewShelfVisibility('private');
+    setShowCreateShelfForm(false);
+    setShelfDirectoryTab('mine');
+    setSelectedShelfId(res.bookshelf.id);
+    setShelfFeedback({
+      type: 'success',
+      text: `Created "${res.bookshelf.name}" (${res.bookshelf.visibility === 'public' ? 'Public' : 'Private'}).`,
+    });
+  };
+
+  const handleSaveShelfEdit = async (shelfId: string) => {
+    setShelfFeedback(null);
+    setShelfSaving(true);
+    const res = await updateBookshelf(shelfId, {
+      name: editShelfName,
+      description: editShelfDescription.trim() || null,
+    });
+    setShelfSaving(false);
+    if (!res.ok) {
+      setShelfFeedback({ type: 'error', text: res.error || 'Could not update bookshelf.' });
+      return;
+    }
+    setEditingShelfId(null);
+    setShelfFeedback({ type: 'success', text: 'Bookshelf details updated.' });
+  };
+
+  const handleToggleShelfVisibility = async (shelf: StoryBookshelf) => {
+    setShelfFeedback(null);
+    const nextVis: BookshelfVisibility = shelf.visibility === 'public' ? 'private' : 'public';
+    const res = await updateBookshelf(shelf.id, { visibility: nextVis });
+    if (!res.ok) {
+      setShelfFeedback({ type: 'error', text: res.error || 'Could not change visibility.' });
+      return;
+    }
+    setShelfFeedback({
+      type: 'success',
+      text: `"${shelf.name}" is now ${nextVis === 'public' ? 'Public on Lorethos Lists' : 'Private (visible only to you)'}.`,
+    });
+  };
+
+  const handleDeleteShelf = async (shelfId: string) => {
+    setShelfFeedback(null);
+    const res = await deleteBookshelf(shelfId);
+    if (!res.ok) {
+      setShelfFeedback({ type: 'error', text: res.error || 'Could not delete bookshelf.' });
+      return;
+    }
+    if (selectedShelfId === shelfId) {
+      setSelectedShelfId(null);
+    }
+    setConfirmDeleteShelfId(null);
+    setEditingShelfId(null);
+    setShelfFeedback({ type: 'success', text: 'Bookshelf deleted.' });
+  };
+
+  const handleQuickCreateAndAddStory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeShelfStory) return;
+    setQuickShelfFeedback(null);
+    setShelfSaving(true);
+    const res = await createBookshelf({
+      name: quickShelfName,
+      visibility: quickShelfVisibility,
+      storyIds: [activeShelfStory.id],
+    });
+    setShelfSaving(false);
+    if (!res.ok || !res.bookshelf) {
+      setQuickShelfFeedback(res.error || 'Could not create bookshelf.');
+      return;
+    }
+    setQuickShelfName('');
+    setQuickShelfVisibility('private');
+    setQuickShelfFeedback(`Added "${activeShelfStory.title}" to "${res.bookshelf.name}".`);
+  };
 
   const handleCurateStories = async (customPrompt?: string) => {
     const query = (customPrompt ?? moodPrompt).trim();
@@ -118,6 +287,10 @@ export const LibraryView: React.FC = () => {
   const filteredStories = useMemo(() => {
     return stories
       .filter(story => {
+        if (activeShelf && !activeShelf.storyIds.includes(story.id)) {
+          return false;
+        }
+
         const matchesSearch =
           !searchQuery ||
           story.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -140,7 +313,7 @@ export const LibraryView: React.FC = () => {
         if (sortBy === 'chapters') return b.chapters.length - a.chapters.length;
         return (a.spotlightOrder ?? 99) - (b.spotlightOrder ?? 99);
       });
-  }, [stories, searchQuery, selectedGenre, selectedStatus, selectedTier, sortBy]);
+  }, [stories, activeShelf, searchQuery, selectedGenre, selectedStatus, selectedTier, sortBy]);
 
   const handleLink = (
     e: React.MouseEvent<HTMLAnchorElement>,
@@ -412,13 +585,424 @@ export const LibraryView: React.FC = () => {
           )}
         </div>
 
+        {/* Curated Story Bookshelves */}
+        <section
+          aria-label="Custom Story Bookshelves"
+          className="bg-white dark:bg-[#1E111E] sepia:bg-[#FAF4EB] rounded-xl border border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/15 p-5 sm:p-6 space-y-5"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 text-xs tracking-wider uppercase text-[#C85A32] font-semibold font-sans-ui">
+                <Library className="w-3.5 h-3.5" />
+                <span>Curated Bookshelves</span>
+              </div>
+              <h2 className="font-display text-2xl font-semibold tracking-tight">
+                Organize Saved Stories Into Lists
+              </h2>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 font-sans-ui">
+              <div
+                role="tablist"
+                aria-label="Bookshelf directories"
+                className="inline-flex rounded-lg border border-[#2D142C]/15 dark:border-white/15 p-0.5 bg-[#F9F6F0] dark:bg-[#160C16]"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={shelfDirectoryTab === 'mine'}
+                  onClick={() => setShelfDirectoryTab('mine')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                    shelfDirectoryTab === 'mine'
+                      ? 'bg-[#2D142C] text-white dark:bg-white dark:text-[#160C16]'
+                      : 'text-[#2D142C]/70 dark:text-white/70 hover:text-[#C85A32]'
+                  }`}
+                >
+                  My Shelves (<span className="tabular-nums">{myBookshelves.length}</span>)
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={shelfDirectoryTab === 'public'}
+                  onClick={() => setShelfDirectoryTab('public')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                    shelfDirectoryTab === 'public'
+                      ? 'bg-[#2D142C] text-white dark:bg-white dark:text-[#160C16]'
+                      : 'text-[#2D142C]/70 dark:text-white/70 hover:text-[#C85A32]'
+                  }`}
+                >
+                  Public Lists (<span className="tabular-nums">{publicBookshelves.length}</span>)
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShelfFeedback(null);
+                  setShowCreateShelfForm((prev) => !prev);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>{showCreateShelfForm ? 'Close Form' : 'New Bookshelf'}</span>
+              </button>
+            </div>
+          </div>
+
+          {shelfFeedback && (
+            <div
+              role={shelfFeedback.type === 'error' ? 'alert' : 'status'}
+              className={`px-3.5 py-2.5 rounded-lg border text-xs font-sans-ui flex items-center justify-between gap-3 ${
+                shelfFeedback.type === 'error'
+                  ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
+                  : 'border-emerald-600/30 bg-emerald-600/10 text-emerald-800 dark:text-emerald-300'
+              }`}
+            >
+              <span>{shelfFeedback.text}</span>
+              <button
+                type="button"
+                onClick={() => setShelfFeedback(null)}
+                aria-label="Dismiss shelf message"
+                className="opacity-70 hover:opacity-100 cursor-pointer shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {showCreateShelfForm && (
+            <form
+              onSubmit={handleCreateShelfSubmit}
+              className="p-4 sm:p-5 rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-[#F9F6F0] dark:bg-[#160C16] sepia:bg-[#F4ECE1] space-y-4 font-sans-ui"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div className="space-y-1">
+                  <label htmlFor="new-bookshelf-name" className="block text-xs font-semibold">
+                    Bookshelf Name
+                  </label>
+                  <input
+                    id="new-bookshelf-name"
+                    type="text"
+                    required
+                    minLength={2}
+                    maxLength={60}
+                    value={newShelfName}
+                    onChange={(e) => setNewShelfName(e.target.value)}
+                    placeholder="e.g., Midnight Mythic Reads"
+                    className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-white dark:bg-[#1E111E] focus:outline-none focus:border-[#C85A32]"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="new-bookshelf-desc" className="block text-xs font-semibold">
+                    Curator Note <span className="font-normal opacity-60">(optional)</span>
+                  </label>
+                  <input
+                    id="new-bookshelf-desc"
+                    type="text"
+                    maxLength={200}
+                    value={newShelfDescription}
+                    onChange={(e) => setNewShelfDescription(e.target.value)}
+                    placeholder="Short theme or reading order note..."
+                    className="w-full px-3 py-2 text-xs sm:text-sm rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-white dark:bg-[#1E111E] focus:outline-none focus:border-[#C85A32]"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-[#2D142C]/10 dark:border-white/10">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold mr-1">Visibility:</span>
+                  <button
+                    type="button"
+                    onClick={() => setNewShelfVisibility('private')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                      newShelfVisibility === 'private'
+                        ? 'border-[#2D142C] bg-[#2D142C] text-white dark:border-white dark:bg-white dark:text-[#160C16]'
+                        : 'border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32]/50'
+                    }`}
+                  >
+                    <Lock className="w-3 h-3" />
+                    <span>Private</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewShelfVisibility('public')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                      newShelfVisibility === 'public'
+                        ? 'border-[#C85A32] bg-[#C85A32] text-white'
+                        : 'border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32]/50'
+                    }`}
+                  >
+                    <Globe className="w-3 h-3" />
+                    <span>Public</span>
+                  </button>
+                  {!isAuthenticated && newShelfVisibility === 'public' && (
+                    <span className="text-[11px] text-[#C85A32]">
+                      Sign in on{' '}
+                      <a
+                        href={buildHref('account', { redirect: '/stories' })}
+                        onClick={(e) => handleLink(e, 'account', { redirect: '/stories' })}
+                        className="underline font-semibold"
+                      >
+                        Account
+                      </a>{' '}
+                      to publish publicly.
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 self-end sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateShelfForm(false)}
+                    className="px-3 py-1.5 rounded-lg border border-[#2D142C]/15 dark:border-white/15 text-xs font-medium hover:bg-[#2D142C]/5 dark:hover:bg-white/5 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={shelfSaving || newShelfName.trim().length < 2}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    {shelfSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                    <span>Create Bookshelf</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+          )}
+
+          {/* Bookshelf Index Strip */}
+          <div className="flex flex-wrap items-center gap-2 pt-1 font-sans-ui">
+            <button
+              type="button"
+              onClick={() => setSelectedShelfId(null)}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                selectedShelfId === null
+                  ? 'border-[#2D142C] bg-[#2D142C] text-white dark:border-white dark:bg-white dark:text-[#160C16] font-semibold'
+                  : 'border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32]/50'
+              }`}
+            >
+              <span>All Catalog Stories</span>
+              <span className="opacity-70">&middot;</span>
+              <span className="tabular-nums">{stories.length}</span>
+            </button>
+
+            {(shelfDirectoryTab === 'mine' ? myBookshelves : publicBookshelves).map((shelf) => {
+              const isSelected = selectedShelfId === shelf.id;
+              return (
+                <button
+                  key={shelf.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedShelfId(isSelected ? null : shelf.id);
+                    setEditingShelfId(null);
+                    setConfirmDeleteShelfId(null);
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs transition-colors cursor-pointer ${
+                    isSelected
+                      ? 'border-[#C85A32] bg-[#C85A32] text-white font-semibold'
+                      : 'border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32]/50'
+                  }`}
+                >
+                  {shelf.visibility === 'public' ? (
+                    <Globe className="w-3 h-3 shrink-0 opacity-85" />
+                  ) : (
+                    <Lock className="w-3 h-3 shrink-0 opacity-85" />
+                  )}
+                  <span className="truncate max-w-[170px]">{shelf.name}</span>
+                  {shelfDirectoryTab === 'public' && (
+                    <span className="opacity-75 text-[11px] hidden sm:inline">
+                      &middot; {shelf.ownerName}
+                    </span>
+                  )}
+                  <span className="opacity-70">&middot;</span>
+                  <span className="tabular-nums shrink-0">{shelf.storyIds.length}</span>
+                </button>
+              );
+            })}
+
+            {shelfDirectoryTab === 'mine' && myBookshelves.length === 0 && (
+              <span className="text-xs text-[#2D142C]/60 dark:text-white/60 px-2">
+                No personal shelves yet &mdash; create one to group stories into Private or Public lists.
+              </span>
+            )}
+            {shelfDirectoryTab === 'public' && publicBookshelves.length === 0 && (
+              <span className="text-xs text-[#2D142C]/60 dark:text-white/60 px-2">
+                No public reader lists yet &mdash; publish a shelf to share your reading list.
+              </span>
+            )}
+          </div>
+
+          {/* Active Bookshelf Header & Management */}
+          {activeShelf && (
+            <div className="pt-4 border-t border-[#2D142C]/10 dark:border-white/10 space-y-3 font-sans-ui">
+              {editingShelfId === activeShelf.id ? (
+                <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                  <div className="flex-1 space-y-1">
+                    <label htmlFor="edit-shelf-name" className="block text-[11px] font-semibold">
+                      Shelf Name
+                    </label>
+                    <input
+                      id="edit-shelf-name"
+                      type="text"
+                      minLength={2}
+                      maxLength={60}
+                      value={editShelfName}
+                      onChange={(e) => setEditShelfName(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
+                    />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <label htmlFor="edit-shelf-desc" className="block text-[11px] font-semibold">
+                      Note
+                    </label>
+                    <input
+                      id="edit-shelf-desc"
+                      type="text"
+                      maxLength={200}
+                      value={editShelfDescription}
+                      onChange={(e) => setEditShelfDescription(e.target.value)}
+                      placeholder="Optional shelf note..."
+                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      disabled={shelfSaving || editShelfName.trim().length < 2}
+                      onClick={() => handleSaveShelfEdit(activeShelf.id)}
+                      className="px-3 py-1.5 rounded-lg bg-[#C85A32] text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingShelfId(null)}
+                      className="px-3 py-1.5 rounded-lg border border-[#2D142C]/15 dark:border-white/15 text-xs cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-display text-lg font-bold text-[#2D142C] dark:text-white">
+                        {activeShelf.name}
+                      </span>
+                      <span className="opacity-50">&middot;</span>
+                      <span className="inline-flex items-center gap-1 text-[#C85A32] font-semibold">
+                        {activeShelf.visibility === 'public' ? (
+                          <Globe className="w-3 h-3" />
+                        ) : (
+                          <Lock className="w-3 h-3" />
+                        )}
+                        <span>{activeShelf.visibility === 'public' ? 'Public List' : 'Private Shelf'}</span>
+                      </span>
+                      <span className="opacity-50">&middot;</span>
+                      <span className="opacity-70">Curated by {activeShelf.ownerName}</span>
+                      <span className="opacity-50">&middot;</span>
+                      <span className="tabular-nums opacity-70">
+                        {activeShelf.storyIds.length}{' '}
+                        {activeShelf.storyIds.length === 1 ? 'story' : 'stories'}
+                      </span>
+                    </div>
+                    {activeShelf.description && (
+                      <p className="text-xs font-reader text-[#2D142C]/75 dark:text-white/75">
+                        {activeShelf.description}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {isOwnActiveShelf && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingShelfId(activeShelf.id);
+                            setEditShelfName(activeShelf.name);
+                            setEditShelfDescription(activeShelf.description || '');
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#2D142C]/15 dark:border-white/15 text-xs hover:border-[#C85A32] cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Rename</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleShelfVisibility(activeShelf)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#2D142C]/15 dark:border-white/15 text-xs hover:border-[#C85A32] cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          {activeShelf.visibility === 'public' ? (
+                            <>
+                              <Lock className="w-3 h-3" />
+                              <span>Make Private</span>
+                            </>
+                          ) : (
+                            <>
+                              <Globe className="w-3 h-3" />
+                              <span>Make Public</span>
+                            </>
+                          )}
+                        </button>
+                        {confirmDeleteShelfId === activeShelf.id ? (
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteShelf(activeShelf.id)}
+                              className="px-2.5 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              Confirm Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteShelfId(null)}
+                              className="px-2 py-1.5 text-xs opacity-75 hover:opacity-100 cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteShelfId(activeShelf.id)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-500/25 text-red-600 dark:text-red-400 text-xs hover:bg-red-500/10 cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Delete</span>
+                          </button>
+                        )}
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedShelfId(null)}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-[#C85A32] hover:underline cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      Show All Stories
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
         {/* Story Grid */}
         {filteredStories.length === 0 ? (
           <div className="text-center py-16 bg-white dark:bg-[#1E111E] rounded-xl border border-[#2D142C]/10 dark:border-white/10 p-8 space-y-3">
             <BookOpen className="w-10 h-10 mx-auto text-[#C85A32]/60" />
-            <h3 className="font-display text-xl font-semibold">No Stories Found</h3>
-            <p className="text-xs text-[#2D142C]/60 dark:text-white/60">
-              Try adjusting your search terms or filters.
+            <h3 className="font-display text-xl font-semibold">
+              {activeShelf && activeShelf.storyIds.length === 0
+                ? `"${activeShelf.name}" Is Empty`
+                : 'No Stories Found'}
+            </h3>
+            <p className="text-xs text-[#2D142C]/60 dark:text-white/60 max-w-md mx-auto">
+              {activeShelf && activeShelf.storyIds.length === 0
+                ? 'Browse the catalog and tap "Save" on any story card to organize it into this bookshelf.'
+                : 'Try adjusting your search terms, active shelf, or filters.'}
             </p>
             <button
               type="button"
@@ -427,15 +1011,20 @@ export const LibraryView: React.FC = () => {
                 setSelectedGenre('All');
                 setSelectedStatus('All');
                 setSelectedTier('All');
+                setSelectedShelfId(null);
               }}
               className="text-xs font-semibold text-[#C85A32] hover:underline cursor-pointer"
             >
-              Reset all filters
+              {activeShelf ? 'Browse All Catalog Stories' : 'Reset all filters'}
             </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-            {filteredStories.map((story) => (
+            {filteredStories.map((story) => {
+              const containingShelvesCount = myBookshelves.filter((s) =>
+                s.storyIds.includes(story.id)
+              ).length;
+              return (
               <article
                 key={story.id}
                 className="bg-white dark:bg-[#1E111E] rounded-xl border border-[#2D142C]/10 dark:border-white/10 overflow-hidden hover:border-[#C85A32]/40 transition-all duration-200 hover:shadow-lg flex flex-col justify-between group"
@@ -514,6 +1103,37 @@ export const LibraryView: React.FC = () => {
                     </span>
 
                     <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuickShelfFeedback(null);
+                          setActiveShelfStory(story);
+                        }}
+                        aria-label={`Save ${story.title} to bookshelf`}
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                          containingShelvesCount > 0
+                            ? 'bg-[#2D142C] text-white dark:bg-white dark:text-[#160C16]'
+                            : 'border border-[#2D142C]/15 dark:border-white/15 hover:border-[#C85A32] hover:text-[#C85A32]'
+                        }`}
+                      >
+                        <BookmarkPlus className="w-3 h-3" />
+                        <span>
+                          {containingShelvesCount > 0 ? `Shelves (${containingShelvesCount})` : 'Save'}
+                        </span>
+                      </button>
+
+                      {activeShelf && isOwnActiveShelf && (
+                        <button
+                          type="button"
+                          onClick={() => toggleStoryInBookshelf(activeShelf.id, story.id, 'remove')}
+                          title={`Remove ${story.title} from ${activeShelf.name}`}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/25 text-red-600 dark:text-red-400 hover:bg-red-500/10 text-[11px] font-medium cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          <X className="w-3 h-3" />
+                          <span>Remove</span>
+                        </button>
+                      )}
+
                       <StoryLikeButton
                         storyId={story.id}
                         storyTitle={story.title}
@@ -550,13 +1170,171 @@ export const LibraryView: React.FC = () => {
                   </div>
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         )}
 
       </div>
 
       <WriterStoriesFeed externalQuery={searchQuery} />
+
+      {/* Save Story to Bookshelf Picker Dialog */}
+      {activeShelfStory && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Organize ${activeShelfStory.title} into bookshelves`}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setActiveShelfStory(null);
+          }}
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-[#1E111E] sepia:bg-[#FAF4EB] border border-[#2D142C]/15 dark:border-white/15 shadow-2xl p-6 space-y-5 my-auto font-sans-ui">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <img
+                  src={activeShelfStory.coverImage}
+                  alt=""
+                  className="w-10 h-14 object-cover rounded border border-[#2D142C]/15 shrink-0"
+                />
+                <div className="min-w-0">
+                  <div className="text-[11px] uppercase tracking-wider text-[#C85A32] font-semibold">
+                    Organize in Bookshelves
+                  </div>
+                  <h3 className="font-display text-lg font-bold truncate">
+                    {activeShelfStory.title}
+                  </h3>
+                  <p className="text-xs opacity-65 truncate">By {activeShelfStory.author}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveShelfStory(null)}
+                aria-label="Close bookshelf picker"
+                className="p-1.5 rounded-lg hover:bg-[#2D142C]/10 dark:hover:bg-white/10 cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {quickShelfFeedback && (
+              <div className="px-3 py-2 rounded-lg bg-[#C85A32]/10 border border-[#C85A32]/25 text-xs text-[#C85A32] font-medium">
+                {quickShelfFeedback}
+              </div>
+            )}
+
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              {myBookshelves.length === 0 ? (
+                <p className="text-xs opacity-70 py-3 text-center border border-dashed border-[#2D142C]/15 dark:border-white/15 rounded-lg">
+                  You don&rsquo;t have any bookshelves yet. Create one below to save this story.
+                </p>
+              ) : (
+                myBookshelves.map((shelf) => {
+                  const inShelf = shelf.storyIds.includes(activeShelfStory.id);
+                  return (
+                    <button
+                      key={shelf.id}
+                      type="button"
+                      onClick={async () => {
+                        const res = await toggleStoryInBookshelf(shelf.id, activeShelfStory.id, 'toggle');
+                        if (!res.ok && res.error) {
+                          setQuickShelfFeedback(res.error);
+                        } else {
+                          setQuickShelfFeedback(
+                            res.inShelf
+                              ? `Added to "${shelf.name}".`
+                              : `Removed from "${shelf.name}".`
+                          );
+                        }
+                      }}
+                      className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg border text-left transition-colors cursor-pointer ${
+                        inShelf
+                          ? 'border-[#C85A32] bg-[#C85A32]/10'
+                          : 'border-[#2D142C]/12 dark:border-white/12 hover:border-[#C85A32]/50'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold truncate">
+                          {shelf.visibility === 'public' ? (
+                            <Globe className="w-3 h-3 text-[#C85A32] shrink-0" />
+                          ) : (
+                            <Lock className="w-3 h-3 opacity-65 shrink-0" />
+                          )}
+                          <span className="truncate">{shelf.name}</span>
+                        </div>
+                        <div className="text-[11px] opacity-60">
+                          {shelf.visibility === 'public' ? 'Public' : 'Private'} &middot;{' '}
+                          <span className="tabular-nums">{shelf.storyIds.length}</span>{' '}
+                          {shelf.storyIds.length === 1 ? 'story' : 'stories'}
+                        </div>
+                      </div>
+                      <span
+                        className={`w-5 h-5 rounded flex items-center justify-center shrink-0 border ${
+                          inShelf
+                            ? 'bg-[#C85A32] border-[#C85A32] text-white'
+                            : 'border-[#2D142C]/25 dark:border-white/25'
+                        }`}
+                      >
+                        {inShelf && <Check className="w-3.5 h-3.5" />}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            <form
+              onSubmit={handleQuickCreateAndAddStory}
+              className="pt-3 border-t border-[#2D142C]/10 dark:border-white/10 space-y-2.5"
+            >
+              <label htmlFor="quick-shelf-name" className="block text-xs font-semibold">
+                Or create a new bookshelf &amp; add story
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="quick-shelf-name"
+                  type="text"
+                  minLength={2}
+                  maxLength={60}
+                  required
+                  value={quickShelfName}
+                  onChange={(e) => setQuickShelfName(e.target.value)}
+                  placeholder="New shelf name..."
+                  className="flex-1 px-3 py-2 text-xs rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-transparent focus:outline-none focus:border-[#C85A32]"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    setQuickShelfVisibility((v) => (v === 'private' ? 'public' : 'private'))
+                  }
+                  title="Toggle Private or Public list"
+                  className="inline-flex items-center gap-1 px-2.5 py-2 rounded-lg border border-[#2D142C]/15 dark:border-white/15 text-xs font-medium hover:border-[#C85A32] cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  {quickShelfVisibility === 'public' ? (
+                    <>
+                      <Globe className="w-3 h-3 text-[#C85A32]" />
+                      <span>Public</span>
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-3 h-3" />
+                      <span>Private</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="submit"
+                  disabled={shelfSaving || quickShelfName.trim().length < 2}
+                  className="px-3.5 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] disabled:opacity-50 text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  Create
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {activeTrailerStory && (
         <div

@@ -23,7 +23,7 @@ import {
   type VideoMoodPreference,
   type VideoSceneMood,
 } from './server/wavespeed.js';
-import type { AccessTier, CommentTag, HighlightColor, PublicationStatus } from './src/types/index.js';
+import type { AccessTier, BookshelfVisibility, CommentTag, HighlightColor, PublicationStatus, WriterRole } from './src/types/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1177,6 +1177,184 @@ export async function createApp(options?: {
     res.json({ paragraphBookmarks });
   });
 
+  app.get('/api/bookshelves', async (req, res) => {
+    const user = await getAuthenticatedUserAsync(req);
+    const shelves = repo.getBookshelvesForViewer(user?.id);
+    res.json(shelves);
+  });
+
+  app.post('/api/account/bookshelves', requireAuth, (req: AuthedRequest, res) => {
+    const body = req.body as {
+      name?: unknown;
+      description?: unknown;
+      visibility?: unknown;
+      storyIds?: unknown;
+    };
+
+    if (typeof body.name !== 'string') {
+      res.status(400).json({ error: 'Bookshelf name is required.' });
+      return;
+    }
+    const cleanName = body.name.trim();
+    if (cleanName.length < 2 || cleanName.length > 60) {
+      res.status(400).json({ error: 'Bookshelf name must be between 2 and 60 characters.' });
+      return;
+    }
+
+    let cleanDesc: string | undefined;
+    if (body.description !== undefined && body.description !== null && body.description !== '') {
+      if (typeof body.description !== 'string') {
+        res.status(400).json({ error: 'Invalid bookshelf description.' });
+        return;
+      }
+      const trimmed = body.description.trim();
+      if (trimmed.length > 200) {
+        res.status(400).json({ error: 'Bookshelf description must be 200 characters or fewer.' });
+        return;
+      }
+      cleanDesc = trimmed || undefined;
+    }
+
+    const visibility: BookshelfVisibility =
+      body.visibility === 'public' ? 'public' : 'private';
+
+    const rawStoryIds = Array.isArray(body.storyIds)
+      ? body.storyIds
+          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+          .map((id) => id.trim())
+          .slice(0, 100)
+      : [];
+
+    const existing = repo.getBookshelvesForViewer(req.currentUser!.id);
+    if (existing.myBookshelves.length >= 40) {
+      res.status(400).json({ error: 'You have reached the maximum of 40 custom bookshelves.' });
+      return;
+    }
+
+    const bookshelf = repo.createBookshelf(req.currentUser!, {
+      name: cleanName,
+      description: cleanDesc,
+      visibility,
+      storyIds: rawStoryIds,
+    });
+
+    const refreshed = repo.getBookshelvesForViewer(req.currentUser!.id);
+    res.status(201).json({ bookshelf, ...refreshed });
+  });
+
+  app.patch('/api/account/bookshelves/:id', requireAuth, (req: AuthedRequest, res) => {
+    const shelfId = String(req.params.id || '').trim();
+    if (!shelfId) {
+      res.status(400).json({ error: 'Valid bookshelf id is required.' });
+      return;
+    }
+
+    const body = req.body as {
+      name?: unknown;
+      description?: unknown;
+      visibility?: unknown;
+    };
+
+    const patch: {
+      name?: string;
+      description?: string | null;
+      visibility?: BookshelfVisibility;
+    } = {};
+
+    if (body.name !== undefined) {
+      if (typeof body.name !== 'string') {
+        res.status(400).json({ error: 'Bookshelf name must be text.' });
+        return;
+      }
+      const cleanName = body.name.trim();
+      if (cleanName.length < 2 || cleanName.length > 60) {
+        res.status(400).json({ error: 'Bookshelf name must be between 2 and 60 characters.' });
+        return;
+      }
+      patch.name = cleanName;
+    }
+
+    if (body.description !== undefined) {
+      if (body.description === null || body.description === '') {
+        patch.description = null;
+      } else if (typeof body.description === 'string') {
+        const trimmed = body.description.trim();
+        if (trimmed.length > 200) {
+          res.status(400).json({ error: 'Bookshelf description must be 200 characters or fewer.' });
+          return;
+        }
+        patch.description = trimmed || null;
+      } else {
+        res.status(400).json({ error: 'Invalid bookshelf description.' });
+        return;
+      }
+    }
+
+    if (body.visibility !== undefined) {
+      if (body.visibility !== 'private' && body.visibility !== 'public') {
+        res.status(400).json({ error: 'Visibility must be private or public.' });
+        return;
+      }
+      patch.visibility = body.visibility;
+    }
+
+    if (patch.name === undefined && patch.description === undefined && patch.visibility === undefined) {
+      res.status(400).json({ error: 'Provide at least one bookshelf field to update.' });
+      return;
+    }
+
+    const result = repo.updateBookshelf(req.currentUser!.id, shelfId, patch);
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+
+    const refreshed = repo.getBookshelvesForViewer(req.currentUser!.id);
+    res.json({ bookshelf: result.bookshelf, ...refreshed });
+  });
+
+  app.post('/api/account/bookshelves/:id/stories', requireAuth, (req: AuthedRequest, res) => {
+    const shelfId = String(req.params.id || '').trim();
+    const { storyId, action } = req.body as {
+      storyId?: unknown;
+      action?: unknown;
+    };
+
+    if (!shelfId || typeof storyId !== 'string' || !storyId.trim()) {
+      res.status(400).json({ error: 'Valid bookshelf id and storyId are required.' });
+      return;
+    }
+
+    const safeAction =
+      action === 'add' || action === 'remove' || action === 'toggle' ? action : 'toggle';
+
+    const result = repo.toggleStoryInBookshelf(req.currentUser!, shelfId, storyId.trim(), safeAction);
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+
+    const refreshed = repo.getBookshelvesForViewer(req.currentUser!.id);
+    res.json({ bookshelf: result.bookshelf, inShelf: result.inShelf, ...refreshed });
+  });
+
+  app.delete('/api/account/bookshelves/:id', requireAuth, (req: AuthedRequest, res) => {
+    const shelfId = String(req.params.id || '').trim();
+    if (!shelfId) {
+      res.status(400).json({ error: 'Valid bookshelf id is required.' });
+      return;
+    }
+
+    const result = repo.deleteBookshelf(req.currentUser!.id, shelfId);
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+
+    const refreshed = repo.getBookshelvesForViewer(req.currentUser!.id);
+    res.json({ ok: true, ...refreshed });
+  });
+
   app.get('/api/comments', (req, res) => {
     const chapterId = typeof req.query.chapterId === 'string' ? req.query.chapterId : undefined;
     res.json({ comments: repo.getComments(chapterId) });
@@ -1429,6 +1607,33 @@ export async function createApp(options?: {
   // =========================================================================
   app.get('/api/admin/overview', requireAuth, requireOwner, (_req, res) => {
     res.json(repo.getAdminOverview());
+  });
+
+  app.get('/api/admin/users', requireAuth, requireOwner, (_req, res) => {
+    res.json({ users: repo.getAllUsersForOwner() });
+  });
+
+  app.patch('/api/admin/users/:id/role', requireAuth, requireOwner, (req: AuthedRequest, res) => {
+    const targetId = String(req.params.id || '').trim();
+    const rawRole = typeof req.body?.role === 'string' ? req.body.role.trim().toLowerCase() : '';
+    if (!targetId) {
+      res.status(400).json({ error: 'Valid user id is required.' });
+      return;
+    }
+    if (req.currentUser && req.currentUser.id === targetId) {
+      res.status(403).json({ error: 'Owner cannot modify their own role.' });
+      return;
+    }
+    if (rawRole !== 'reader' && rawRole !== 'writer' && rawRole !== 'admin') {
+      res.status(400).json({ error: 'Role must be reader, writer, or admin.' });
+      return;
+    }
+    const result = repo.updateUserRoleByOwner(targetId, rawRole as WriterRole);
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    res.json({ user: result.user, users: repo.getAllUsersForOwner() });
   });
 
   app.post('/api/admin/stories', requireAuth, requireOwner, (req, res) => {
@@ -2422,8 +2627,36 @@ export async function createApp(options?: {
     const distPath = path.join(PROJECT_ROOT, 'dist');
     try {
       await fs.access(distPath);
-      app.use(express.static(distPath));
-      app.get('*', (_req, res) => {
+      app.use(
+        '/assets',
+        express.static(path.join(distPath, 'assets'), {
+          maxAge: '1y',
+          immutable: true,
+          fallthrough: false,
+        })
+      );
+      app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+        if (req.path.startsWith('/assets/')) {
+          res.status(404).type('text/plain').send('Asset not found');
+          return;
+        }
+        next(err);
+      });
+      app.use(
+        express.static(distPath, {
+          setHeaders: (res, filePath) => {
+            if (filePath.endsWith('index.html')) {
+              res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            }
+          },
+        })
+      );
+      app.get('*', (req, res) => {
+        if (/\.[a-z0-9]{1,8}$/i.test(req.path)) {
+          res.status(404).type('text/plain').send('Not found');
+          return;
+        }
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.sendFile(path.join(distPath, 'index.html'));
       });
     } catch {

@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from './supabase';
 import { dataUrlToBlob, normalizePortableAvatarUrl } from '../utils/avatarImage';
-import type { SupabaseProfile, WriterRole, WriterStory } from '../types';
+import type { AdminUserDirectoryEntry, SupabaseProfile, WriterRole, WriterStory } from '../types';
 
 export interface SupabaseAuthProfileState {
   configured: boolean;
@@ -31,6 +31,25 @@ export interface SupabaseRoleLookupResult {
   role: WriterRole;
   userRow: Record<string, unknown> | null;
   source: 'users' | 'profiles' | 'none';
+}
+
+/**
+ * Merges Express session role with live Supabase role without letting stale local/cached `'reader'`
+ * values hide an upgraded `'writer'`, `'admin'`, or `'owner'` role.
+ */
+export function resolveMergedUserRole(
+  expressRoleRaw: string | WriterRole | null | undefined,
+  sbLookup?: SupabaseRoleLookupResult | null
+): WriterRole {
+  const expressRole = normalizeWriterRole(expressRoleRaw);
+  const sbRole = sbLookup ? normalizeWriterRole(sbLookup.role) : 'reader';
+  const sbSource = sbLookup?.source ?? 'none';
+
+  if (expressRole === 'owner' || sbRole === 'owner') return 'owner';
+  if (sbSource === 'users' && sbRole !== 'reader') return sbRole;
+  if (expressRole !== 'reader') return expressRole;
+  if (sbSource === 'profiles' && sbRole !== 'reader') return sbRole;
+  return 'reader';
 }
 
 async function querySupabaseTableRow(
@@ -441,6 +460,174 @@ export async function updateSupabaseUserProfile(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Unable to sync profile.' };
   }
+}
+
+export async function fetchAllSupabaseProfilesForOwner(): Promise<{
+  users: AdminUserDirectoryEntry[];
+  error?: string;
+}> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { users: [] };
+  }
+
+  try {
+    const [usersRes, profilesRes] = await Promise.all([
+      supabase.from('users').select('*'),
+      supabase.from('profiles').select('*'),
+    ]);
+
+    const merged = new Map<string, AdminUserDirectoryEntry>();
+    const emailToKey = new Map<string, string>();
+
+    const upsertRow = (row: Record<string, unknown>, source: 'users' | 'profiles') => {
+      const id = typeof row.id === 'string' && row.id.trim() ? row.id.trim() : '';
+      const rawEmail = typeof row.email === 'string' ? row.email.trim().toLowerCase() : '';
+      if (!id && !rawEmail) return;
+
+      const existingKey = (rawEmail && emailToKey.get(rawEmail)) || id || rawEmail;
+      const existing = merged.get(existingKey);
+
+      const rawName =
+        (typeof row.name === 'string' && row.name.trim()) ||
+        (typeof row.username === 'string' && row.username.trim()) ||
+        (typeof row.nickname === 'string' && row.nickname.trim()) ||
+        (rawEmail ? rawEmail.split('@')[0] : '') ||
+        'Lorethos Reader';
+
+      const rawNickname =
+        typeof row.nickname === 'string' && row.nickname.trim()
+          ? row.nickname.trim()
+          : typeof row.username === 'string' && row.username.trim() && row.username.trim() !== rawName
+          ? row.username.trim()
+          : undefined;
+
+      const rawAvatar =
+        normalizePortableAvatarUrl(
+          (typeof row.avatar_url === 'string' && row.avatar_url) ||
+            (typeof row.avatar === 'string' && row.avatar) ||
+            undefined
+        ) || existing?.avatar;
+
+      const rowRole = normalizeWriterRole(row.role);
+      const resolvedRole: WriterRole =
+        existing?.role === 'owner' || rowRole === 'owner'
+          ? 'owner'
+          : source === 'users' && row.role
+          ? rowRole
+          : existing?.role || rowRole;
+
+      const createdAt =
+        (typeof row.created_at === 'string' && row.created_at) ||
+        existing?.createdAt ||
+        new Date().toISOString();
+
+      const entry: AdminUserDirectoryEntry = {
+        id: existing?.id || id || rawEmail,
+        name: existing?.name && source === 'profiles' ? existing.name : rawName,
+        nickname: rawNickname || existing?.nickname,
+        email: rawEmail || existing?.email || '',
+        avatar: rawAvatar,
+        bio: (typeof row.bio === 'string' && row.bio.trim()) || existing?.bio,
+        role: resolvedRole,
+        subscription: existing?.subscription || {
+          status: 'none',
+          plan: 'free',
+          amountNgn: 0,
+        },
+        completedChaptersCount: existing?.completedChaptersCount ?? 0,
+        bookshelvesCount: existing?.bookshelvesCount ?? 0,
+        createdAt,
+        source: existing ? 'merged' : 'supabase',
+      };
+
+      merged.set(existingKey, entry);
+      if (rawEmail) emailToKey.set(rawEmail, existingKey);
+    };
+
+    if (!usersRes.error && Array.isArray(usersRes.data)) {
+      for (const row of usersRes.data) {
+        upsertRow(row as Record<string, unknown>, 'users');
+      }
+    }
+    if (!profilesRes.error && Array.isArray(profilesRes.data)) {
+      for (const row of profilesRes.data) {
+        upsertRow(row as Record<string, unknown>, 'profiles');
+      }
+    }
+
+    return { users: Array.from(merged.values()) };
+  } catch (err) {
+    return {
+      users: [],
+      error: err instanceof Error ? err.message : 'Unable to fetch Supabase profiles.',
+    };
+  }
+}
+
+export async function updateSupabaseUserRole(
+  userId: string,
+  email: string | undefined,
+  role: WriterRole
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { ok: false };
+  }
+
+  let updatedAny = false;
+  let lastError: string | undefined;
+  const cleanEmail = email?.trim().toLowerCase();
+
+  if (userId) {
+    try {
+      const res = await supabase.from('users').update({ role }).eq('id', userId).select('id');
+      if (!res.error && Array.isArray(res.data) && res.data.length > 0) {
+        updatedAny = true;
+      } else if (res.error) {
+        lastError = res.error.message;
+      }
+    } catch {
+      // Fall through to email update
+    }
+  }
+
+  if (cleanEmail) {
+    try {
+      const res = await supabase.from('users').update({ role }).ilike('email', cleanEmail).select('id');
+      if (!res.error && Array.isArray(res.data) && res.data.length > 0) {
+        updatedAny = true;
+      } else if (res.error && !lastError) {
+        lastError = res.error.message;
+      }
+    } catch {
+      // Ignore fallback error
+    }
+  }
+
+  if (userId) {
+    try {
+      const res = await supabase.from('profiles').update({ role }).eq('id', userId).select('id');
+      if (!res.error && Array.isArray(res.data) && res.data.length > 0) {
+        updatedAny = true;
+      } else if (res.error && !lastError) {
+        lastError = res.error.message;
+      }
+    } catch {
+      // Ignore profiles update error
+    }
+  }
+
+  if (cleanEmail) {
+    try {
+      const res = await supabase.from('profiles').update({ role }).ilike('email', cleanEmail).select('id');
+      if (!res.error && Array.isArray(res.data) && res.data.length > 0) {
+        updatedAny = true;
+      }
+    } catch {
+      // Ignore email update fallback
+    }
+  }
+
+  return updatedAny ? { ok: true } : { ok: false, error: lastError };
 }
 
 type RawStoryRow = Record<string, unknown>;

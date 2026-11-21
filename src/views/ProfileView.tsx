@@ -39,6 +39,7 @@ import {
   Search,
   Pencil,
   X,
+  Users,
 } from 'lucide-react';
 
 const ACHIEVEMENT_ICON_MAP: Record<AchievementIconKey, React.ComponentType<{ className?: string }>> = {
@@ -153,10 +154,14 @@ export const ProfileView: React.FC = () => {
     draftNickname.trim() !== (user.nickname || '').trim() ||
     draftBio.trim() !== (user.bio || '').trim();
 
-  const handleLink = (e: React.MouseEvent<HTMLAnchorElement>, route: string) => {
+  const handleLink = (
+    e: React.MouseEvent<HTMLAnchorElement>,
+    route: string,
+    params?: Parameters<typeof navigate>[1]
+  ) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
-    navigate(route);
+    navigate(route, params);
   };
 
   const handleSaveDetails = async (e: React.FormEvent) => {
@@ -351,12 +356,22 @@ export const ProfileView: React.FC = () => {
               <a
                 href={buildHref('writer')}
                 onClick={(e) => handleLink(e, 'writer')}
-                className="inline-flex items-center gap-2 px-5 py-3 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold shadow-sm transition-colors whitespace-nowrap"
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold shadow-sm transition-colors whitespace-nowrap shrink-0"
               >
                 <Feather className="w-4 h-4" />
                 <span>Open Writer Studio</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </a>
+              {user.role === 'owner' && (
+                <a
+                  href={buildHref('admin', { tab: 'users' })}
+                  onClick={(e) => handleLink(e, 'admin', { tab: 'users' })}
+                  className="inline-flex items-center gap-2 px-4 py-3 rounded-lg border border-white/25 hover:border-[#C85A32] text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Users className="w-3.5 h-3.5 text-[#C85A32]" />
+                  <span>Manage Community Profiles</span>
+                </a>
+              )}
             </div>
           </section>
         )}

@@ -34,11 +34,22 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  return fetch(input, {
-    ...init,
-    credentials: 'include',
-    headers,
-  });
+  try {
+    const response = await fetch(input, {
+      ...init,
+      credentials: 'include',
+      headers,
+    });
+    if (typeof window !== 'undefined' && typeof navigator !== 'undefined' && navigator.onLine !== false) {
+      window.dispatchEvent(new CustomEvent('lorethos:network-online'));
+    }
+    return response;
+  } catch (err) {
+    if (typeof window !== 'undefined' && (typeof navigator === 'undefined' || !navigator.onLine || err instanceof TypeError)) {
+      window.dispatchEvent(new CustomEvent('lorethos:network-offline'));
+    }
+    throw err;
+  }
 }
 
 export async function parseJsonSafe<T = Record<string, unknown>>(res: Response): Promise<T | null> {

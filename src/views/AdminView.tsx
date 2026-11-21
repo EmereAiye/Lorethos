@@ -14,11 +14,19 @@ import {
   Sparkles,
   Loader2,
   Download,
-  Lock
+  Lock,
+  Feather,
+  Search,
+  Copy,
+  Check,
+  Eye,
+  ShieldCheck,
+  X
 } from 'lucide-react';
-import { AccessTier, PublicationStatus } from '../types';
+import { AccessTier, AdminUserDirectoryEntry, PublicationStatus, WriterRole } from '../types';
 import { VoiceDictationButton } from '../components/VoiceDictationButton';
 import { VideoTrailerStudio } from '../components/VideoTrailerStudio';
+import { ReaderAvatar } from '../components/ReaderAvatar';
 import { apiFetch, parseJsonSafe } from '../lib/apiClient';
 
 export const AdminView: React.FC = () => {
@@ -28,20 +36,30 @@ export const AdminView: React.FC = () => {
     isAuthenticated,
     adminOverview,
     refreshAdminOverview,
+    adminUsers,
+    refreshAdminUsers,
+    updateUserRole,
     addStory,
     addChapterToStory,
     updateStoryPricing,
     updateStoryWorkflow,
     navigate,
-    buildHref
+    buildHref,
+    routeParams
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'studio' | 'pricing' | 'ledger' | 'inquiries'>('studio');
+  const [activeTab, setActiveTab] = useState<'studio' | 'users' | 'pricing' | 'ledger' | 'inquiries'>('studio');
   const [selectedStoryId, setSelectedStoryId] = useState<string>(stories[0]?.id || '');
   const [isCreatingStory, setIsCreatingStory] = useState(false);
   const [isAddingChapter, setIsAddingChapter] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [exportingZip, setExportingZip] = useState(false);
+  const [userSearch, setUserSearch] = useState('');
+  const [userRoleFilter, setUserRoleFilter] = useState<'all' | 'writers' | 'readers'>('all');
+  const [updatingRoleId, setUpdatingRoleId] = useState<string | null>(null);
+  const [inspectedProfile, setInspectedProfile] = useState<AdminUserDirectoryEntry | null>(null);
+  const [copiedWriterLink, setCopiedWriterLink] = useState(false);
+  const profileDialogRef = useRef<HTMLDivElement | null>(null);
 
   // New Story Form
   const [newStoryTitle, setNewStoryTitle] = useState('');
@@ -70,10 +88,31 @@ export const AdminView: React.FC = () => {
   const isOwner = isAuthenticated && user.role === 'owner';
 
   useEffect(() => {
+    const valid = new Set(['studio', 'users', 'pricing', 'ledger', 'inquiries']);
+    if (routeParams.tab && valid.has(routeParams.tab)) {
+      setActiveTab(routeParams.tab as 'studio' | 'users' | 'pricing' | 'ledger' | 'inquiries');
+    }
+  }, [routeParams.tab]);
+
+  useEffect(() => {
     if (isOwner) {
       void refreshAdminOverview();
+      void refreshAdminUsers();
     }
-  }, [isOwner, refreshAdminOverview]);
+  }, [isOwner, refreshAdminOverview, refreshAdminUsers]);
+
+  useEffect(() => {
+    if (!inspectedProfile) return;
+    const t = window.setTimeout(() => profileDialogRef.current?.focus(), 10);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setInspectedProfile(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [inspectedProfile]);
 
   useEffect(() => {
     if (!isCreatingStory) return;
@@ -127,6 +166,57 @@ export const AdminView: React.FC = () => {
     setStatusMessage(msg);
     setTimeout(() => setStatusMessage(null), 3500);
   };
+
+  const writerPortalUrl =
+    typeof window !== 'undefined' ? `${window.location.origin}/writer` : 'https://lorethos-two.vercel.app/writer';
+
+  const handleCopyWriterPortalLink = async () => {
+    try {
+      await navigator.clipboard.writeText(writerPortalUrl);
+      setCopiedWriterLink(true);
+      showToast('Writer Studio portal link copied.');
+      window.setTimeout(() => setCopiedWriterLink(false), 2500);
+    } catch {
+      showToast(`Writer portal URL: ${writerPortalUrl}`);
+    }
+  };
+
+  const handleRoleToggle = async (target: AdminUserDirectoryEntry, nextRole: WriterRole) => {
+    if (target.role === 'owner') return;
+    setUpdatingRoleId(target.id);
+    try {
+      const res = await updateUserRole(target.id, nextRole, target.email);
+      if (!res.ok) {
+        showToast(res.error || 'Could not update user role.');
+        return;
+      }
+      if (inspectedProfile?.id === target.id) {
+        setInspectedProfile({ ...inspectedProfile, role: nextRole });
+      }
+      showToast(
+        nextRole === 'writer'
+          ? `${target.nickname || target.name} upgraded to Approved Writer.`
+          : `${target.nickname || target.name} updated to Reader access.`
+      );
+    } finally {
+      setUpdatingRoleId(null);
+    }
+  };
+
+  const approvedWritersList = adminUsers.filter(
+    (u) => u.role === 'writer' || u.role === 'admin' || u.role === 'owner'
+  );
+  const filteredUsers = adminUsers.filter((entry) => {
+    if (userRoleFilter === 'writers' && entry.role === 'reader') return false;
+    if (userRoleFilter === 'readers' && entry.role !== 'reader') return false;
+    const q = userSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      entry.name.toLowerCase().includes(q) ||
+      (entry.nickname || '').toLowerCase().includes(q) ||
+      entry.email.toLowerCase().includes(q)
+    );
+  });
 
   const handleCreateStory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -298,11 +388,23 @@ export const AdminView: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <a
+              href={buildHref('writer')}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                navigate('writer');
+              }}
+              className="px-4 py-2.5 rounded-lg bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] hover:bg-[#C85A32] dark:hover:bg-[#C85A32] dark:hover:text-white text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+            >
+              <Feather className="w-3.5 h-3.5 text-[#C85A32]" />
+              <span>Open Writer Studio</span>
+            </a>
             <button
               type="button"
               onClick={handleDownloadZip}
               disabled={exportingZip}
-              className="px-3.5 py-2 text-xs rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] hover:text-[#C85A32] transition-colors cursor-pointer font-sans-ui flex items-center gap-1.5 disabled:opacity-60"
+              className="px-3.5 py-2 text-xs rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] hover:text-[#C85A32] transition-colors cursor-pointer font-sans-ui flex items-center gap-1.5 disabled:opacity-60 whitespace-nowrap shrink-0"
             >
               {exportingZip ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
               <span>{exportingZip ? 'Zipping...' : 'Export Code (.zip)'}</span>
@@ -310,7 +412,7 @@ export const AdminView: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsCreatingStory(true)}
-              className="px-4 py-2.5 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg flex items-center gap-2 transition-colors cursor-pointer shadow-xs"
+              className="px-4 py-2.5 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg flex items-center gap-2 transition-colors cursor-pointer shadow-xs whitespace-nowrap shrink-0"
             >
               <Plus className="w-4 h-4" />
               <span>Publish New Story</span>
@@ -386,6 +488,19 @@ export const AdminView: React.FC = () => {
           >
             <Edit3 className="w-3.5 h-3.5" />
             <span>Story &amp; Chapter Studio</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('users')}
+            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'users'
+                ? 'border-[#C85A32] text-[#C85A32]'
+                : 'border-transparent text-[#2D142C]/65 dark:text-white/65 hover:text-[#C85A32]'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>Profiles &amp; Writers ({adminUsers.length})</span>
           </button>
 
           <button
@@ -1064,6 +1179,409 @@ export const AdminView: React.FC = () => {
                 </table>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Tab 1b: Profiles & Approved Writers (Owner Only) */}
+        {activeTab === 'users' && (
+          <div className="space-y-8">
+            {/* Approved Writers Launchpad */}
+            <section className="p-6 sm:p-7 rounded-2xl bg-[#2D142C] text-[#F9F6F0] border border-[#C85A32]/35 space-y-5 shadow-sm">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="space-y-1.5 max-w-2xl">
+                  <div className="flex items-center gap-2 text-[11px] font-sans-ui font-semibold uppercase tracking-[0.18em] text-[#C85A32]">
+                    <Feather className="w-3.5 h-3.5" />
+                    <span>Writer Portal Launchpad</span>
+                    <span className="opacity-40">&middot;</span>
+                    <span>{approvedWritersList.length} Approved {approvedWritersList.length === 1 ? 'Writer' : 'Writers'}</span>
+                  </div>
+                  <h2 className="font-display text-2xl font-bold text-white">
+                    Writers &amp; Publishing Portal Roster
+                  </h2>
+                  <p className="font-reader text-xs sm:text-sm text-white/80 leading-relaxed">
+                    Anyone upgraded to a Writer receives direct access to Writer Studio on their Account Dashboard and Profile. Share the portal link below or open Writer Studio yourself as Owner.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0 font-sans-ui">
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyWriterPortalLink()}
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg border border-white/25 hover:border-[#C85A32] text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 transition-colors"
+                  >
+                    {copiedWriterLink ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-300" />
+                        <span>Invite Link Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-[#C85A32]" />
+                        <span>Copy Writer Link (/writer)</span>
+                      </>
+                    )}
+                  </button>
+                  <a
+                    href={buildHref('writer')}
+                    onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                      e.preventDefault();
+                      navigate('writer');
+                    }}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold whitespace-nowrap shrink-0 transition-colors"
+                  >
+                    <Feather className="w-3.5 h-3.5" />
+                    <span>Open Writer Studio</span>
+                  </a>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {approvedWritersList.map((writer) => (
+                  <div
+                    key={`roster-${writer.id}`}
+                    className="p-3.5 rounded-xl bg-white/[0.07] border border-white/15 flex items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-full overflow-hidden border border-[#C85A32] bg-[#160C16] text-white flex items-center justify-center shrink-0">
+                        <ReaderAvatar
+                          src={writer.avatar}
+                          name={writer.nickname || writer.name}
+                          initialClassName="font-display text-sm font-bold leading-none"
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-display text-sm font-bold text-white truncate">
+                          {writer.nickname || writer.name}
+                        </div>
+                        <div className="text-[11px] font-sans-ui text-white/70 truncate">
+                          {writer.email}
+                        </div>
+                        <div className="text-[10px] font-sans-ui uppercase tracking-wider text-[#C85A32] font-semibold mt-0.5">
+                          {writer.role === 'owner' ? 'Owner · Writer & Reader' : writer.role}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setInspectedProfile(writer)}
+                      className="px-2.5 py-1.5 rounded-lg border border-white/20 hover:border-[#C85A32] text-white text-[11px] font-semibold font-sans-ui cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      Profile
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {/* All Community Profiles Directory */}
+            <section className="bg-white dark:bg-[#1E111E] p-6 rounded-2xl border border-[#2D142C]/10 dark:border-white/10 space-y-5">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h2 className="font-display text-2xl font-bold">
+                    All Registered Community Profiles
+                  </h2>
+                  <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui mt-0.5">
+                    Inspect any reader or writer profile and upgrade trusted contributors to Writer access.
+                  </p>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 font-sans-ui text-xs">
+                  <div className="relative min-w-[220px]">
+                    <label htmlFor="admin-user-search" className="sr-only">
+                      Search user profiles by name, nickname, or email
+                    </label>
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 opacity-50 pointer-events-none" />
+                    <input
+                      id="admin-user-search"
+                      type="search"
+                      value={userSearch}
+                      onChange={(e) => setUserSearch(e.target.value)}
+                      placeholder="Search name, nickname, or email..."
+                      className="w-full pl-8 pr-3 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
+                    />
+                  </div>
+
+                  <div className="flex items-center rounded-lg border border-[#2D142C]/15 dark:border-white/15 p-0.5 bg-[#F9F6F0] dark:bg-[#160C16]">
+                    {(
+                      [
+                        { key: 'all', label: `All (${adminUsers.length})` },
+                        { key: 'writers', label: `Writers (${approvedWritersList.length})` },
+                        {
+                          key: 'readers',
+                          label: `Readers (${adminUsers.filter((u) => u.role === 'reader').length})`,
+                        },
+                      ] as const
+                    ).map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setUserRoleFilter(item.key)}
+                        className={`px-3 py-1.5 rounded-md font-semibold cursor-pointer whitespace-nowrap shrink-0 transition-colors ${
+                          userRoleFilter === item.key
+                            ? 'bg-[#C85A32] text-white'
+                            : 'text-[#2D142C]/70 dark:text-white/70 hover:text-[#C85A32]'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {filteredUsers.length === 0 ? (
+                <div className="p-8 text-center text-xs text-[#2D142C]/60 dark:text-white/60 border border-dashed border-current/15 rounded-xl font-sans-ui">
+                  No profiles match your search filter.
+                </div>
+              ) : (
+                <div className="divide-y divide-[#2D142C]/10 dark:divide-white/10 border border-[#2D142C]/10 dark:border-white/10 rounded-xl overflow-hidden">
+                  {filteredUsers.map((entry) => {
+                    const isEntryOwner = entry.role === 'owner';
+                    const isWriter = entry.role === 'writer' || entry.role === 'admin';
+                    const entryDisplay = entry.nickname || entry.name;
+                    const busy = updatingRoleId === entry.id;
+                    return (
+                      <div
+                        key={entry.id}
+                        className="p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:bg-[#F9F6F0]/60 dark:hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-start gap-3.5 min-w-0">
+                          <div className="w-12 h-12 rounded-full overflow-hidden border border-[#C85A32]/60 bg-[#2D142C] text-[#F9F6F0] flex items-center justify-center shrink-0">
+                            <ReaderAvatar
+                              src={entry.avatar}
+                              name={entryDisplay}
+                              initialClassName="font-display text-lg font-bold leading-none"
+                            />
+                          </div>
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-display text-base font-bold truncate">
+                                {entryDisplay}
+                              </span>
+                              {entry.nickname && entry.nickname !== entry.name && (
+                                <span className="text-xs opacity-65 font-sans-ui truncate">
+                                  ({entry.name})
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs font-sans-ui text-[#2D142C]/70 dark:text-white/70 truncate">
+                              {entry.email || 'No email recorded'}
+                            </div>
+                            <div className="text-[11px] font-sans-ui text-[#2D142C]/70 dark:text-white/70 flex flex-wrap items-center gap-1.5">
+                              <span className="font-semibold text-[#C85A32] uppercase tracking-wider">
+                                {isEntryOwner
+                                  ? 'Owner · Writer & Reader'
+                                  : isWriter
+                                  ? `Approved ${entry.role}`
+                                  : 'Reader'}
+                              </span>
+                              <span>&middot;</span>
+                              <span>
+                                {entry.subscription.status === 'active'
+                                  ? `Patron (${entry.subscription.plan})`
+                                  : 'Free Account'}
+                              </span>
+                              <span>&middot;</span>
+                              <span className="tabular-nums">
+                                {entry.completedChaptersCount} ch completed
+                              </span>
+                              <span>&middot;</span>
+                              <span>
+                                Joined{' '}
+                                {new Date(entry.createdAt).toLocaleDateString('en-US', {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric',
+                                })}
+                              </span>
+                            </div>
+                            {entry.bio && (
+                              <p className="font-reader text-xs opacity-80 line-clamp-2 pt-0.5 max-w-2xl">
+                                {entry.bio}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0 font-sans-ui text-xs">
+                          <button
+                            type="button"
+                            onClick={() => setInspectedProfile(entry)}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] hover:text-[#C85A32] font-semibold cursor-pointer whitespace-nowrap shrink-0 transition-colors"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-[#C85A32]" />
+                            <span>View Profile</span>
+                          </button>
+
+                          {!isEntryOwner && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                void handleRoleToggle(entry, isWriter ? 'reader' : 'writer')
+                              }
+                              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-semibold cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60 transition-colors ${
+                                isWriter
+                                  ? 'border border-[#2D142C]/20 dark:border-white/20 hover:border-red-500 hover:text-red-600 dark:hover:text-red-400'
+                                  : 'bg-[#C85A32] hover:bg-[#b04d28] text-white'
+                              }`}
+                            >
+                              {busy ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Feather className="w-3.5 h-3.5" />
+                              )}
+                              <span>
+                                {busy
+                                  ? 'Saving...'
+                                  : isWriter
+                                  ? 'Set as Reader'
+                                  : 'Upgrade to Writer'}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* Profile Inspection Modal */}
+        {inspectedProfile && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+            onClick={() => setInspectedProfile(null)}
+          >
+            <div
+              ref={profileDialogRef}
+              tabIndex={-1}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="inspected-profile-title"
+              className="bg-white dark:bg-[#1E111E] rounded-2xl max-w-lg w-full p-6 space-y-5 border border-[#2D142C]/15 dark:border-white/15 shadow-2xl focus:outline-none"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-current/10 pb-4">
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-[#C85A32] bg-[#2D142C] text-[#F9F6F0] flex items-center justify-center shrink-0">
+                    <ReaderAvatar
+                      src={inspectedProfile.avatar}
+                      name={inspectedProfile.nickname || inspectedProfile.name}
+                      initialClassName="font-display text-2xl font-bold leading-none"
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 id="inspected-profile-title" className="font-display text-xl font-bold truncate">
+                      {inspectedProfile.nickname || inspectedProfile.name}
+                    </h3>
+                    {inspectedProfile.nickname && inspectedProfile.nickname !== inspectedProfile.name && (
+                      <p className="text-xs font-sans-ui opacity-70 truncate">
+                        Full Name: {inspectedProfile.name}
+                      </p>
+                    )}
+                    <p className="text-xs font-sans-ui text-[#C85A32] font-medium truncate">
+                      {inspectedProfile.email}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInspectedProfile(null)}
+                  aria-label="Close profile dialog"
+                  className="p-1.5 rounded-lg hover:bg-current/10 cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs font-sans-ui">
+                <div className="p-3 rounded-xl bg-[#F9F6F0] dark:bg-[#160C16] border border-current/10">
+                  <div className="opacity-65 text-[11px]">Account Role</div>
+                  <div className="font-bold uppercase tracking-wider text-[#C85A32] mt-0.5">
+                    {inspectedProfile.role === 'owner'
+                      ? 'Owner (Writer & Reader)'
+                      : inspectedProfile.role}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-[#F9F6F0] dark:bg-[#160C16] border border-current/10">
+                  <div className="opacity-65 text-[11px]">Membership Tier</div>
+                  <div className="font-bold mt-0.5 capitalize">
+                    {inspectedProfile.subscription.status === 'active'
+                      ? `${inspectedProfile.subscription.plan} Patron`
+                      : 'Free Account'}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-[#F9F6F0] dark:bg-[#160C16] border border-current/10">
+                  <div className="opacity-65 text-[11px]">Chapters Completed</div>
+                  <div className="font-bold font-mono tabular-nums mt-0.5">
+                    {inspectedProfile.completedChaptersCount}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-[#F9F6F0] dark:bg-[#160C16] border border-current/10">
+                  <div className="opacity-65 text-[11px]">Custom Bookshelves</div>
+                  <div className="font-bold font-mono tabular-nums mt-0.5">
+                    {inspectedProfile.bookshelvesCount}
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className="text-[11px] font-sans-ui uppercase tracking-wider font-semibold opacity-65">
+                  Reader Bio
+                </div>
+                <p className="font-reader text-sm opacity-85 leading-relaxed">
+                  {inspectedProfile.bio || 'No bio added yet.'}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-current/10 font-sans-ui text-xs">
+                <span className="opacity-65">
+                  Member since{' '}
+                  {new Date(inspectedProfile.createdAt).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })}
+                </span>
+                <div className="flex items-center gap-2">
+                  {inspectedProfile.role !== 'owner' && (
+                    <button
+                      type="button"
+                      disabled={updatingRoleId === inspectedProfile.id}
+                      onClick={() =>
+                        void handleRoleToggle(
+                          inspectedProfile,
+                          inspectedProfile.role === 'writer' || inspectedProfile.role === 'admin'
+                            ? 'reader'
+                            : 'writer'
+                        )
+                      }
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>
+                        {inspectedProfile.role === 'writer' || inspectedProfile.role === 'admin'
+                          ? 'Set as Reader'
+                          : 'Upgrade to Writer'}
+                      </span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setInspectedProfile(null)}
+                    className="px-4 py-2 rounded-lg border border-current/20 font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
+import { canAccessWriterStudio } from '../lib/writerStories';
 import { getDisplayName, computeReaderRank } from '../utils/readerProfile';
 import { ReaderAvatar } from './ReaderAvatar';
-import { BookOpen, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck, Search, ArrowRight, Film, Award, Flame } from 'lucide-react';
+import { BookOpen, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck, Search, ArrowRight, Film, Award, Flame, Feather } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const {
@@ -75,6 +76,7 @@ export const Navbar: React.FC = () => {
 
   const isPatron = isAuthenticated && user.subscription.status === 'active';
   const isOwner = isAuthenticated && user.role === 'owner';
+  const hasWriterAccess = isAuthenticated && canAccessWriterStudio(user.role);
   const displayName = getDisplayName(user);
   const trimmedSearch = searchQuery.trim();
   const showDropdown = searchFocused && trimmedSearch.length > 0;
@@ -197,6 +199,22 @@ export const Navbar: React.FC = () => {
           >
             Profile
           </a>
+
+          {hasWriterAccess && (
+            <a
+              href={buildHref('writer')}
+              onClick={(e) => handleNavClick(e, 'writer')}
+              aria-current={currentRoute === 'writer' ? 'page' : undefined}
+              className={`transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                currentRoute === 'writer'
+                  ? 'text-[#C85A32] font-semibold'
+                  : 'text-[#2D142C]/80 dark:text-[#F9F6F0]/80 sepia:text-[#2C1E18]/80 hover:text-[#C85A32]'
+              }`}
+            >
+              <Feather className="w-3.5 h-3.5 text-[#C85A32]" />
+              <span>Writer Studio</span>
+            </a>
+          )}
 
           {isOwner && (
             <a
@@ -635,6 +653,18 @@ export const Navbar: React.FC = () => {
                 {dailyStreak.currentDays}d &middot; Best {dailyStreak.bestDays}d
               </span>
             </a>
+            {hasWriterAccess && (
+              <a
+                href={buildHref('writer')}
+                onClick={(e) => handleNavClick(e, 'writer')}
+                className={`px-3 py-2.5 rounded-lg font-medium flex items-center gap-2 ${
+                  currentRoute === 'writer' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
+                }`}
+              >
+                <Feather className="w-4 h-4 text-[#C85A32]" />
+                <span>Writer Studio</span>
+              </a>
+            )}
             {isOwner && (
               <a
                 href={buildHref('admin')}

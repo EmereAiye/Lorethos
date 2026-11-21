@@ -1989,7 +1989,282 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       false
     );
   });
+
+  test('custom bookshelves support private/public creation, story organization, strict ownership checks, and privacy isolation', async () => {
+    // 1. Unauthenticated creation rejected
+    const unauthCreate = await fetch(`${baseUrl}/api/account/bookshelves`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Unauthorized Shelf', visibility: 'private' }),
+    });
+    assert.equal(unauthCreate.status, 401);
+
+    // 2. Validation rejects short names
+    const shortNameRes = await fetch(`${baseUrl}/api/account/bookshelves`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: readerCookie },
+      body: JSON.stringify({ name: 'A', visibility: 'private' }),
+    });
+    assert.equal(shortNameRes.status, 400);
+
+    const obsidian = repoRef.getStoryBySlug('the-obsidian-throne')!;
+    const secondStory = repoRef
+      .getStories()
+      .find((s) => s.id !== obsidian.id && (s.publicationStatus || 'published') === 'published')!;
+    assert.ok(secondStory, 'Expected a second distinct published story');
+
+    // 3. Reader creates a private shelf with one story
+    const createPrivateRes = await fetch(`${baseUrl}/api/account/bookshelves`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: readerCookie },
+      body: JSON.stringify({
+        name: 'Midnight Fantasy Vault',
+        description: 'Atmospheric reads for quiet nights.',
+        visibility: 'private',
+        storyIds: [obsidian.id],
+      }),
+    });
+    assert.equal(createPrivateRes.status, 201);
+    const privateData = await createPrivateRes.json();
+    const privateShelfId = privateData.bookshelf.id;
+    assert.equal(privateData.bookshelf.visibility, 'private');
+    assert.deepEqual(privateData.bookshelf.storyIds, [obsidian.id]);
+
+    // 4. Other users and unauthenticated viewers CANNOT see reader's private shelf
+    const anonList = await (await fetch(`${baseUrl}/api/bookshelves`)).json();
+    assert.equal(anonList.myBookshelves.length, 0);
+    assert.equal(
+      anonList.publicBookshelves.some((s: { id: string }) => s.id === privateShelfId),
+      false
+    );
+
+    const otherList = await (
+      await fetch(`${baseUrl}/api/bookshelves`, { headers: { Cookie: ownerCookie } })
+    ).json();
+    assert.equal(
+      otherList.myBookshelves.some((s: { id: string }) => s.id === privateShelfId),
+      false
+    );
+    assert.equal(
+      otherList.publicBookshelves.some((s: { id: string }) => s.id === privateShelfId),
+      false
+    );
+
+    // 5. Another user CANNOT mutate, toggle stories, or delete reader's shelf
+    const forbiddenRename = await fetch(`${baseUrl}/api/account/bookshelves/${encodeURIComponent(privateShelfId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+      body: JSON.stringify({ name: 'Hijacked Shelf' }),
+    });
+    assert.equal(forbiddenRename.status, 403);
+
+    const forbiddenAdd = await fetch(
+      `${baseUrl}/api/account/bookshelves/${encodeURIComponent(privateShelfId)}/stories`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({ storyId: secondStory.id, action: 'add' }),
+      }
+    );
+    assert.equal(forbiddenAdd.status, 403);
+
+    const forbiddenDelete = await fetch(`${baseUrl}/api/account/bookshelves/${encodeURIComponent(privateShelfId)}`, {
+      method: 'DELETE',
+      headers: { Cookie: ownerCookie },
+    });
+    assert.equal(forbiddenDelete.status, 403);
+
+    // 6. Owner of the shelf adds a second story, renames, and switches visibility to public
+    const addStoryRes = await fetch(
+      `${baseUrl}/api/account/bookshelves/${encodeURIComponent(privateShelfId)}/stories`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: readerCookie },
+        body: JSON.stringify({ storyId: secondStory.id, action: 'add' }),
+      }
+    );
+    assert.equal(addStoryRes.status, 200);
+    const afterAdd = await addStoryRes.json();
+    assert.equal(afterAdd.inShelf, true);
+    assert.equal(afterAdd.bookshelf.storyIds.length, 2);
+
+    const makePublicRes = await fetch(`${baseUrl}/api/account/bookshelves/${encodeURIComponent(privateShelfId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: readerCookie },
+      body: JSON.stringify({ name: 'Public Mythic Picks', visibility: 'public' }),
+    });
+    assert.equal(makePublicRes.status, 200);
+    const updatedShelf = await makePublicRes.json();
+    assert.equal(updatedShelf.bookshelf.name, 'Public Mythic Picks');
+    assert.equal(updatedShelf.bookshelf.visibility, 'public');
+
+    // Now visible in publicBookshelves for everyone
+    const publicCheck = await (await fetch(`${baseUrl}/api/bookshelves`)).json();
+    assert.equal(
+      publicCheck.publicBookshelves.some((s: { id: string; name: string }) => s.id === privateShelfId && s.name === 'Public Mythic Picks'),
+      true
+    );
+
+    // 7. Remove one story, then delete the shelf cleanly
+    const removeStoryRes = await fetch(
+      `${baseUrl}/api/account/bookshelves/${encodeURIComponent(privateShelfId)}/stories`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: readerCookie },
+        body: JSON.stringify({ storyId: obsidian.id, action: 'remove' }),
+      }
+    );
+    assert.equal(removeStoryRes.status, 200);
+    const afterRemove = await removeStoryRes.json();
+    assert.deepEqual(afterRemove.bookshelf.storyIds, [secondStory.id]);
+
+    const deleteShelfRes = await fetch(`${baseUrl}/api/account/bookshelves/${encodeURIComponent(privateShelfId)}`, {
+      method: 'DELETE',
+      headers: { Cookie: readerCookie },
+    });
+    assert.equal(deleteShelfRes.status, 200);
+    const afterDeleteShelf = await deleteShelfRes.json();
+    assert.equal(
+      afterDeleteShelf.publicBookshelves.some((s: { id: string }) => s.id === privateShelfId),
+      false
+    );
+  });
+
+  test('isChunkLoadError identifies Safari, Chrome, and Vite module-script load errors cleanly', async () => {
+    const { isChunkLoadError } = await import('../src/utils/lazyWithRetry');
+
+    assert.equal(isChunkLoadError(new TypeError('Importing a module script failed.')), true);
+    assert.equal(
+      isChunkLoadError(new TypeError('Failed to fetch dynamically imported module: https://lorethos-two.vercel.app/assets/LibraryView-123.js')),
+      true
+    );
+    assert.equal(isChunkLoadError(new Error('Loading chunk 42 failed.')), true);
+    assert.equal(isChunkLoadError(new Error('Unable to preload CSS for /assets/style.css')), true);
+    assert.equal(isChunkLoadError(new Error('Invalid email or password')), false);
+  });
+
+  test('owner profiles directory and writer role upgrades enforce strict owner-only access and sync role helpers', async () => {
+    const { canAccessWriterStudio, resolveMergedUserRole } = await import('../src/lib/writerStories');
+
+    // 1. Role access guards strictly limit Writer Studio to writer/admin/owner
+    assert.equal(canAccessWriterStudio('reader'), false);
+    assert.equal(canAccessWriterStudio(''), false);
+    assert.equal(canAccessWriterStudio(null), false);
+    assert.equal(canAccessWriterStudio('writer'), true);
+    assert.equal(canAccessWriterStudio('WRITER'), true);
+    assert.equal(canAccessWriterStudio('admin'), true);
+    assert.equal(canAccessWriterStudio('owner'), true);
+
+    assert.equal(
+      resolveMergedUserRole('reader', { role: 'writer', userRow: null, source: 'users' }),
+      'writer'
+    );
+    assert.equal(
+      resolveMergedUserRole('owner', { role: 'reader', userRow: null, source: 'users' }),
+      'owner'
+    );
+
+    // 2. Unauthenticated & reader calls to /api/admin/users must be rejected
+    const unauthUsers = await fetch(`${baseUrl}/api/admin/users`);
+    assert.equal(unauthUsers.status, 401);
+
+    const readerUsers = await fetch(`${baseUrl}/api/admin/users`, {
+      headers: { Cookie: readerCookie },
+    });
+    assert.equal(readerUsers.status, 403);
+
+    // 3. Reader cannot call role update endpoint
+    const readerUpgradeAttempt = await fetch(
+      `${baseUrl}/api/admin/users/${encodeURIComponent(readerUserId)}/role`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: readerCookie },
+        body: JSON.stringify({ role: 'writer' }),
+      }
+    );
+    assert.equal(readerUpgradeAttempt.status, 403);
+
+    // 4. Owner fetches all profiles with passwordHash strictly omitted
+    const ownerUsersRes = await fetch(`${baseUrl}/api/admin/users`, {
+      headers: { Cookie: ownerCookie },
+    });
+    assert.equal(ownerUsersRes.status, 200);
+    const ownerUsersData = await ownerUsersRes.json();
+    assert.ok(Array.isArray(ownerUsersData.users) && ownerUsersData.users.length >= 2);
+    const readerEntry = ownerUsersData.users.find((u: { id: string }) => u.id === readerUserId);
+    const ownerEntry = ownerUsersData.users.find((u: { role: string }) => u.role === 'owner');
+    assert.ok(readerEntry, 'Owner must see registered reader profile');
+    assert.ok(ownerEntry, 'Owner must see own profile');
+    assert.equal('passwordHash' in readerEntry, false, 'passwordHash must never be exposed');
+    assert.equal('passwordHash' in ownerEntry, false, 'passwordHash must never be exposed');
+
+    // 5. Invalid role rejected cleanly, and Owner cannot demote self
+    const badRoleRes = await fetch(
+      `${baseUrl}/api/admin/users/${encodeURIComponent(readerUserId)}/role`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({ role: 'superadmin' }),
+      }
+    );
+    assert.equal(badRoleRes.status, 400);
+
+    const selfDemoteRes = await fetch(
+      `${baseUrl}/api/admin/users/${encodeURIComponent(ownerEntry.id)}/role`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({ role: 'reader' }),
+      }
+    );
+    assert.equal(selfDemoteRes.status, 403);
+
+    // 6. Owner upgrades reader -> writer and session immediately reflects writer role
+    const upgradeRes = await fetch(
+      `${baseUrl}/api/admin/users/${encodeURIComponent(readerUserId)}/role`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({ role: 'writer' }),
+      }
+    );
+    assert.equal(upgradeRes.status, 200);
+    const upgradeData = await upgradeRes.json();
+    assert.equal(upgradeData.user.role, 'writer');
+
+    const writerSessionRes = await fetch(`${baseUrl}/api/auth/session`, {
+      headers: { Cookie: readerCookie },
+    });
+    assert.equal(writerSessionRes.status, 200);
+    const writerSession = await writerSessionRes.json();
+    assert.equal(writerSession.user.role, 'writer');
+
+    // 7. Upgraded writer STILL cannot access owner-only admin routes (/api/admin/users & /api/admin/overview)
+    const writerAdminUsers = await fetch(`${baseUrl}/api/admin/users`, {
+      headers: { Cookie: readerCookie },
+    });
+    assert.equal(writerAdminUsers.status, 403);
+
+    const writerAdminOverview = await fetch(`${baseUrl}/api/admin/overview`, {
+      headers: { Cookie: readerCookie },
+    });
+    assert.equal(writerAdminOverview.status, 403);
+
+    // 8. Owner demotes writer back -> reader cleanly
+    const demoteRes = await fetch(
+      `${baseUrl}/api/admin/users/${encodeURIComponent(readerUserId)}/role`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({ role: 'reader' }),
+      }
+    );
+    assert.equal(demoteRes.status, 200);
+    const demoteData = await demoteRes.json();
+    assert.equal(demoteData.user.role, 'reader');
+  });
 });
+
 
 
 

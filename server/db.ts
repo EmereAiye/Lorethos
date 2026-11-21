@@ -13,7 +13,11 @@ import type {
   ParagraphBookmark,
   ChapterComment,
   CommunityInquiry,
-  ReadingGoal
+  ReadingGoal,
+  StoryBookshelf,
+  BookshelfVisibility,
+  WriterRole,
+  AdminUserDirectoryEntry
 } from '../src/types/index.js';
 import { AUTHORITATIVE_STORIES, withOfficialTrailerMetadata } from './catalog.js';
 
@@ -25,7 +29,7 @@ export interface StoredUserRecord {
   avatar?: string;
   bio?: string;
   passwordHash: string;
-  role: 'reader' | 'owner';
+  role: WriterRole;
   subscription: UserProfile['subscription'];
   unlockedStoryIds: string[];
   bookmarkedChapterIds: string[];
@@ -61,6 +65,7 @@ interface PersistedSnapshot {
   comments: ChapterComment[];
   inquiries: CommunityInquiry[];
   storyLikes?: Record<string, string[]>;
+  bookshelves?: StoryBookshelf[];
 }
 
 export const PLAN_PRICES_NGN: Record<'monthly' | 'annual', { amountNgn: number; label: string }> = {
@@ -70,6 +75,15 @@ export const PLAN_PRICES_NGN: Record<'monthly' | 'annual', { amountNgn: number; 
 
 function getOwnerEmail(): string {
   return (process.env.OWNER_EMAIL || 'Emmymasterwise@gmail.com').trim().toLowerCase();
+}
+
+function normalizeServerRole(rawRole: unknown, email: string): WriterRole {
+  if (email.trim().toLowerCase() === getOwnerEmail()) return 'owner';
+  const val = typeof rawRole === 'string' ? rawRole.trim().toLowerCase() : '';
+  if (val === 'owner') return 'owner';
+  if (val === 'writer') return 'writer';
+  if (val === 'admin') return 'admin';
+  return 'reader';
 }
 
 function getStateFilePath(): string {
@@ -176,7 +190,8 @@ class LorethosRepository {
             paragraphBookmarks: parsed.paragraphBookmarks || {},
             comments: parsed.comments || [],
             inquiries: parsed.inquiries || [],
-            storyLikes: parsed.storyLikes || {}
+            storyLikes: parsed.storyLikes || {},
+            bookshelves: Array.isArray(parsed.bookshelves) ? parsed.bookshelves : []
           };
         }
       }
@@ -197,7 +212,8 @@ class LorethosRepository {
       paragraphBookmarks: {},
       comments: [],
       inquiries: [],
-      storyLikes: {}
+      storyLikes: {},
+      bookshelves: []
     };
   }
 
@@ -233,7 +249,7 @@ class LorethosRepository {
         avatar TEXT,
         bio TEXT,
         password_hash TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('reader', 'owner')),
+        role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('reader', 'writer', 'admin', 'owner')),
         reading_goal JSONB,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -242,6 +258,8 @@ class LorethosRepository {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS reading_goal JSONB;
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+      ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('reader', 'writer', 'admin', 'owner'));
       CREATE TABLE IF NOT EXISTS stories (
         id TEXT PRIMARY KEY,
         slug TEXT NOT NULL UNIQUE,
@@ -396,6 +414,19 @@ class LorethosRepository {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (story_id, user_id)
       );
+      CREATE TABLE IF NOT EXISTS story_bookshelves (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        owner_name TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private', 'public')),
+        story_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_story_bookshelves_owner ON story_bookshelves(owner_id);
+      CREATE INDEX IF NOT EXISTS idx_story_bookshelves_visibility ON story_bookshelves(visibility);
     `);
 
     for (const story of AUTHORITATIVE_STORIES) {
@@ -477,7 +508,8 @@ class LorethosRepository {
         ordRes,
         evRes,
         inqRes,
-        likesRes
+        likesRes,
+        shelvesRes
       ] = await Promise.all([
         this.pool.query('SELECT * FROM stories ORDER BY spotlight_order ASC NULLS LAST, created_at DESC'),
         this.pool.query('SELECT * FROM chapters ORDER BY chapter_number ASC'),
@@ -492,7 +524,8 @@ class LorethosRepository {
         this.pool.query('SELECT * FROM orders ORDER BY created_at DESC'),
         this.pool.query('SELECT event_id FROM payment_events'),
         this.pool.query('SELECT * FROM contacts ORDER BY submitted_at DESC'),
-        this.pool.query('SELECT story_id, user_id FROM story_likes')
+        this.pool.query('SELECT story_id, user_id FROM story_likes'),
+        this.pool.query('SELECT * FROM story_bookshelves ORDER BY updated_at DESC')
       ]);
 
       if (storiesRes.rows.length > 0) {
@@ -594,7 +627,7 @@ class LorethosRepository {
         avatar: u.avatar || undefined,
         bio: u.bio || undefined,
         passwordHash: u.password_hash,
-        role: u.role,
+        role: normalizeServerRole(u.role, String(u.email)),
         subscription: subByUser.get(u.id) || { plan: 'free', status: 'none', amountNgn: 0 },
         unlockedStoryIds: entitlementsByUser.get(u.id) || [],
         bookmarkedChapterIds: bookmarksByUser.get(u.id) || [],
@@ -704,6 +737,18 @@ class LorethosRepository {
         }
         this.state.storyLikes[row.story_id] = list;
       }
+
+      this.state.bookshelves = shelvesRes.rows.map((row) => ({
+        id: row.id,
+        ownerId: row.owner_id,
+        ownerName: row.owner_name,
+        name: row.name,
+        description: row.description || undefined,
+        visibility: row.visibility === 'public' ? 'public' : 'private',
+        storyIds: Array.isArray(row.story_ids) ? row.story_ids.filter((id: unknown): id is string => typeof id === 'string') : [],
+        createdAt: new Date(row.created_at).toISOString(),
+        updatedAt: new Date(row.updated_at).toISOString()
+      }));
       } catch (err) {
         console.warn(
           'PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:',
@@ -798,7 +843,7 @@ class LorethosRepository {
         avatar: normalizeServerAvatarUrl(u.avatar),
         bio: u.bio || undefined,
         passwordHash: u.password_hash,
-        role: u.role === 'owner' || String(u.email).trim().toLowerCase() === getOwnerEmail() ? 'owner' : 'reader',
+        role: normalizeServerRole(u.role, String(u.email)),
         subscription,
         unlockedStoryIds: entRes.rows.map((r) => r.story_id),
         bookmarkedChapterIds: bmRes.rows.map((r) => r.chapter_id),
@@ -1423,6 +1468,81 @@ class LorethosRepository {
       }));
   }
 
+  public toAdminDirectoryEntry(user: StoredUserRecord): AdminUserDirectoryEntry {
+    const completedSet = new Set<string>(
+      Array.isArray(user.readingGoal?.completedChapterIds)
+        ? user.readingGoal.completedChapterIds
+        : []
+    );
+    for (const progress of Object.values(user.readingProgress || {})) {
+      if (progress && progress.progressPercent >= 95 && progress.chapterId) {
+        completedSet.add(progress.chapterId);
+      }
+    }
+    const bookshelvesCount = (this.state.bookshelves || []).filter(
+      (s) => s.ownerId === user.id
+    ).length;
+
+    return {
+      id: user.id,
+      name: user.name,
+      nickname: user.nickname || undefined,
+      email: user.email,
+      avatar: normalizeServerAvatarUrl(user.avatar),
+      bio: user.bio || undefined,
+      role: normalizeServerRole(user.role, user.email),
+      subscription: user.subscription,
+      completedChaptersCount: completedSet.size,
+      bookshelvesCount,
+      createdAt: user.createdAt,
+      source: 'server'
+    };
+  }
+
+  public getAllUsersForOwner(): AdminUserDirectoryEntry[] {
+    const rolePriority: Record<WriterRole, number> = {
+      owner: 0,
+      admin: 1,
+      writer: 2,
+      reader: 3
+    };
+    return [...this.state.users]
+      .map((u) => this.toAdminDirectoryEntry(u))
+      .sort((a, b) => {
+        const diff = rolePriority[a.role] - rolePriority[b.role];
+        if (diff !== 0) return diff;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+  }
+
+  public updateUserRoleByOwner(
+    targetUserId: string,
+    nextRole: WriterRole
+  ): { ok: true; user: AdminUserDirectoryEntry } | { ok: false; status: 400 | 403 | 404; error: string } {
+    if (nextRole !== 'reader' && nextRole !== 'writer' && nextRole !== 'admin') {
+      return { ok: false, status: 400, error: 'Role must be reader, writer, or admin.' };
+    }
+    const user = this.getUserById(targetUserId);
+    if (!user) {
+      return { ok: false, status: 404, error: 'User account not found.' };
+    }
+    if (user.role === 'owner' || user.email.trim().toLowerCase() === getOwnerEmail()) {
+      return { ok: false, status: 403, error: 'Owner account role cannot be modified.' };
+    }
+
+    user.role = nextRole;
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        'UPDATE users SET role = $2, updated_at = NOW() WHERE id = $1',
+        [user.id, nextRole]
+      );
+    });
+
+    return { ok: true, user: this.toAdminDirectoryEntry(user) };
+  }
+
   public getAdminOverview() {
     const paidOrders = this.state.orders.filter((o) => o.status === 'success');
     const grossRevenueNgn = paidOrders.reduce((sum, o) => sum + o.amountNgn, 0);
@@ -1729,6 +1849,213 @@ class LorethosRepository {
     });
 
     return { liked, count: updated.length };
+  }
+
+  public getBookshelvesForViewer(viewerUserId?: string): {
+    myBookshelves: StoryBookshelf[];
+    publicBookshelves: StoryBookshelf[];
+  } {
+    const all = this.state.bookshelves || [];
+    const myBookshelves = viewerUserId
+      ? all.filter((s) => s.ownerId === viewerUserId)
+      : [];
+    const publicBookshelves = all.filter((s) => s.visibility === 'public');
+    return {
+      myBookshelves: myBookshelves.map((s) => ({ ...s, storyIds: [...s.storyIds] })),
+      publicBookshelves: publicBookshelves.map((s) => ({ ...s, storyIds: [...s.storyIds] }))
+    };
+  }
+
+  public createBookshelf(
+    owner: StoredUserRecord,
+    input: {
+      name: string;
+      description?: string;
+      visibility: BookshelfVisibility;
+      storyIds?: string[];
+    }
+  ): StoryBookshelf {
+    if (!this.state.bookshelves) {
+      this.state.bookshelves = [];
+    }
+    const allowedStoryIds = Array.from(
+      new Set(
+        (input.storyIds || []).filter((id) => {
+          const st = this.getStoryById(id);
+          if (!st) return false;
+          if ((st.publicationStatus || 'published') !== 'published' && owner.role !== 'owner') {
+            return false;
+          }
+          return true;
+        })
+      )
+    );
+    const nowIso = new Date().toISOString();
+    const ownerDisplay = owner.nickname?.trim() || owner.name;
+    const shelf: StoryBookshelf = {
+      id: `shelf_${crypto.randomUUID()}`,
+      ownerId: owner.id,
+      ownerName: ownerDisplay,
+      name: input.name,
+      description: input.description || undefined,
+      visibility: input.visibility === 'public' ? 'public' : 'private',
+      storyIds: allowedStoryIds,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+
+    this.state.bookshelves.unshift(shelf);
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO story_bookshelves (
+          id, owner_id, owner_name, name, description, visibility, story_ids, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), NOW())`,
+        [
+          shelf.id,
+          shelf.ownerId,
+          shelf.ownerName,
+          shelf.name,
+          shelf.description ?? null,
+          shelf.visibility,
+          JSON.stringify(shelf.storyIds)
+        ]
+      );
+    });
+
+    return { ...shelf, storyIds: [...shelf.storyIds] };
+  }
+
+  public updateBookshelf(
+    userId: string,
+    shelfId: string,
+    patch: {
+      name?: string;
+      description?: string | null;
+      visibility?: BookshelfVisibility;
+    }
+  ): { ok: true; bookshelf: StoryBookshelf } | { ok: false; status: 403 | 404; error: string } {
+    if (!this.state.bookshelves) {
+      this.state.bookshelves = [];
+    }
+    const idx = this.state.bookshelves.findIndex((s) => s.id === shelfId);
+    if (idx < 0) {
+      return { ok: false, status: 404, error: 'Bookshelf not found.' };
+    }
+    const existing = this.state.bookshelves[idx];
+    if (existing.ownerId !== userId) {
+      return { ok: false, status: 403, error: 'Only the bookshelf creator can modify this list.' };
+    }
+
+    const updated: StoryBookshelf = {
+      ...existing,
+      name: patch.name !== undefined ? patch.name : existing.name,
+      description:
+        patch.description === null
+          ? undefined
+          : patch.description !== undefined
+          ? patch.description || undefined
+          : existing.description,
+      visibility: patch.visibility ?? existing.visibility,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.state.bookshelves[idx] = updated;
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `UPDATE story_bookshelves
+         SET name = $3, description = $4, visibility = $5, updated_at = NOW()
+         WHERE id = $1 AND owner_id = $2`,
+        [shelfId, userId, updated.name, updated.description ?? null, updated.visibility]
+      );
+    });
+
+    return { ok: true, bookshelf: { ...updated, storyIds: [...updated.storyIds] } };
+  }
+
+  public toggleStoryInBookshelf(
+    user: StoredUserRecord,
+    shelfId: string,
+    storyId: string,
+    action: 'add' | 'remove' | 'toggle' = 'toggle'
+  ): { ok: true; bookshelf: StoryBookshelf; inShelf: boolean } | { ok: false; status: 403 | 404; error: string } {
+    if (!this.state.bookshelves) {
+      this.state.bookshelves = [];
+    }
+    const idx = this.state.bookshelves.findIndex((s) => s.id === shelfId);
+    if (idx < 0) {
+      return { ok: false, status: 404, error: 'Bookshelf not found.' };
+    }
+    const existing = this.state.bookshelves[idx];
+    if (existing.ownerId !== user.id) {
+      return { ok: false, status: 403, error: 'Only the bookshelf creator can organize stories in this list.' };
+    }
+
+    const story = this.getStoryById(storyId);
+    if (!story || ((story.publicationStatus || 'published') !== 'published' && user.role !== 'owner')) {
+      return { ok: false, status: 404, error: 'Story not found in catalog.' };
+    }
+
+    const currentlyInShelf = existing.storyIds.includes(storyId);
+    let nextStoryIds = [...existing.storyIds];
+    let inShelf = currentlyInShelf;
+
+    if (action === 'add' || (action === 'toggle' && !currentlyInShelf)) {
+      if (!currentlyInShelf) {
+        nextStoryIds.unshift(storyId);
+      }
+      inShelf = true;
+    } else if (action === 'remove' || (action === 'toggle' && currentlyInShelf)) {
+      nextStoryIds = nextStoryIds.filter((id) => id !== storyId);
+      inShelf = false;
+    }
+
+    const updated: StoryBookshelf = {
+      ...existing,
+      storyIds: nextStoryIds,
+      updatedAt: new Date().toISOString()
+    };
+    this.state.bookshelves[idx] = updated;
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `UPDATE story_bookshelves
+         SET story_ids = $3::jsonb, updated_at = NOW()
+         WHERE id = $1 AND owner_id = $2`,
+        [shelfId, user.id, JSON.stringify(updated.storyIds)]
+      );
+    });
+
+    return { ok: true, bookshelf: { ...updated, storyIds: [...updated.storyIds] }, inShelf };
+  }
+
+  public deleteBookshelf(
+    userId: string,
+    shelfId: string
+  ): { ok: true } | { ok: false; status: 403 | 404; error: string } {
+    if (!this.state.bookshelves) {
+      this.state.bookshelves = [];
+    }
+    const existing = this.state.bookshelves.find((s) => s.id === shelfId);
+    if (!existing) {
+      return { ok: false, status: 404, error: 'Bookshelf not found.' };
+    }
+    if (existing.ownerId !== userId) {
+      return { ok: false, status: 403, error: 'Only the bookshelf creator can delete this list.' };
+    }
+
+    this.state.bookshelves = this.state.bookshelves.filter((s) => s.id !== shelfId);
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query('DELETE FROM story_bookshelves WHERE id = $1 AND owner_id = $2', [shelfId, userId]);
+    });
+
+    return { ok: true };
   }
 }
 

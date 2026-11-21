@@ -23,12 +23,15 @@ import {
   Pencil,
   Check,
   X,
-  MessageSquare
+  MessageSquare,
+  Feather,
+  Users
 } from 'lucide-react';
 import { ReadingStatisticsDashboard } from '../components/ReadingStatisticsDashboard';
 import { ReadingGoal } from '../components/ReadingGoal';
 import { getDisplayName, computeReaderRank, READER_RANK_TIERS } from '../utils/readerProfile';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import { canAccessWriterStudio } from '../lib/writerStories';
 
 export const AccountView: React.FC = () => {
   const {
@@ -57,7 +60,8 @@ export const AccountView: React.FC = () => {
     routeParams,
     pendingAuthRedirect,
     readingPromptOpen,
-    completePostAuthRedirect
+    completePostAuthRedirect,
+    refreshUserRole
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'library' | 'stats' | 'goals' | 'highlights' | 'bookmarks' | 'subscription' | 'settings'>('library');
@@ -165,7 +169,15 @@ export const AccountView: React.FC = () => {
     completePostAuthRedirect
   ]);
 
+  useEffect(() => {
+    if (isAuthenticated) {
+      void refreshUserRole();
+    }
+  }, [isAuthenticated, refreshUserRole]);
+
   const isPatron = isAuthenticated && user.subscription.status === 'active';
+  const hasWriterAccess = isAuthenticated && canAccessWriterStudio(user.role);
+  const isOwner = isAuthenticated && user.role === 'owner';
   const displayName = getDisplayName(user);
   const rank = computeReaderRank(user, stories);
 
@@ -441,9 +453,21 @@ export const AccountView: React.FC = () => {
                     <Award className="w-3 h-3" />
                     <span>Rank {rank.roman} &middot; {rank.title}</span>
                   </span>
-                  {user.role === 'owner' && (
+                  {isOwner && (
                     <span className="text-[11px] font-semibold bg-[#2D142C] text-white px-2 py-0.5 rounded font-sans-ui">
-                      Publisher (Owner)
+                      Publisher (Owner &middot; Writer &amp; Reader)
+                    </span>
+                  )}
+                  {!isOwner && user.role === 'writer' && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] px-2 py-0.5 rounded font-sans-ui">
+                      <Feather className="w-3 h-3 text-[#C85A32]" />
+                      <span>Approved Writer</span>
+                    </span>
+                  )}
+                  {!isOwner && user.role === 'admin' && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] px-2 py-0.5 rounded font-sans-ui">
+                      <Feather className="w-3 h-3 text-[#C85A32]" />
+                      <span>Editorial Admin</span>
                     </span>
                   )}
                   {isPatron ? (
@@ -486,7 +510,7 @@ export const AccountView: React.FC = () => {
               <a
                 href={buildHref('profile')}
                 onClick={(e) => handleLink(e, 'profile')}
-                className="px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] hover:text-[#C85A32] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                className="px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] hover:text-[#C85A32] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
               >
                 <Pencil className="w-3.5 h-3.5 text-[#C85A32]" />
                 <span>Edit Profile</span>
@@ -494,17 +518,37 @@ export const AccountView: React.FC = () => {
               <button
                 type="button"
                 onClick={openReadingPrompt}
-                className="px-3.5 py-2 rounded-lg border border-[#C85A32]/35 text-[#C85A32] text-xs font-semibold hover:bg-[#C85A32] hover:text-white transition-colors cursor-pointer"
+                className="px-3.5 py-2 rounded-lg border border-[#C85A32]/35 text-[#C85A32] text-xs font-semibold hover:bg-[#C85A32] hover:text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 {preferredGenres.length > 0 ? 'Reading Preferences' : 'What Do You Want to Read?'}
               </button>
-              {user.role === 'owner' && (
+              {hasWriterAccess && (
+                <a
+                  href={buildHref('writer')}
+                  onClick={(e) => handleLink(e, 'writer')}
+                  className="px-4 py-2 rounded-lg bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] hover:bg-[#C85A32] dark:hover:bg-[#C85A32] dark:hover:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Feather className="w-3.5 h-3.5 text-[#C85A32] group-hover:text-white" />
+                  <span>Open Writer Studio</span>
+                </a>
+              )}
+              {isOwner && (
                 <a
                   href={buildHref('admin')}
                   onClick={(e) => handleLink(e, 'admin')}
-                  className="px-4 py-2 rounded-lg border border-[#C85A32] text-[#C85A32] text-xs font-semibold hover:bg-[#C85A32] hover:text-white transition-colors"
+                  className="px-4 py-2 rounded-lg border border-[#C85A32] text-[#C85A32] text-xs font-semibold hover:bg-[#C85A32] hover:text-white transition-colors whitespace-nowrap shrink-0"
                 >
                   Open Publishing Desk
+                </a>
+              )}
+              {isOwner && (
+                <a
+                  href={buildHref('admin', { tab: 'users' })}
+                  onClick={(e) => handleLink(e, 'admin', { tab: 'users' })}
+                  className="px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] hover:text-[#C85A32] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Users className="w-3.5 h-3.5 text-[#C85A32]" />
+                  <span>All Profiles &amp; Writers</span>
                 </a>
               )}
 
@@ -519,7 +563,7 @@ export const AccountView: React.FC = () => {
                       planId: 'monthly'
                     })
                   }
-                  className="px-4 py-2 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+                  className="px-4 py-2 bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold rounded-lg flex items-center gap-2 shadow-xs transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <ShieldCheck className="w-4 h-4" />
                   <span>Upgrade Monthly (₦3,500/mo)</span>
@@ -529,13 +573,59 @@ export const AccountView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => void logout()}
-                className="px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-red-500 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-red-500 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Sign Out</span>
               </button>
             </div>
           </div>
+        )}
+
+        {hasWriterAccess && (
+          <section
+            aria-label="Writer Studio dashboard access"
+            className="rounded-2xl border border-[#C85A32]/35 bg-[#2D142C] text-[#F9F6F0] p-6 sm:p-7 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-6"
+          >
+            <div className="space-y-1.5 max-w-2xl">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-sans-ui font-semibold uppercase tracking-[0.18em] text-[#C85A32]">
+                <Feather className="w-3.5 h-3.5" />
+                <span>{isOwner ? 'Owner Publishing & Writer Portal' : 'Approved Writer Portal'}</span>
+                <span className="opacity-40">&middot;</span>
+                <span>Role: {user.role}</span>
+              </div>
+              <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white">
+                Your Private Writer Studio Desk
+              </h2>
+              <p className="font-reader text-xs sm:text-sm text-white/80 leading-relaxed">
+                {isOwner
+                  ? 'Switch between your personal Writer Studio, your Reading Library, and the Owner Profiles Directory to manage all readers and upgraded writers.'
+                  : 'Your account is approved for publishing. Jump straight back into your Writer Studio anytime from your dashboard to write stories, upload audio trailers, and manage published works.'}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 shrink-0 font-sans-ui">
+              <a
+                href={buildHref('writer')}
+                onClick={(e) => handleLink(e, 'writer')}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold shadow-sm transition-colors whitespace-nowrap shrink-0"
+              >
+                <Feather className="w-4 h-4" />
+                <span>Open Writer Studio</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </a>
+              {isOwner && (
+                <a
+                  href={buildHref('admin', { tab: 'users' })}
+                  onClick={(e) => handleLink(e, 'admin', { tab: 'users' })}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-white/25 hover:border-[#C85A32] text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Users className="w-3.5 h-3.5 text-[#C85A32]" />
+                  <span>Manage All Profiles &amp; Writers</span>
+                </a>
+              )}
+            </div>
+          </section>
         )}
 
         {/* Reader Rank & Completion Progress */}

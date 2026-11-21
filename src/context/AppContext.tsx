@@ -16,17 +16,23 @@ import {
   ChapterComment,
   CommentTag,
   CommunityInquiry,
-  WriterRole
+  WriterRole,
+  StoryBookshelf,
+  BookshelfVisibility,
+  AdminUserDirectoryEntry
 } from '../types';
 import { INITIAL_STORIES } from '../data/initialStories';
 import { apiFetch, parseJsonSafe, setStoredSessionToken } from '../lib/apiClient';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import {
   ensureSupabaseReaderProfile,
+  fetchAllSupabaseProfilesForOwner,
   fetchLatestSupabaseUserRole,
   getCurrentSupabaseAuthAndProfile,
   normalizeWriterRole,
+  resolveMergedUserRole,
   updateSupabaseUserProfile,
+  updateSupabaseUserRole,
   uploadProfileAvatarToSupabaseStorage,
 } from '../lib/writerStories';
 import {
@@ -56,6 +62,7 @@ export interface RouteParams {
   redirect?: string;
   reauth?: string;
   tab?: string;
+  shelf?: string;
 }
 
 export function sanitizeInternalRedirect(target?: string | null): string | null {
@@ -202,6 +209,13 @@ interface AppContextType {
   // Admin publishing controls (server-verified owner endpoints)
   adminOverview: AdminOverviewData | null;
   refreshAdminOverview: () => Promise<void>;
+  adminUsers: AdminUserDirectoryEntry[];
+  refreshAdminUsers: () => Promise<void>;
+  updateUserRole: (
+    userId: string,
+    role: WriterRole,
+    email?: string
+  ) => Promise<{ ok: boolean; error?: string }>;
   addStory: (input: {
     title: string;
     subtitle?: string;
@@ -265,6 +279,27 @@ interface AppContextType {
   deleteChapterComment: (commentId: string) => Promise<void>;
   inquiries: CommunityInquiry[];
   submitInquiry: (input: InquiryInput) => Promise<CommunityInquiry>;
+
+  // Custom Story Bookshelves / Collections
+  myBookshelves: StoryBookshelf[];
+  publicBookshelves: StoryBookshelf[];
+  refreshBookshelves: () => Promise<void>;
+  createBookshelf: (input: {
+    name: string;
+    description?: string;
+    visibility: BookshelfVisibility;
+    storyIds?: string[];
+  }) => Promise<{ ok: boolean; bookshelf?: StoryBookshelf; error?: string }>;
+  updateBookshelf: (
+    shelfId: string,
+    patch: { name?: string; description?: string | null; visibility?: BookshelfVisibility }
+  ) => Promise<{ ok: boolean; bookshelf?: StoryBookshelf; error?: string }>;
+  deleteBookshelf: (shelfId: string) => Promise<{ ok: boolean; error?: string }>;
+  toggleStoryInBookshelf: (
+    shelfId: string,
+    storyId: string,
+    action?: 'add' | 'remove' | 'toggle'
+  ) => Promise<{ ok: boolean; inShelf?: boolean; error?: string }>;
 }
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -499,6 +534,7 @@ export function buildHref(route: string, params?: RouteParams): string {
       if (params?.tier && params.tier !== 'All') qs.set('tier', params.tier);
       if (params?.sort && params.sort !== 'popular') qs.set('sort', params.sort);
       if (params?.interests) qs.set('interests', params.interests);
+      if (params?.shelf) qs.set('shelf', params.shelf);
       const queryStr = qs.toString();
       return queryStr ? `/stories?${queryStr}` : '/stories';
     }
@@ -571,7 +607,8 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
         status: qs.get('status') || undefined,
         tier: qs.get('tier') || undefined,
         sort: qs.get('sort') || undefined,
-        interests: qs.get('interests') || undefined
+        interests: qs.get('interests') || undefined,
+        shelf: qs.get('shelf') || undefined
       }
     };
   }
@@ -661,6 +698,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [authLoading, setAuthLoading] = useState(true);
   const [transactions, setTransactions] = useState<PaymentTransaction[]>([]);
   const [adminOverview, setAdminOverview] = useState<AdminOverviewData | null>(null);
+  const [adminUsers, setAdminUsers] = useState<AdminUserDirectoryEntry[]>([]);
 
   const [readerSettings, setReaderSettings] = useState<ReaderSettings>(() => {
     try {
@@ -700,6 +738,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [chapterComments, setChapterComments] = useState<ChapterComment[]>([]);
   const [inquiries, setInquiries] = useState<CommunityInquiry[]>([]);
+  const [myBookshelves, setMyBookshelves] = useState<StoryBookshelf[]>(() => {
+    try {
+      const raw = window.localStorage.getItem('lorethos_guest_bookshelves');
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  const [publicBookshelves, setPublicBookshelves] = useState<StoryBookshelf[]>([]);
 
   const [currentRoute, setCurrentRoute] = useState<string>(initialParsed.route);
   const [routeParams, setRouteParams] = useState<RouteParams>(initialParsed.params);
@@ -759,17 +808,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [isAuthenticated, user.readingGoal]);
 
-  // Persist guest paragraph bookmarks & highlights locally when not authenticated
+  // Persist guest paragraph bookmarks, highlights & bookshelves locally when not authenticated
   useEffect(() => {
     if (!isAuthenticated && !authLoading) {
       try {
         localStorage.setItem('lorethos_guest_paragraph_bookmarks', JSON.stringify(paragraphBookmarks));
         localStorage.setItem('lorethos_guest_highlights', JSON.stringify(highlights));
+        localStorage.setItem('lorethos_guest_bookshelves', JSON.stringify(myBookshelves));
       } catch {
         // Ignore storage quota errors
       }
     }
-  }, [isAuthenticated, authLoading, paragraphBookmarks, highlights]);
+  }, [isAuthenticated, authLoading, paragraphBookmarks, highlights, myBookshelves]);
 
   // Synchronize document classes based on reader theme
   useEffect(() => {
@@ -839,11 +889,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      const [txRes, hlRes, pbmRes] = await Promise.all([
+      const [txRes, hlRes, pbmRes, shelvesRes] = await Promise.all([
         apiFetch('/api/account/transactions'),
         apiFetch('/api/account/highlights'),
-        apiFetch('/api/account/paragraph-bookmarks')
+        apiFetch('/api/account/paragraph-bookmarks'),
+        apiFetch('/api/bookshelves')
       ]);
+
+      // Sync any guest private bookshelves created before signing in
+      let guestShelves: StoryBookshelf[] = [];
+      try {
+        const rawGuestShelves = window.localStorage.getItem('lorethos_guest_bookshelves');
+        const parsed = rawGuestShelves ? JSON.parse(rawGuestShelves) : [];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          guestShelves = parsed;
+        }
+      } catch {
+        // Ignore malformed guest storage
+      }
+      if (guestShelves.length > 0) {
+        for (const gs of guestShelves) {
+          await apiFetch('/api/account/bookshelves', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: gs.name,
+              description: gs.description,
+              visibility: 'private',
+              storyIds: gs.storyIds || [],
+            }),
+          }).catch(() => {});
+        }
+        try {
+          window.localStorage.removeItem('lorethos_guest_bookshelves');
+        } catch {
+          // Ignore storage removal errors
+        }
+        const refreshedShelvesRes = await apiFetch('/api/bookshelves');
+        if (refreshedShelvesRes.ok) {
+          const refreshedData = await parseJsonSafe<{
+            myBookshelves?: StoryBookshelf[];
+            publicBookshelves?: StoryBookshelf[];
+          }>(refreshedShelvesRes);
+          if (refreshedData) {
+            setMyBookshelves(Array.isArray(refreshedData.myBookshelves) ? refreshedData.myBookshelves : []);
+            setPublicBookshelves(Array.isArray(refreshedData.publicBookshelves) ? refreshedData.publicBookshelves : []);
+          }
+        }
+      } else if (shelvesRes.ok) {
+        const shelvesData = await parseJsonSafe<{
+          myBookshelves?: StoryBookshelf[];
+          publicBookshelves?: StoryBookshelf[];
+        }>(shelvesRes);
+        if (shelvesData) {
+          setMyBookshelves(Array.isArray(shelvesData.myBookshelves) ? shelvesData.myBookshelves : []);
+          setPublicBookshelves(Array.isArray(shelvesData.publicBookshelves) ? shelvesData.publicBookshelves : []);
+        }
+      }
+
       if (txRes.ok) {
         const txData = await txRes.json();
         setTransactions(Array.isArray(txData.transactions) ? txData.transactions : []);
@@ -861,16 +964,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  const refreshBookshelves = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/bookshelves');
+      if (!res.ok) return;
+      const data = await parseJsonSafe<{
+        myBookshelves?: StoryBookshelf[];
+        publicBookshelves?: StoryBookshelf[];
+      }>(res);
+      if (!data) return;
+      if (Array.isArray(data.publicBookshelves)) {
+        setPublicBookshelves(data.publicBookshelves);
+      }
+      if (isAuthenticated && Array.isArray(data.myBookshelves)) {
+        setMyBookshelves(data.myBookshelves);
+      }
+    } catch {
+      // Safe fallback
+    }
+  }, [isAuthenticated]);
+
   // Load initial catalog and session on startup
   useEffect(() => {
     let mounted = true;
 
     const bootstrap = async () => {
       try {
-        const [catalogRes, sessionRes] = await Promise.all([
+        const [catalogRes, sessionRes, shelvesRes] = await Promise.all([
           apiFetch('/api/stories'),
-          apiFetch('/api/auth/session')
+          apiFetch('/api/auth/session'),
+          apiFetch('/api/bookshelves')
         ]);
+
+        if (shelvesRes.ok && mounted) {
+          const shelvesJson = await parseJsonSafe<{ publicBookshelves?: StoryBookshelf[] }>(shelvesRes);
+          if (shelvesJson && Array.isArray(shelvesJson.publicBookshelves)) {
+            setPublicBookshelves(shelvesJson.publicBookshelves);
+          }
+        }
 
         if (catalogRes.ok && mounted) {
           const catalogJson = await catalogRes.json();
@@ -901,12 +1032,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   sbSession.session?.user?.email || sessionJson.user.email
                 );
                 if (sbLookup.source !== 'none') {
-                  resolvedRole =
-                    sbLookup.source === 'users'
-                      ? sbLookup.role
-                      : resolvedRole === 'owner'
-                      ? 'owner'
-                      : sbLookup.role;
+                  resolvedRole = resolveMergedUserRole(resolvedRole, sbLookup);
                 }
                 const sbAvatar = normalizePortableAvatarUrl(sbState.profile?.avatar_url);
                 if (!resolvedAvatar && sbAvatar) {
@@ -1244,12 +1370,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setStoredSessionToken(data.token);
       }
       const expressRole = normalizeWriterRole(data.user.role);
-      const finalRole: WriterRole =
-        sbRoleSource === 'users'
-          ? sbRole
-          : sbRoleSource === 'profiles' && expressRole !== 'owner'
-          ? sbRole
-          : expressRole;
+      const finalRole: WriterRole = resolveMergedUserRole(expressRole, {
+        role: sbRole,
+        userRow: null,
+        source: sbRoleSource,
+      });
       const expressAvatar = normalizePortableAvatarUrl(data.user.avatar);
       const finalAvatar = expressAvatar || sbAvatar;
       if (expressAvatar && !sbAvatar && sbUserId) {
@@ -1415,35 +1540,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {
       setParagraphBookmarks([]);
     }
+    try {
+      const rawGuestShelves = window.localStorage.getItem('lorethos_guest_bookshelves');
+      const parsedGuestShelves = rawGuestShelves ? JSON.parse(rawGuestShelves) : [];
+      setMyBookshelves(Array.isArray(parsedGuestShelves) ? parsedGuestShelves : []);
+    } catch {
+      setMyBookshelves([]);
+    }
     setAdminOverview(null);
+    setAdminUsers([]);
     setPreferredGenresState([]);
     setReadingPromptOpen(false);
     setPendingAuthRedirect(null);
     setUser(createGuestUser(true));
-    await refreshStories();
+    await Promise.all([refreshStories(), refreshBookshelves()]);
   };
 
   const refreshUserRole = useCallback(async (): Promise<WriterRole> => {
-    let resolvedRole: WriterRole = normalizeWriterRole(user.role);
+    let expressRole: WriterRole = normalizeWriterRole(user.role);
     let lookupUserId: string | null = user.id !== 'guest' ? user.id : null;
     let lookupEmail: string | null = user.email || null;
 
-    if (!lookupEmail) {
-      try {
-        const sessionRes = await apiFetch('/api/auth/session');
-        if (sessionRes.ok) {
-          const sessionJson = await parseJsonSafe<{ authenticated?: boolean; user?: UserProfile }>(sessionRes);
-          if (sessionJson?.authenticated && sessionJson.user) {
-            lookupUserId = sessionJson.user.id;
-            lookupEmail = sessionJson.user.email || null;
-            resolvedRole = normalizeWriterRole(sessionJson.user.role);
-          }
+    try {
+      const sessionRes = await apiFetch('/api/auth/session');
+      if (sessionRes.ok) {
+        const sessionJson = await parseJsonSafe<{ authenticated?: boolean; user?: UserProfile }>(sessionRes);
+        if (sessionJson?.authenticated && sessionJson.user) {
+          lookupUserId = sessionJson.user.id;
+          lookupEmail = sessionJson.user.email || lookupEmail;
+          expressRole = normalizeWriterRole(sessionJson.user.role);
         }
-      } catch {
-        // Ignore session fallback error
       }
+    } catch {
+      // Ignore session fallback error when offline
     }
 
+    let resolvedRole: WriterRole = expressRole;
     if (isSupabaseConfigured && supabase) {
       try {
         const { data: sessionData } = await supabase.auth.getSession();
@@ -1452,11 +1584,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sbUser?.id || lookupUserId,
           sbUser?.email || lookupEmail
         );
-        if (sbLookup.source === 'users') {
-          resolvedRole = sbLookup.role;
-        } else if (sbLookup.source === 'profiles' && resolvedRole !== 'owner') {
-          resolvedRole = sbLookup.role;
-        }
+        resolvedRole = resolveMergedUserRole(expressRole, sbLookup);
       } catch {
         // Keep current resolvedRole if Supabase check fails
       }
@@ -1671,6 +1799,90 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const queuePendingReadingProgress = useCallback(
+    (
+      targetUserId: string,
+      payload: { storyId: string; chapterId: string; chapterNumber: number; progressPercent: number }
+    ) => {
+      if (typeof window === 'undefined' || !targetUserId || targetUserId === 'guest') return;
+      try {
+        const key = `lorethos_pending_progress_${targetUserId}`;
+        const raw = window.localStorage.getItem(key);
+        const existing: Record<string, typeof payload> = raw ? JSON.parse(raw) : {};
+        existing[payload.storyId] = payload;
+        window.localStorage.setItem(key, JSON.stringify(existing));
+      } catch {
+        // Ignore localStorage quota failures
+      }
+    },
+    []
+  );
+
+  const flushPendingReadingProgress = useCallback(async (targetUserId: string) => {
+    if (
+      typeof window === 'undefined' ||
+      !targetUserId ||
+      targetUserId === 'guest' ||
+      (typeof navigator !== 'undefined' && navigator.onLine === false)
+    ) {
+      return;
+    }
+    const key = `lorethos_pending_progress_${targetUserId}`;
+    let pending: Record<
+      string,
+      { storyId: string; chapterId: string; chapterNumber: number; progressPercent: number }
+    > = {};
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return;
+      pending = JSON.parse(raw) || {};
+    } catch {
+      return;
+    }
+    const entries = Object.values(pending);
+    if (entries.length === 0) return;
+
+    const remaining: typeof pending = {};
+    for (const item of entries) {
+      try {
+        const res = await apiFetch('/api/account/progress', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(item),
+        });
+        if (!res.ok && res.status >= 500) {
+          remaining[item.storyId] = item;
+        }
+      } catch {
+        remaining[item.storyId] = item;
+      }
+    }
+
+    try {
+      if (Object.keys(remaining).length === 0) {
+        window.localStorage.removeItem(key);
+      } else {
+        window.localStorage.setItem(key, JSON.stringify(remaining));
+      }
+    } catch {
+      // Ignore storage failures
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || user.id === 'guest') return;
+    void flushPendingReadingProgress(user.id);
+    const onOnline = () => {
+      void flushPendingReadingProgress(user.id);
+    };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('lorethos:network-online', onOnline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('lorethos:network-online', onOnline);
+    };
+  }, [isAuthenticated, user.id, flushPendingReadingProgress]);
+
   const recordReadingProgress = useCallback(
     (storyId: string, chapterId: string, chapterNumber: number, progressPercent: number) => {
       const rounded = Math.min(100, Math.max(0, Math.round(progressPercent)));
@@ -1712,6 +1924,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       if (isAuthenticated) {
+        const payload = { storyId, chapterId, chapterNumber, progressPercent: rounded };
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          queuePendingReadingProgress(user.id, payload);
+          return;
+        }
         if (progressSaveTimerRef.current) {
           window.clearTimeout(progressSaveTimerRef.current);
         }
@@ -1719,12 +1936,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           void apiFetch('/api/account/progress', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ storyId, chapterId, chapterNumber, progressPercent: rounded })
-          });
+            body: JSON.stringify(payload)
+          })
+            .then((res) => {
+              if (!res.ok) {
+                queuePendingReadingProgress(user.id, payload);
+              }
+            })
+            .catch(() => {
+              queuePendingReadingProgress(user.id, payload);
+            });
         }, 2500);
       }
     },
-    [isAuthenticated, user.id]
+    [isAuthenticated, user.id, queuePendingReadingProgress]
   );
 
   const syncGoalToServer = useCallback(
@@ -2104,6 +2329,212 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return record;
   };
 
+  const createBookshelf = async (input: {
+    name: string;
+    description?: string;
+    visibility: BookshelfVisibility;
+    storyIds?: string[];
+  }): Promise<{ ok: boolean; bookshelf?: StoryBookshelf; error?: string }> => {
+    const cleanName = input.name.trim();
+    const cleanDesc = input.description?.trim() || undefined;
+    if (cleanName.length < 2 || cleanName.length > 60) {
+      return { ok: false, error: 'Bookshelf name must be between 2 and 60 characters.' };
+    }
+    if (cleanDesc && cleanDesc.length > 200) {
+      return { ok: false, error: 'Description must be 200 characters or fewer.' };
+    }
+
+    if (!isAuthenticated) {
+      if (input.visibility === 'public') {
+        return {
+          ok: false,
+          error: 'Sign in on the Account page to publish a Public list, or switch to Private to save on this device.',
+        };
+      }
+      const nowIso = new Date().toISOString();
+      const shelf: StoryBookshelf = {
+        id: `guest-shelf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        ownerId: 'guest',
+        ownerName: user.nickname?.trim() || user.name || 'Guest Reader',
+        name: cleanName,
+        description: cleanDesc,
+        visibility: 'private',
+        storyIds: Array.from(new Set(input.storyIds || [])),
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+      setMyBookshelves((prev) => [shelf, ...prev]);
+      return { ok: true, bookshelf: shelf };
+    }
+
+    try {
+      const res = await apiFetch('/api/account/bookshelves', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: cleanName,
+          description: cleanDesc,
+          visibility: input.visibility,
+          storyIds: input.storyIds || [],
+        }),
+      });
+      const data = await parseJsonSafe<{
+        bookshelf?: StoryBookshelf;
+        myBookshelves?: StoryBookshelf[];
+        publicBookshelves?: StoryBookshelf[];
+        error?: string;
+      }>(res);
+      if (!res.ok || !data?.bookshelf) {
+        return { ok: false, error: data?.error || 'Could not create bookshelf.' };
+      }
+      if (Array.isArray(data.myBookshelves)) setMyBookshelves(data.myBookshelves);
+      if (Array.isArray(data.publicBookshelves)) setPublicBookshelves(data.publicBookshelves);
+      return { ok: true, bookshelf: data.bookshelf };
+    } catch {
+      return { ok: false, error: 'Network error while creating bookshelf.' };
+    }
+  };
+
+  const updateBookshelf = async (
+    shelfId: string,
+    patch: { name?: string; description?: string | null; visibility?: BookshelfVisibility }
+  ): Promise<{ ok: boolean; bookshelf?: StoryBookshelf; error?: string }> => {
+    if (patch.name !== undefined) {
+      const cleanName = patch.name.trim();
+      if (cleanName.length < 2 || cleanName.length > 60) {
+        return { ok: false, error: 'Bookshelf name must be between 2 and 60 characters.' };
+      }
+    }
+
+    if (!isAuthenticated) {
+      if (patch.visibility === 'public') {
+        return {
+          ok: false,
+          error: 'Sign in on the Account page to publish this bookshelf publicly.',
+        };
+      }
+      let updatedShelf: StoryBookshelf | undefined;
+      setMyBookshelves((prev) =>
+        prev.map((s) => {
+          if (s.id !== shelfId) return s;
+          updatedShelf = {
+            ...s,
+            name: patch.name !== undefined ? patch.name.trim() : s.name,
+            description:
+              patch.description === null
+                ? undefined
+                : patch.description !== undefined
+                ? patch.description.trim() || undefined
+                : s.description,
+            visibility: 'private',
+            updatedAt: new Date().toISOString(),
+          };
+          return updatedShelf;
+        })
+      );
+      return updatedShelf ? { ok: true, bookshelf: updatedShelf } : { ok: false, error: 'Bookshelf not found.' };
+    }
+
+    try {
+      const res = await apiFetch(`/api/account/bookshelves/${encodeURIComponent(shelfId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const data = await parseJsonSafe<{
+        bookshelf?: StoryBookshelf;
+        myBookshelves?: StoryBookshelf[];
+        publicBookshelves?: StoryBookshelf[];
+        error?: string;
+      }>(res);
+      if (!res.ok || !data?.bookshelf) {
+        return { ok: false, error: data?.error || 'Could not update bookshelf.' };
+      }
+      if (Array.isArray(data.myBookshelves)) setMyBookshelves(data.myBookshelves);
+      if (Array.isArray(data.publicBookshelves)) setPublicBookshelves(data.publicBookshelves);
+      return { ok: true, bookshelf: data.bookshelf };
+    } catch {
+      return { ok: false, error: 'Network error while updating bookshelf.' };
+    }
+  };
+
+  const deleteBookshelf = async (shelfId: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!isAuthenticated) {
+      setMyBookshelves((prev) => prev.filter((s) => s.id !== shelfId));
+      return { ok: true };
+    }
+
+    try {
+      const res = await apiFetch(`/api/account/bookshelves/${encodeURIComponent(shelfId)}`, {
+        method: 'DELETE',
+      });
+      const data = await parseJsonSafe<{
+        myBookshelves?: StoryBookshelf[];
+        publicBookshelves?: StoryBookshelf[];
+        error?: string;
+      }>(res);
+      if (!res.ok) {
+        return { ok: false, error: data?.error || 'Could not delete bookshelf.' };
+      }
+      if (Array.isArray(data?.myBookshelves)) setMyBookshelves(data.myBookshelves);
+      if (Array.isArray(data?.publicBookshelves)) setPublicBookshelves(data.publicBookshelves);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Network error while deleting bookshelf.' };
+    }
+  };
+
+  const toggleStoryInBookshelf = async (
+    shelfId: string,
+    storyId: string,
+    action: 'add' | 'remove' | 'toggle' = 'toggle'
+  ): Promise<{ ok: boolean; inShelf?: boolean; error?: string }> => {
+    if (!isAuthenticated) {
+      let inShelf = false;
+      setMyBookshelves((prev) =>
+        prev.map((s) => {
+          if (s.id !== shelfId) return s;
+          const exists = s.storyIds.includes(storyId);
+          let nextIds = [...s.storyIds];
+          if (action === 'add' || (action === 'toggle' && !exists)) {
+            if (!exists) nextIds.unshift(storyId);
+            inShelf = true;
+          } else if (action === 'remove' || (action === 'toggle' && exists)) {
+            nextIds = nextIds.filter((id) => id !== storyId);
+            inShelf = false;
+          }
+          return { ...s, storyIds: nextIds, updatedAt: new Date().toISOString() };
+        })
+      );
+      return { ok: true, inShelf };
+    }
+
+    try {
+      const res = await apiFetch(
+        `/api/account/bookshelves/${encodeURIComponent(shelfId)}/stories`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storyId, action }),
+        }
+      );
+      const data = await parseJsonSafe<{
+        inShelf?: boolean;
+        myBookshelves?: StoryBookshelf[];
+        publicBookshelves?: StoryBookshelf[];
+        error?: string;
+      }>(res);
+      if (!res.ok) {
+        return { ok: false, error: data?.error || 'Could not update bookshelf stories.' };
+      }
+      if (Array.isArray(data?.myBookshelves)) setMyBookshelves(data.myBookshelves);
+      if (Array.isArray(data?.publicBookshelves)) setPublicBookshelves(data.publicBookshelves);
+      return { ok: true, inShelf: data?.inShelf };
+    } catch {
+      return { ok: false, error: 'Network error while organizing bookshelf.' };
+    }
+  };
+
   const refreshAdminOverview = useCallback(async () => {
     try {
       const res = await apiFetch('/api/admin/overview');
@@ -2116,6 +2547,127 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Ignore if unauthorized
     }
   }, []);
+
+  const refreshAdminUsers = useCallback(async () => {
+    const mergedMap = new Map<string, AdminUserDirectoryEntry>();
+    const emailToKey = new Map<string, string>();
+
+    try {
+      const [serverRes, sbRes] = await Promise.all([
+        apiFetch('/api/admin/users').catch(() => null),
+        fetchAllSupabaseProfilesForOwner(),
+      ]);
+
+      if (serverRes && serverRes.ok) {
+        const serverJson = await parseJsonSafe<{ users?: AdminUserDirectoryEntry[] }>(serverRes);
+        if (Array.isArray(serverJson?.users)) {
+          for (const entry of serverJson.users) {
+            const emailKey = entry.email?.trim().toLowerCase() || '';
+            const key = emailKey || entry.id;
+            mergedMap.set(key, {
+              ...entry,
+              avatar: normalizePortableAvatarUrl(entry.avatar),
+              role: normalizeWriterRole(entry.role),
+            });
+            if (emailKey) emailToKey.set(emailKey, key);
+          }
+        }
+      }
+
+      for (const sbEntry of sbRes.users) {
+        const emailKey = sbEntry.email?.trim().toLowerCase() || '';
+        const existingKey = (emailKey && emailToKey.get(emailKey)) || sbEntry.id;
+        const existing = mergedMap.get(existingKey);
+        if (!existing) {
+          mergedMap.set(existingKey, sbEntry);
+          if (emailKey) emailToKey.set(emailKey, existingKey);
+        } else {
+          const mergedRole = resolveMergedUserRole(existing.role, {
+            role: sbEntry.role,
+            userRow: null,
+            source: 'users',
+          });
+          mergedMap.set(existingKey, {
+            ...existing,
+            nickname: existing.nickname || sbEntry.nickname,
+            avatar: existing.avatar || sbEntry.avatar,
+            bio: existing.bio || sbEntry.bio,
+            role: mergedRole,
+            source: 'merged',
+          });
+        }
+      }
+
+      const roleWeight: Record<WriterRole, number> = {
+        owner: 0,
+        admin: 1,
+        writer: 2,
+        reader: 3,
+      };
+      const sorted = Array.from(mergedMap.values()).sort((a, b) => {
+        const rankDiff = roleWeight[a.role] - roleWeight[b.role];
+        if (rankDiff !== 0) return rankDiff;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+      setAdminUsers(sorted);
+    } catch {
+      // Ignore if unauthorized
+    }
+  }, []);
+
+  const updateUserRole = useCallback(
+    async (
+      userId: string,
+      role: WriterRole,
+      email?: string
+    ): Promise<{ ok: boolean; error?: string }> => {
+      let serverOk = false;
+      let serverNotFound = false;
+      let serverError: string | undefined;
+
+      try {
+        const res = await apiFetch(`/api/admin/users/${encodeURIComponent(userId)}/role`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role }),
+        });
+        const data = await parseJsonSafe<{
+          user?: AdminUserDirectoryEntry;
+          users?: AdminUserDirectoryEntry[];
+          error?: string;
+        }>(res);
+        if (res.ok) {
+          serverOk = true;
+        } else if (res.status === 404) {
+          serverNotFound = true;
+          serverError = data?.error;
+        } else {
+          return { ok: false, error: data?.error || `Failed to update role (${res.status}).` };
+        }
+      } catch {
+        serverError = 'Network error while updating user role.';
+      }
+
+      const sbRes = await updateSupabaseUserRole(userId, email, role);
+      if (!serverOk && (!serverNotFound || !sbRes.ok)) {
+        return {
+          ok: false,
+          error: serverError || sbRes.error || 'Could not update account role.',
+        };
+      }
+
+      setAdminUsers((prev) =>
+        prev.map((entry) =>
+          entry.id === userId || (email && entry.email.toLowerCase() === email.toLowerCase())
+            ? { ...entry, role }
+            : entry
+        )
+      );
+      await Promise.all([refreshAdminUsers(), refreshAdminOverview()]);
+      return { ok: true };
+    },
+    [refreshAdminUsers, refreshAdminOverview]
+  );
 
   const addStory = async (input: {
     title: string;
@@ -2333,6 +2885,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         cancelSubscription,
         adminOverview,
         refreshAdminOverview,
+        adminUsers,
+        refreshAdminUsers,
+        updateUserRole,
         addStory,
         addChapterToStory,
         updateStoryPricing,
@@ -2359,7 +2914,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addChapterComment,
         deleteChapterComment,
         inquiries,
-        submitInquiry
+        submitInquiry,
+        myBookshelves,
+        publicBookshelves,
+        refreshBookshelves,
+        createBookshelf,
+        updateBookshelf,
+        deleteBookshelf,
+        toggleStoryInBookshelf
       }}
     >
       {children}

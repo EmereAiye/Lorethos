@@ -222,3 +222,32 @@ export interface WriterStory {
   created_at: string;
 }
 
+export type BookshelfVisibility = 'private' | 'public';
+
+export interface StoryBookshelf {
+  id: string;
+  ownerId: string;
+  ownerName: string;
+  name: string;
+  description?: string;
+  visibility: BookshelfVisibility;
+  storyIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminUserDirectoryEntry {
+  id: string;
+  name: string;
+  nickname?: string;
+  email: string;
+  avatar?: string;
+  bio?: string;
+  role: WriterRole;
+  subscription: UserSubscription;
+  completedChaptersCount: number;
+  bookshelvesCount: number;
+  createdAt: string;
+  source?: 'server' | 'supabase' | 'merged';
+}
+

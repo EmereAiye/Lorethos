@@ -1,31 +1,43 @@
-import React, { Suspense, lazy, Component, ErrorInfo, ReactNode } from 'react';
+import React, { Suspense, Component, ErrorInfo, ReactNode } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
+import { OfflineStatusIndicator } from './components/OfflineStatusIndicator';
 import { Footer } from './components/Footer';
 import { PaystackModal } from './components/PaystackModal';
 import { ReadingPreferencesModal } from './components/ReadingPreferencesModal';
 import { HomeView } from './views/HomeView';
-import { CheckCircle2, X, Loader2 } from 'lucide-react';
+import { lazyWithRetry, isChunkLoadError } from './utils/lazyWithRetry';
+import { CheckCircle2, X, Loader2, RefreshCw } from 'lucide-react';
 
-const LibraryView = lazy(() => import('./views/LibraryView').then((m) => ({ default: m.LibraryView })));
-const StoryOverviewView = lazy(() => import('./views/StoryOverviewView').then((m) => ({ default: m.StoryOverviewView })));
-const ReaderView = lazy(() => import('./views/ReaderView').then((m) => ({ default: m.ReaderView })));
-const PricingView = lazy(() => import('./views/PricingView').then((m) => ({ default: m.PricingView })));
-const AccountView = lazy(() => import('./views/AccountView').then((m) => ({ default: m.AccountView })));
-const ContactView = lazy(() => import('./views/ContactView').then((m) => ({ default: m.ContactView })));
-const VideoStudioView = lazy(() => import('./views/VideoStudioView').then((m) => ({ default: m.VideoStudioView })));
-const AdminView = lazy(() => import('./views/AdminView').then((m) => ({ default: m.AdminView })));
-const WriterStudioView = lazy(() => import('./views/WriterStudioView').then((m) => ({ default: m.WriterStudioView })));
-const ProfileView = lazy(() => import('./views/ProfileView').then((m) => ({ default: m.ProfileView })));
+const LibraryView = lazyWithRetry(() => import('./views/LibraryView').then((m) => ({ default: m.LibraryView })));
+const StoryOverviewView = lazyWithRetry(() => import('./views/StoryOverviewView').then((m) => ({ default: m.StoryOverviewView })));
+const ReaderView = lazyWithRetry(() => import('./views/ReaderView').then((m) => ({ default: m.ReaderView })));
+const PricingView = lazyWithRetry(() => import('./views/PricingView').then((m) => ({ default: m.PricingView })));
+const AccountView = lazyWithRetry(() => import('./views/AccountView').then((m) => ({ default: m.AccountView })));
+const ContactView = lazyWithRetry(() => import('./views/ContactView').then((m) => ({ default: m.ContactView })));
+const VideoStudioView = lazyWithRetry(() => import('./views/VideoStudioView').then((m) => ({ default: m.VideoStudioView })));
+const AdminView = lazyWithRetry(() => import('./views/AdminView').then((m) => ({ default: m.AdminView })));
+const WriterStudioView = lazyWithRetry(() => import('./views/WriterStudioView').then((m) => ({ default: m.WriterStudioView })));
+const ProfileView = lazyWithRetry(() => import('./views/ProfileView').then((m) => ({ default: m.ProfileView })));
 
-class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
+class AppErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean; message: string; isChunkError: boolean }
+> {
   constructor(props: { children: ReactNode }) {
     super(props);
-    this.state = { hasError: false, message: '' };
+    this.state = { hasError: false, message: '', isChunkError: false };
   }
 
   static getDerivedStateFromError(error: Error) {
-    return { hasError: true, message: error?.message || 'Unexpected rendering error.' };
+    const chunkErr = isChunkLoadError(error);
+    return {
+      hasError: true,
+      isChunkError: chunkErr,
+      message: chunkErr
+        ? 'A newer version of Lorethos was published or your mobile connection dropped briefly while loading this view.'
+        : error?.message || 'Unexpected rendering error.',
+    };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -35,17 +47,29 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: bo
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-[#F9F6F0] text-[#2D142C] flex items-center justify-center p-6 font-sans-ui">
-          <div className="max-w-md w-full rounded-2xl border border-[#2D142C]/15 bg-white p-6 space-y-3 shadow-lg">
-            <h1 className="font-display text-2xl font-bold">Unable to display this view</h1>
-            <p className="text-xs opacity-75">{this.state.message}</p>
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 rounded-lg bg-[#C85A32] text-white text-xs font-semibold cursor-pointer"
-            >
-              Reload Page
-            </button>
+        <div className="min-h-screen bg-[#F9F6F0] dark:bg-[#160C16] sepia:bg-[#F4ECE1] text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] flex items-center justify-center p-6 font-sans-ui">
+          <div className="max-w-md w-full rounded-2xl border border-[#2D142C]/15 dark:border-white/15 bg-white dark:bg-[#1E111E] sepia:bg-[#FAF4EB] p-6 space-y-4 shadow-lg">
+            <h1 className="font-display text-2xl font-bold">
+              {this.state.isChunkError ? 'View update required' : 'Unable to display this view'}
+            </h1>
+            <p className="text-xs leading-relaxed opacity-80">{this.state.message}</p>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>{this.state.isChunkError ? 'Load Latest Version' : 'Reload Page'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => window.location.assign('/')}
+                className="px-4 py-2 rounded-lg border border-[#2D142C]/15 dark:border-white/15 text-xs font-semibold hover:bg-[#2D142C]/5 dark:hover:bg-white/5 cursor-pointer whitespace-nowrap shrink-0 transition-colors"
+              >
+                Return Home
+              </button>
+            </div>
           </div>
         </div>
       );
@@ -105,6 +129,7 @@ const MainContent: React.FC = () => {
   return (
     <div className={`flex flex-col min-h-screen transition-colors duration-200 ${themeClasses}`}>
       <Navbar />
+      <OfflineStatusIndicator />
 
       {checkoutStatusMessage && (
         <div
