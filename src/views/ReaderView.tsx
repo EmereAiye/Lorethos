@@ -153,7 +153,9 @@ export const ReaderView: React.FC = () => {
   const [bookmarkLabelDraft, setBookmarkLabelDraft] = useState('');
   const [focusedParagraphIdx, setFocusedParagraphIdx] = useState<number | null>(null);
   const [focusedHighlightId, setFocusedHighlightId] = useState<string | null>(null);
+  const [annotationSavedToast, setAnnotationSavedToast] = useState<string | null>(null);
   const focusTimerRef = useRef<number | null>(null);
+  const annotationToastTimerRef = useRef<number | null>(null);
 
   // Chapter Discussion state
   const [commentTag, setCommentTag] = useState<CommentTag>('Reaction');
@@ -253,6 +255,9 @@ export const ReaderView: React.FC = () => {
       }
       if (focusTimerRef.current) {
         window.clearTimeout(focusTimerRef.current);
+      }
+      if (annotationToastTimerRef.current) {
+        window.clearTimeout(annotationToastTimerRef.current);
       }
     };
   }, []);
@@ -488,6 +493,49 @@ export const ReaderView: React.FC = () => {
       }
     };
   }, [activeIsAccessible, chapterId, activeParagraphs.length]);
+
+  // Capture highlighted text selections cleanly on touch/mobile Safari where handle drags update after touchend
+  useEffect(() => {
+    if (!activeIsAccessible || typeof document === 'undefined') return;
+    let timerId: number | null = null;
+    const onSelectionChange = () => {
+      if (timerId !== null) window.clearTimeout(timerId);
+      timerId = window.setTimeout(() => {
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+        const startEl =
+          range.startContainer instanceof HTMLElement
+            ? range.startContainer.closest<HTMLElement>('[data-paragraph-text-idx]')
+            : range.startContainer.parentElement?.closest<HTMLElement>('[data-paragraph-text-idx]');
+        const endEl =
+          range.endContainer instanceof HTMLElement
+            ? range.endContainer.closest<HTMLElement>('[data-paragraph-text-idx]')
+            : range.endContainer.parentElement?.closest<HTMLElement>('[data-paragraph-text-idx]');
+        if (!startEl || !endEl || startEl !== endEl) return;
+        const paraIdx = Number(startEl.getAttribute('data-paragraph-text-idx'));
+        if (!Number.isInteger(paraIdx) || paraIdx < 0) return;
+        const measured = measureSelectionInParagraphElement(startEl, range);
+        if (!measured) return;
+        setPendingSelection((prev) => {
+          if (
+            prev &&
+            prev.paragraphIndex === paraIdx &&
+            prev.startOffset === measured.startOffset &&
+            prev.endOffset === measured.endOffset
+          ) {
+            return prev;
+          }
+          return { paragraphIndex: paraIdx, ...measured };
+        });
+      }, 180);
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => {
+      document.removeEventListener('selectionchange', onSelectionChange);
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, [activeIsAccessible, chapterId]);
 
   // Evaluate mood transitions through debounced NarrativeAudioMiddleware (hysteresis prevents rapid stutters)
   const prevAdaptiveKeyRef = useRef('');
@@ -801,6 +849,16 @@ export const ReaderView: React.FC = () => {
     });
   };
 
+  const triggerAnnotationSavedToast = (msg: string) => {
+    setAnnotationSavedToast(msg);
+    if (annotationToastTimerRef.current) {
+      window.clearTimeout(annotationToastTimerRef.current);
+    }
+    annotationToastTimerRef.current = window.setTimeout(() => {
+      setAnnotationSavedToast(null);
+    }, 4000);
+  };
+
   const commitQuickSelectionHighlight = (
     selection: { paragraphIndex: number; startOffset: number; endOffset: number; selectedText: string },
     color: HighlightColor
@@ -822,6 +880,7 @@ export const ReaderView: React.FC = () => {
     });
     setPendingSelection(null);
     window.getSelection()?.removeAllRanges();
+    triggerAnnotationSavedToast('Passage highlight saved to your Profile notes.');
   };
 
   const openSelectionNoteComposer = (
@@ -907,6 +966,30 @@ export const ReaderView: React.FC = () => {
         >
           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           <span>Chapter completed and logged to your reading goal.</span>
+        </div>
+      )}
+
+      {annotationSavedToast && !autoCompletedToast && (
+        <div
+          role="status"
+          className="fixed top-16 right-4 z-50 px-4 py-2.5 rounded-xl bg-[#2D142C] text-white border border-[#C85A32] shadow-xl flex items-center gap-3 text-xs font-sans-ui"
+        >
+          <Highlighter className="w-4 h-4 text-[#C85A32] shrink-0" />
+          <span>{annotationSavedToast}</span>
+          <a
+            href={`${buildHref('profile')}#highlights-notes`}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+              e.preventDefault();
+              navigate('profile');
+              window.setTimeout(() => {
+                document.getElementById('highlights-notes')?.scrollIntoView({ behavior: 'smooth' });
+              }, 80);
+            }}
+            className="text-[#C85A32] font-semibold hover:underline whitespace-nowrap shrink-0"
+          >
+            View in Profile &rarr;
+          </a>
         </div>
       )}
 
@@ -1125,14 +1208,31 @@ export const ReaderView: React.FC = () => {
                 <div className="flex items-center gap-2 text-[11px]">
                   <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span>
-                    Notes saved to <strong className="text-[#C85A32]">{getDisplayName(user)}</strong>&rsquo;s account
+                    Notes saved to <strong className="text-[#C85A32]">{getDisplayName(user)}</strong>&rsquo;s profile
                   </span>
                 </div>
               ) : (
-                <>
-                  <span className="text-[11px] opacity-75">
-                    Saved locally on this browser. Sign in to sync notes to your account.
-                  </span>
+                <span className="text-[11px] opacity-75">
+                  Saved locally on this browser. Sign in to sync across devices.
+                </span>
+              )}
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={`${buildHref('profile')}#highlights-notes`}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                    e.preventDefault();
+                    setHighlightsDrawerOpen(false);
+                    navigate('profile');
+                    window.setTimeout(() => {
+                      document.getElementById('highlights-notes')?.scrollIntoView({ behavior: 'smooth' });
+                    }, 80);
+                  }}
+                  className="text-[11px] font-semibold text-[#C85A32] hover:underline whitespace-nowrap"
+                >
+                  Review All in Profile &rarr;
+                </a>
+                {!isAuthenticated && (
                   <a
                     href={buildHref('account', {
                       redirect: buildHref('reader', { slug: story.slug, chapterNumber: chapter.chapterNumber })
@@ -1143,12 +1243,12 @@ export const ReaderView: React.FC = () => {
                         redirect: buildHref('reader', { slug: story.slug, chapterNumber: chapter.chapterNumber })
                       });
                     }}
-                    className="px-3 py-1 rounded-md bg-[#C85A32] text-white font-semibold text-[11px] shrink-0"
+                    className="px-2.5 py-1 rounded-md bg-[#C85A32] text-white font-semibold text-[11px] shrink-0"
                   >
-                    Sign In to Sync
+                    Sign In
                   </a>
-                </>
-              )}
+                )}
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -2230,10 +2330,11 @@ export const ReaderView: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => {
+                                const trimmedNote = noteDraft.trim();
                                 if (activeEditTarget) {
                                   updateHighlight(activeEditTarget.id, {
                                     color: selectedColor,
-                                    note: noteDraft.trim() || null
+                                    note: trimmedNote || null
                                   });
                                 } else {
                                   saveHighlight({
@@ -2249,12 +2350,17 @@ export const ReaderView: React.FC = () => {
                                     startOffset: paraSelection?.startOffset,
                                     endOffset: paraSelection?.endOffset,
                                     color: selectedColor,
-                                    note: noteDraft.trim() || undefined
+                                    note: trimmedNote || undefined
                                   });
                                 }
                                 setEditingParagraphIdx(null);
                                 setEditingHighlightId(null);
                                 setPendingSelection(null);
+                                triggerAnnotationSavedToast(
+                                  trimmedNote
+                                    ? 'Personal note saved to your Profile.'
+                                    : 'Highlight saved to your Profile.'
+                                );
                               }}
                               className="px-3.5 py-1.5 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold cursor-pointer"
                             >

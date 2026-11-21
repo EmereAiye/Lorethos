@@ -110,7 +110,7 @@ export const HomeView: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#F9F6F0] dark:bg-[#160C16] text-[#2D142C] dark:text-[#F9F6F0] transition-colors">
+    <div className="min-h-screen bg-[#F9F6F0] dark:bg-[#160C16] sepia:bg-[#F4ECE1] text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] transition-colors">
 
       {/* Dynamic Catalog Announcement Banner */}
       {flagshipStory && (
@@ -244,8 +244,9 @@ export const HomeView: React.FC = () => {
               <div>
                 <div className="text-xs tracking-wider uppercase text-[#C85A32] font-semibold font-sans-ui mb-1 flex flex-wrap items-center gap-2">
                   <span>Recommended for {displayName} &middot; {preferredGenres.join(', ')}</span>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#2D142C] text-[#F9F6F0] text-[10px]">
-                    <Award className="w-3 h-3 text-[#C85A32]" />
+                  <span className="opacity-40">&middot;</span>
+                  <span className="inline-flex items-center gap-1 text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18]">
+                    <Award className="w-3.5 h-3.5 text-[#C85A32]" />
                     <span>Rank {readerRank.roman} &middot; {readerRank.title}</span>
                   </span>
                 </div>
@@ -284,7 +285,7 @@ export const HomeView: React.FC = () => {
                   key={story.id}
                   href={buildHref('story-detail', { slug: story.slug })}
                   onClick={(e) => handleNav(e, 'story-detail', { slug: story.slug })}
-                  className="p-3.5 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 hover:border-[#C85A32]/50 transition-all flex items-center gap-3.5 group shadow-2xs"
+                  className="editorial-card p-3.5 rounded-xl bg-white dark:bg-[#1E111E] sepia:bg-[#FAF4EB] border border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/15 hover:border-[#C85A32]/50 transition-all flex items-center gap-3.5 group"
                 >
                   <img
                     src={story.coverImage}
@@ -623,7 +624,7 @@ export const HomeView: React.FC = () => {
                     key={ch.id + idx}
                     href={buildHref('reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
                     onClick={(e) => handleNav(e, 'reader', { slug: ch.storySlug, chapterNumber: ch.chapterNumber })}
-                    className="p-4 rounded-lg bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 hover:border-[#C85A32]/40 transition-all flex items-center justify-between gap-4 group shadow-2xs hover:shadow-sm"
+                    className="editorial-card p-4 rounded-xl bg-white dark:bg-[#1E111E] sepia:bg-[#FAF4EB] border border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/15 hover:border-[#C85A32]/40 transition-all flex items-center justify-between gap-4 group"
                   >
                     <div className="flex items-center gap-4 min-w-0">
                       <img

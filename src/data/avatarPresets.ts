@@ -1,10 +1,3 @@
-import avatarBronzeScribe from '../assets/images/avatar_bronze_scribe_1795168939968.jpg';
-import avatarMoonlitReader from '../assets/images/avatar_moonlit_reader_1795168940080.jpg';
-import avatarCelestialAstrolabe from '../assets/images/avatar_celestial_astrolabe_1795168940345.jpg';
-import avatarBaobabLantern from '../assets/images/avatar_baobab_lantern_1795168940763.jpg';
-import avatarBronzeMedallion from '../assets/images/avatar_crimson_mask_1795168940497.jpg';
-import avatarSunlitChronicler from '../assets/images/avatar_sunlit_chronicler_1795168940731.jpg';
-
 export interface AvatarPreset {
   id: string;
   label: string;
@@ -17,36 +10,36 @@ export const AVATAR_PRESETS: AvatarPreset[] = [
     id: 'bronze-scribe',
     label: 'Bronze Scribe',
     caption: 'Scholar of royal brass & parchment',
-    src: avatarBronzeScribe,
+    src: '/assets/images/avatars/avatar_bronze_scribe.jpg',
   },
   {
     id: 'moonlit-reader',
     label: 'Moonlit Reader',
     caption: 'Midnight folio & lantern light',
-    src: avatarMoonlitReader,
+    src: '/assets/images/avatars/avatar_moonlit_reader.jpg',
   },
   {
     id: 'celestial-astrolabe',
     label: 'Celestial Astrolabe',
     caption: 'Navigator of myth & constellations',
-    src: avatarCelestialAstrolabe,
+    src: '/assets/images/avatars/avatar_celestial_astrolabe.jpg',
   },
   {
     id: 'baobab-lantern',
     label: 'Baobab Lantern',
     caption: 'Keeper of twilight savanna tales',
-    src: avatarBaobabLantern,
+    src: '/assets/images/avatars/avatar_baobab_lantern.jpg',
   },
   {
     id: 'bronze-medallion',
     label: 'Bronze Medallion',
     caption: 'Ceremonial guild crest',
-    src: avatarBronzeMedallion,
+    src: '/assets/images/avatars/avatar_crimson_mask.jpg',
   },
   {
     id: 'sunlit-chronicler',
     label: 'Sunlit Chronicler',
     caption: 'Curator of morning verse & ink',
-    src: avatarSunlitChronicler,
+    src: '/assets/images/avatars/avatar_sunlit_chronicler.jpg',
   },
 ];

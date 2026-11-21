@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { getDisplayName, computeReaderRank } from '../utils/readerProfile';
-import { BookOpen, User, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck, Search, ArrowRight, Film, Award } from 'lucide-react';
+import { ReaderAvatar } from './ReaderAvatar';
+import { BookOpen, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck, Search, ArrowRight, Film, Award, Flame } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const {
@@ -13,6 +14,7 @@ export const Navbar: React.FC = () => {
     readerSettings,
     setTheme,
     activeProgress,
+    dailyStreak,
     stories
   } = useApp();
 
@@ -65,6 +67,8 @@ export const Navbar: React.FC = () => {
     });
   }, [stories, searchQuery]);
 
+  const rank = useMemo(() => computeReaderRank(user, stories), [user, stories]);
+
   if (currentRoute === 'reader') {
     return null;
   }
@@ -72,7 +76,6 @@ export const Navbar: React.FC = () => {
   const isPatron = isAuthenticated && user.subscription.status === 'active';
   const isOwner = isAuthenticated && user.role === 'owner';
   const displayName = getDisplayName(user);
-  const rank = useMemo(() => computeReaderRank(user, stories), [user, stories]);
   const trimmedSearch = searchQuery.trim();
   const showDropdown = searchFocused && trimmedSearch.length > 0;
 
@@ -332,6 +335,21 @@ export const Navbar: React.FC = () => {
             </a>
           )}
 
+          {/* Daily Reading Streak Counter */}
+          <a
+            href={buildHref('account', { tab: 'goals' })}
+            onClick={(e) => handleNavClick(e, 'account', { tab: 'goals' })}
+            aria-label={`Daily Reading Streak: ${dailyStreak.currentDays} consecutive ${dailyStreak.currentDays === 1 ? 'day' : 'days'}`}
+            title={`Daily Reading Streak: ${dailyStreak.currentDays} ${dailyStreak.currentDays === 1 ? 'day' : 'days'} (Best: ${dailyStreak.bestDays}d)`}
+            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[#C85A32]/30 bg-[#C85A32]/8 hover:bg-[#C85A32]/15 text-[#C85A32] text-xs font-semibold font-sans-ui whitespace-nowrap shrink-0 transition-colors"
+          >
+            <Flame className="w-3.5 h-3.5 shrink-0" />
+            <span className="font-mono font-bold tabular-nums">{dailyStreak.currentDays}d</span>
+            <span className="hidden xl:inline text-[11px] font-medium text-[#2D142C]/80 dark:text-[#F9F6F0]/80 sepia:text-[#2C1E18]/80">
+              Streak
+            </span>
+          </a>
+
           {/* Mobile Search Quick Button */}
           <button
             type="button"
@@ -413,16 +431,15 @@ export const Navbar: React.FC = () => {
                 : 'border-[#2D142C]/20 dark:border-white/20 sepia:border-[#2C1E18]/20 text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18] hover:bg-[#2D142C]/5 dark:hover:bg-white/5'
             }`}
           >
-            {user.avatar ? (
-              <img
+            <span className="w-5 h-5 rounded-full overflow-hidden border border-[#C85A32]/60 shrink-0 flex items-center justify-center bg-[#2D142C]/10 dark:bg-white/10">
+              <ReaderAvatar
                 src={user.avatar}
-                alt={displayName}
-                referrerPolicy="no-referrer"
-                className="w-5 h-5 rounded-full object-cover border border-[#C85A32]/60 shrink-0"
+                name={displayName}
+                fallbackMode={user.avatar ? 'initial' : 'icon'}
+                initialClassName="font-display text-[11px] font-bold select-none leading-none"
+                iconClassName="w-3.5 h-3.5 shrink-0"
               />
-            ) : (
-              <User className="w-3.5 h-3.5 shrink-0" />
-            )}
+            </span>
             <span className="hidden sm:inline max-w-[115px] truncate">
               {!isAuthenticated ? (user.nickname || user.avatar ? displayName : 'Sign In') : displayName}
             </span>
@@ -567,16 +584,15 @@ export const Navbar: React.FC = () => {
                 currentRoute === 'profile' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
               }`}
             >
-              {user.avatar ? (
-                <img
+              <span className="w-5 h-5 rounded-full overflow-hidden border border-[#C85A32]/60 shrink-0 flex items-center justify-center bg-[#C85A32]/10 text-[#C85A32]">
+                <ReaderAvatar
                   src={user.avatar}
-                  alt={displayName}
-                  referrerPolicy="no-referrer"
-                  className="w-5 h-5 rounded-full object-cover border border-[#C85A32]/60 shrink-0"
+                  name={displayName}
+                  fallbackMode={user.avatar ? 'initial' : 'icon'}
+                  initialClassName="font-display text-[11px] font-bold select-none leading-none"
+                  iconClassName="w-3.5 h-3.5 text-[#C85A32] shrink-0"
                 />
-              ) : (
-                <User className="w-4 h-4 text-[#C85A32]" />
-              )}
+              </span>
               <span>My Profile &amp; Photo</span>
             </a>
             <a
@@ -605,6 +621,19 @@ export const Navbar: React.FC = () => {
                   Rank {rank.roman} · {rank.title}
                 </span>
               )}
+            </a>
+            <a
+              href={buildHref('account', { tab: 'goals' })}
+              onClick={(e) => handleNavClick(e, 'account', { tab: 'goals' })}
+              className="px-3 py-2.5 rounded-lg font-medium flex items-center justify-between gap-2 bg-[#C85A32]/10 text-[#C85A32]"
+            >
+              <span className="flex items-center gap-2 font-semibold">
+                <Flame className="w-4 h-4" />
+                <span>Daily Reading Streak</span>
+              </span>
+              <span className="text-xs font-mono font-bold tabular-nums">
+                {dailyStreak.currentDays}d &middot; Best {dailyStreak.bestDays}d
+              </span>
             </a>
             {isOwner && (
               <a

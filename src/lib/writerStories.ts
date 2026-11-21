@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabase';
+import { dataUrlToBlob, normalizePortableAvatarUrl } from '../utils/avatarImage';
 import type { SupabaseProfile, WriterRole, WriterStory } from '../types';
 
 export interface SupabaseAuthProfileState {
@@ -43,12 +44,15 @@ async function querySupabaseTableRow(
     table === 'users'
       ? [
           'id, role, email, username, name, nickname, avatar_url, bio',
+          'id, role, email, username, name, nickname, avatar, bio',
           'id, role, email',
           'id, role',
         ]
       : [
           'id, username, name, nickname, avatar_url, bio, role, email',
           'id, username, name, nickname, avatar_url, bio, role',
+          'id, username, avatar_url, role',
+          'id, username, avatar, role',
           'id, username, role',
         ];
 
@@ -241,6 +245,13 @@ export async function getCurrentSupabaseAuthAndProfile(): Promise<SupabaseAuthPr
         ? normalizeWriterRole(profileRow.role)
         : 'reader';
 
+    const rawAvatar =
+      (profileRow && typeof profileRow.avatar_url === 'string' && profileRow.avatar_url) ||
+      (profileRow && typeof profileRow.avatar === 'string' && profileRow.avatar) ||
+      (userRow && typeof userRow.avatar_url === 'string' && userRow.avatar_url) ||
+      (userRow && typeof userRow.avatar === 'string' && userRow.avatar) ||
+      (typeof authUser.user_metadata?.avatar_url === 'string' ? authUser.user_metadata.avatar_url : null);
+
     return {
       configured: true,
       userId: authUser.id,
@@ -250,13 +261,13 @@ export async function getCurrentSupabaseAuthAndProfile(): Promise<SupabaseAuthPr
         username: rowUsername,
         name:
           (profileRow && typeof profileRow.name === 'string' ? profileRow.name : null) ||
-          (userRow && typeof userRow.name === 'string' ? userRow.name : null),
+          (userRow && typeof userRow.name === 'string' ? userRow.name : null) ||
+          (typeof authUser.user_metadata?.full_name === 'string' ? authUser.user_metadata.full_name : null),
         nickname:
           (profileRow && typeof profileRow.nickname === 'string' ? profileRow.nickname : null) ||
-          (userRow && typeof userRow.nickname === 'string' ? userRow.nickname : null),
-        avatar_url:
-          (profileRow && typeof profileRow.avatar_url === 'string' ? profileRow.avatar_url : null) ||
-          (userRow && typeof userRow.avatar_url === 'string' ? userRow.avatar_url : null),
+          (userRow && typeof userRow.nickname === 'string' ? userRow.nickname : null) ||
+          (typeof authUser.user_metadata?.nickname === 'string' ? authUser.user_metadata.nickname : null),
+        avatar_url: normalizePortableAvatarUrl(rawAvatar) || null,
         bio:
           (profileRow && typeof profileRow.bio === 'string' ? profileRow.bio : null) ||
           (userRow && typeof userRow.bio === 'string' ? userRow.bio : null),
@@ -273,6 +284,48 @@ export async function getCurrentSupabaseAuthAndProfile(): Promise<SupabaseAuthPr
   }
 }
 
+/**
+ * Attempts to upload a cropped gallery portrait Blob to Supabase Storage
+ * (`avatars` bucket first, then `trailers/avatars/` fallback) so gallery photos
+ * load via HTTPS across every phone and web deployment.
+ */
+export async function uploadProfileAvatarToSupabaseStorage(
+  dataUrl: string,
+  userId: string
+): Promise<string | null> {
+  if (!isSupabaseConfigured || !supabase || !userId) return null;
+  const blob = dataUrlToBlob(dataUrl);
+  if (!blob) return null;
+
+  const ext = blob.type === 'image/png' ? 'png' : blob.type === 'image/webp' ? 'webp' : 'jpg';
+  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const candidates: Array<{ bucket: string; objectPath: string }> = [
+    { bucket: 'avatars', objectPath: `${userId}/${fileName}` },
+    { bucket: 'trailers', objectPath: `avatars/${userId}/${fileName}` },
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const { error } = await supabase.storage
+        .from(candidate.bucket)
+        .upload(candidate.objectPath, blob, {
+          contentType: blob.type || 'image/jpeg',
+          upsert: true,
+        });
+      if (!error) {
+        const { data } = supabase.storage.from(candidate.bucket).getPublicUrl(candidate.objectPath);
+        if (data?.publicUrl) {
+          return data.publicUrl;
+        }
+      }
+    } catch {
+      // Try next storage bucket fallback
+    }
+  }
+
+  return null;
+}
+
 export async function updateSupabaseUserProfile(
   userId: string,
   patch: {
@@ -280,7 +333,8 @@ export async function updateSupabaseUserProfile(
     nickname?: string | null;
     avatar?: string | null;
     bio?: string | null;
-  }
+  },
+  email?: string | null
 ): Promise<{ ok: boolean; error?: string }> {
   if (!isSupabaseConfigured || !supabase || !userId) {
     return { ok: false };
@@ -292,100 +346,320 @@ export async function updateSupabaseUserProfile(
       (patch.name && patch.name.trim()) ||
       undefined;
 
+    const normalizedAvatar =
+      patch.avatar === null
+        ? null
+        : patch.avatar !== undefined
+        ? normalizePortableAvatarUrl(patch.avatar) ?? null
+        : undefined;
+
     const fullPayload: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
     };
     if (patch.name !== undefined) fullPayload.name = patch.name.trim();
     if (patch.nickname !== undefined) fullPayload.nickname = patch.nickname;
     if (derivedUsername !== undefined) fullPayload.username = derivedUsername;
-    if (patch.avatar !== undefined) fullPayload.avatar_url = patch.avatar;
+    if (normalizedAvatar !== undefined) fullPayload.avatar_url = normalizedAvatar;
     if (patch.bio !== undefined) fullPayload.bio = patch.bio;
 
-    const { error } = await supabase
+    const cleanEmail = email?.trim().toLowerCase();
+    const upsertRow: Record<string, unknown> = {
+      id: userId,
+      ...(cleanEmail ? { email: cleanEmail } : {}),
+      ...fullPayload,
+    };
+
+    const { error: upsertErr } = await supabase
       .from('profiles')
-      .update(fullPayload)
-      .eq('id', userId);
+      .upsert(upsertRow, { onConflict: 'id' });
 
-    if (!error) return { ok: true };
-
-    // Fallback in case avatar_url / bio columns haven't been added to older schema
-    const minimalPayload: Record<string, unknown> = {};
-    if (patch.name !== undefined) minimalPayload.name = patch.name.trim();
-    if (patch.nickname !== undefined) minimalPayload.nickname = patch.nickname;
-    if (derivedUsername !== undefined) minimalPayload.username = derivedUsername;
-
-    if (Object.keys(minimalPayload).length > 0) {
-      const { error: fallbackError } = await supabase
+    if (upsertErr) {
+      const { error: updateErr } = await supabase
         .from('profiles')
-        .update(minimalPayload)
+        .update(fullPayload)
         .eq('id', userId);
-      if (fallbackError) {
-        return { ok: false, error: fallbackError.message };
+
+      if (updateErr) {
+        // Fallback in case avatar_url / bio / email columns haven't been added to older schema
+        const minimalPayload: Record<string, unknown> = {};
+        if (patch.name !== undefined) minimalPayload.name = patch.name.trim();
+        if (patch.nickname !== undefined) minimalPayload.nickname = patch.nickname;
+        if (derivedUsername !== undefined) minimalPayload.username = derivedUsername;
+        if (normalizedAvatar !== undefined) minimalPayload.avatar_url = normalizedAvatar;
+
+        if (Object.keys(minimalPayload).length > 0) {
+          await supabase
+            .from('profiles')
+            .upsert({ id: userId, ...minimalPayload }, { onConflict: 'id' });
+        }
       }
     }
+
+    // Mirror profile updates into public.users as well if the schema holds profile columns there
+    const userTablePatch: Record<string, unknown> = {};
+    if (patch.name !== undefined) userTablePatch.name = patch.name.trim();
+    if (patch.nickname !== undefined) userTablePatch.nickname = patch.nickname;
+    if (derivedUsername !== undefined) userTablePatch.username = derivedUsername;
+    if (normalizedAvatar !== undefined) userTablePatch.avatar_url = normalizedAvatar;
+    if (patch.bio !== undefined) userTablePatch.bio = patch.bio;
+
+    if (Object.keys(userTablePatch).length > 0) {
+      const userRes = await supabase.from('users').update(userTablePatch).eq('id', userId);
+      if (userRes.error && normalizedAvatar !== undefined) {
+        await supabase
+          .from('users')
+          .update({ avatar_url: normalizedAvatar })
+          .eq('id', userId)
+          .then(() => undefined, () => undefined);
+      }
+      if (cleanEmail) {
+        await supabase
+          .from('users')
+          .update({ avatar_url: normalizedAvatar })
+          .ilike('email', cleanEmail)
+          .then(() => undefined, () => undefined);
+      }
+    }
+
+    // Keep short preset/HTTPS avatar URLs and nickname synced in Supabase Auth user_metadata
+    // (never store large base64 data URLs inside JWT user_metadata to avoid token bloat)
+    const authMetaPatch: Record<string, unknown> = {};
+    if (patch.name !== undefined) authMetaPatch.full_name = patch.name.trim();
+    if (patch.nickname !== undefined) authMetaPatch.nickname = patch.nickname;
+    if (derivedUsername !== undefined) authMetaPatch.username = derivedUsername;
+    if (
+      normalizedAvatar === null ||
+      (typeof normalizedAvatar === 'string' && !normalizedAvatar.startsWith('data:'))
+    ) {
+      authMetaPatch.avatar_url = normalizedAvatar;
+    }
+    if (Object.keys(authMetaPatch).length > 0) {
+      await supabase.auth.updateUser({ data: authMetaPatch }).catch(() => undefined);
+    }
+
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Unable to sync profile.' };
   }
 }
 
-interface RawStoryRow {
-  id: string;
-  author_id: string;
-  title: string;
-  summary: string;
-  body: string;
-  audio_url: string | null;
-  status: string;
-  likes_count?: number | null;
-  created_at: string;
-  profiles?: { username?: string | null } | Array<{ username?: string | null }> | null;
+type RawStoryRow = Record<string, unknown>;
+
+const WRITER_PORTAL_VISITED_PREFIX = 'lorethos_writer_portal_visited_';
+
+export function markWriterPortalVisited(userId: string): void {
+  if (typeof window === 'undefined' || !userId) return;
+  try {
+    window.localStorage.setItem(`${WRITER_PORTAL_VISITED_PREFIX}${userId}`, new Date().toISOString());
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function hasVisitedWriterPortal(userId: string): boolean {
+  if (typeof window === 'undefined' || !userId) return false;
+  try {
+    return Boolean(window.localStorage.getItem(`${WRITER_PORTAL_VISITED_PREFIX}${userId}`));
+  } catch {
+    return false;
+  }
+}
+
+export function extractRawAuthorId(row: RawStoryRow): string {
+  const candidates = [row.author_id, row.user_id, row.writer_id, row.created_by, row.owner_id];
+  for (const val of candidates) {
+    if (typeof val === 'string' && val.trim()) {
+      return val.trim();
+    }
+  }
+  return '';
+}
+
+function isMissingColumnOrSchemaError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === '42703' || error.code === 'PGRST204' || error.code === 'PGRST200') return true;
+  const msg = (error.message || '').toLowerCase();
+  return (
+    msg.includes('does not exist') ||
+    msg.includes('schema cache') ||
+    msg.includes('could not find')
+  );
+}
+
+export function mapRawStoryRowToWriterStory(
+  row: RawStoryRow,
+  authorMap: Map<string, string> = new Map()
+): WriterStory {
+  const profilesField = row.profiles as
+    | { username?: string | null }
+    | Array<{ username?: string | null }>
+    | null
+    | undefined;
+  const joined = Array.isArray(profilesField) ? profilesField[0] : profilesField;
+  const authorId = extractRawAuthorId(row);
+
+  const inlineAuthorName = [
+    row.author_username,
+    row.author_name,
+    row.author,
+    row.writer_name,
+  ].find((v): v is string => typeof v === 'string' && v.trim().length > 0);
+
+  const authorUsername =
+    (typeof joined?.username === 'string' && joined.username.trim()) ||
+    (authorId ? authorMap.get(authorId) : undefined) ||
+    inlineAuthorName ||
+    'Lorethos Writer';
+
+  const summary = [row.summary, row.synopsis, row.subtitle].find(
+    (v): v is string => typeof v === 'string' && v.trim().length > 0
+  ) || '';
+
+  let body = '';
+  if (typeof row.body === 'string') {
+    body = row.body;
+  } else if (typeof row.content === 'string') {
+    body = row.content;
+  } else if (Array.isArray(row.content)) {
+    body = row.content.filter((item): item is string => typeof item === 'string').join('\n\n');
+  }
+
+  const rawStatus =
+    typeof row.status === 'string'
+      ? row.status
+      : typeof row.publication_status === 'string'
+      ? row.publication_status
+      : 'published';
+
+  const createdAt =
+    (typeof row.created_at === 'string' && row.created_at) ||
+    (typeof row.updated_at === 'string' && row.updated_at) ||
+    new Date().toISOString();
+
+  return {
+    id: String(row.id || ''),
+    author_id: authorId,
+    author_username: authorUsername,
+    title: typeof row.title === 'string' && row.title.trim() ? row.title : 'Untitled Story',
+    summary,
+    body,
+    audio_url: typeof row.audio_url === 'string' && row.audio_url ? row.audio_url : null,
+    status: rawStatus.trim().toLowerCase() === 'draft' ? 'draft' : 'published',
+    likes_count: typeof row.likes_count === 'number' ? Math.max(0, row.likes_count) : 0,
+    created_at: createdAt,
+  };
+}
+
+export function filterManageableRowsForAuthor(
+  rows: RawStoryRow[],
+  authorId: string,
+  isAdmin: boolean,
+  authorAliases: string[] = []
+): RawStoryRow[] {
+  if (isAdmin) return rows;
+  const cleanAuthorId = authorId.trim().toLowerCase();
+  const aliasSet = new Set(
+    authorAliases.map((a) => a.trim().toLowerCase()).filter(Boolean)
+  );
+
+  return rows.filter((row) => {
+    const rowAuthorId = extractRawAuthorId(row).toLowerCase();
+    if (rowAuthorId) {
+      return rowAuthorId === cleanAuthorId;
+    }
+
+    const rowAuthorName = [
+      row.author_username,
+      row.author_name,
+      row.author,
+      row.writer_name,
+    ].find((v): v is string => typeof v === 'string' && v.trim().length > 0);
+
+    if (rowAuthorName && aliasSet.size > 0) {
+      return aliasSet.has(rowAuthorName.trim().toLowerCase());
+    }
+
+    // If stories table lacks any author attribution column, avoid hiding writer submissions silently
+    return typeof row.body === 'string' || typeof row.summary === 'string';
+  });
 }
 
 async function resolveStoriesWithAuthorUsernames(rows: RawStoryRow[]): Promise<WriterStory[]> {
-  if (!supabase || rows.length === 0) return [];
+  if (rows.length === 0) return [];
 
   const missingAuthorIds = new Set<string>();
   for (const row of rows) {
-    const joined = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles;
-    if (!joined?.username && row.author_id) {
-      missingAuthorIds.add(row.author_id);
+    const profilesField = row.profiles as
+      | { username?: string | null }
+      | Array<{ username?: string | null }>
+      | null
+      | undefined;
+    const joined = Array.isArray(profilesField) ? profilesField[0] : profilesField;
+    const rowAuthorId = extractRawAuthorId(row);
+    if (!joined?.username && rowAuthorId) {
+      missingAuthorIds.add(rowAuthorId);
     }
   }
 
   const authorMap = new Map<string, string>();
-  if (missingAuthorIds.size > 0) {
+  if (supabase && missingAuthorIds.size > 0) {
+    const ids = Array.from(missingAuthorIds);
     const { data: profileRows } = await supabase
       .from('profiles')
       .select('id, username')
-      .in('id', Array.from(missingAuthorIds));
+      .in('id', ids);
     if (Array.isArray(profileRows)) {
       for (const p of profileRows) {
         if (p.id && p.username) {
-          authorMap.set(p.id, p.username);
+          authorMap.set(String(p.id), String(p.username));
+        }
+      }
+    }
+
+    const stillMissing = ids.filter((id) => !authorMap.has(id));
+    if (stillMissing.length > 0) {
+      const { data: userRows } = await supabase
+        .from('users')
+        .select('id, username, nickname, name')
+        .in('id', stillMissing);
+      if (Array.isArray(userRows)) {
+        for (const u of userRows) {
+          const display = u.username || u.nickname || u.name;
+          if (u.id && display) {
+            authorMap.set(String(u.id), String(display));
+          }
         }
       }
     }
   }
 
-  return rows.map((row) => {
-    const joined = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles;
-    const authorUsername =
-      joined?.username || authorMap.get(row.author_id) || 'Lorethos Writer';
+  return rows.map((row) => mapRawStoryRowToWriterStory(row, authorMap));
+}
 
-    return {
-      id: row.id,
-      author_id: row.author_id,
-      author_username: authorUsername,
-      title: row.title || 'Untitled Story',
-      summary: row.summary || '',
-      body: row.body || '',
-      audio_url: row.audio_url || null,
-      status: row.status === 'draft' ? 'draft' : 'published',
-      likes_count: typeof row.likes_count === 'number' ? Math.max(0, row.likes_count) : 0,
-      created_at: row.created_at,
-    };
-  });
+async function selectAllStoryRowsOrdered(): Promise<{
+  rows: RawStoryRow[];
+  error?: string;
+}> {
+  if (!supabase) return { rows: [] };
+
+  const orderedRes = await supabase
+    .from('stories')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (!orderedRes.error) {
+    return { rows: (orderedRes.data || []) as RawStoryRow[] };
+  }
+
+  if (isMissingColumnOrSchemaError(orderedRes.error)) {
+    const plainRes = await supabase.from('stories').select('*');
+    if (!plainRes.error) {
+      return { rows: (plainRes.data || []) as RawStoryRow[] };
+    }
+    return { rows: [], error: plainRes.error.message };
+  }
+
+  return { rows: [], error: orderedRes.error.message };
 }
 
 export async function fetchPublishedWriterStories(): Promise<{
@@ -403,23 +677,22 @@ export async function fetchPublishedWriterStories(): Promise<{
       .eq('status', 'published')
       .order('created_at', { ascending: false });
 
-    if (error) {
-      // Retry without FK join in case foreign key alias isn't configured yet
-      const fallbackRes = await supabase
-        .from('stories')
-        .select('id, author_id, title, summary, body, audio_url, status, likes_count, created_at')
-        .eq('status', 'published')
-        .order('created_at', { ascending: false });
-
-      if (fallbackRes.error) {
-        return { stories: [], error: fallbackRes.error.message };
-      }
-      const mapped = await resolveStoriesWithAuthorUsernames((fallbackRes.data || []) as RawStoryRow[]);
+    if (!error && Array.isArray(data)) {
+      const mapped = await resolveStoriesWithAuthorUsernames(data as RawStoryRow[]);
       return { stories: mapped };
     }
 
-    const mapped = await resolveStoriesWithAuthorUsernames((data || []) as RawStoryRow[]);
-    return { stories: mapped };
+    // Schema-adaptive fallback when author_id, profiles join, or optional columns differ
+    const fallback = await selectAllStoryRowsOrdered();
+    if (fallback.error) {
+      return { stories: [], error: fallback.error };
+    }
+    const mappedAll = await resolveStoriesWithAuthorUsernames(fallback.rows);
+    return {
+      stories: mappedAll.filter(
+        (story) => story.status === 'published' && story.body.trim().length > 0
+      ),
+    };
   } catch (err) {
     return {
       stories: [],
@@ -430,7 +703,8 @@ export async function fetchPublishedWriterStories(): Promise<{
 
 export async function fetchManageableWriterStories(
   authorId: string,
-  isAdmin: boolean
+  isAdmin: boolean,
+  authorAliases: string[] = []
 ): Promise<{ stories: WriterStory[]; error?: string }> {
   if (!isSupabaseConfigured || !supabase) {
     return { stories: [], error: 'Supabase is not configured.' };
@@ -447,23 +721,24 @@ export async function fetchManageableWriterStories(
     }
 
     const { data, error } = await query;
-    if (error) {
-      let fallbackQuery = supabase
-        .from('stories')
-        .select('id, author_id, title, summary, body, audio_url, status, likes_count, created_at')
-        .order('created_at', { ascending: false });
-      if (!isAdmin) {
-        fallbackQuery = fallbackQuery.eq('author_id', authorId);
-      }
-      const fallbackRes = await fallbackQuery;
-      if (fallbackRes.error) {
-        return { stories: [], error: fallbackRes.error.message };
-      }
-      const mapped = await resolveStoriesWithAuthorUsernames((fallbackRes.data || []) as RawStoryRow[]);
+    if (!error && Array.isArray(data)) {
+      const mapped = await resolveStoriesWithAuthorUsernames(data as RawStoryRow[]);
       return { stories: mapped };
     }
 
-    const mapped = await resolveStoriesWithAuthorUsernames((data || []) as RawStoryRow[]);
+    // Schema-adaptive fallback: handles missing stories.author_id, user_id/writer_id aliases, or missing FK join
+    const fallback = await selectAllStoryRowsOrdered();
+    if (fallback.error) {
+      return { stories: [], error: fallback.error };
+    }
+
+    const scopedRows = filterManageableRowsForAuthor(
+      fallback.rows,
+      authorId,
+      isAdmin,
+      authorAliases
+    );
+    const mapped = await resolveStoriesWithAuthorUsernames(scopedRows);
     return { stories: mapped };
   } catch (err) {
     return {
@@ -508,6 +783,7 @@ export async function uploadTrailerAudioToBucket(
 
 export async function createWriterStory(input: {
   authorId: string;
+  authorUsername?: string;
   title: string;
   summary: string;
   body: string;
@@ -517,26 +793,51 @@ export async function createWriterStory(input: {
     return { error: 'Supabase is not configured.' };
   }
 
+  const cleanTitle = input.title.trim();
   const formattedSummary = formatTrailerSummaryWithLorethosCta(input.summary, input.title);
-  const { data, error } = await supabase
-    .from('stories')
-    .insert({
-      author_id: input.authorId,
-      title: input.title.trim(),
-      summary: formattedSummary,
-      body: input.body.trim(),
-      audio_url: input.audioUrl || null,
-      status: 'published',
-    })
-    .select('id, author_id, title, summary, body, audio_url, status, likes_count, created_at')
-    .single();
+  const cleanBody = input.body.trim();
+  const authorDisplay = input.authorUsername?.trim() || 'Lorethos Writer';
 
-  if (error || !data) {
-    return { error: error?.message || 'Failed to publish story.' };
+  const baseFields: Record<string, unknown> = {
+    title: cleanTitle,
+    summary: formattedSummary,
+    body: cleanBody,
+    audio_url: input.audioUrl || null,
+    status: 'published',
+  };
+
+  const payloadCandidates: Array<Record<string, unknown>> = [
+    { author_id: input.authorId, ...baseFields },
+    { user_id: input.authorId, ...baseFields },
+    { writer_id: input.authorId, ...baseFields },
+    { created_by: input.authorId, ...baseFields },
+    { author: authorDisplay, ...baseFields },
+    baseFields,
+  ];
+
+  let lastErrorMessage = 'Failed to publish story.';
+
+  for (const payload of payloadCandidates) {
+    const { data, error } = await supabase
+      .from('stories')
+      .insert(payload)
+      .select('*')
+      .single();
+
+    if (!error && data) {
+      const resolved = await resolveStoriesWithAuthorUsernames([data as RawStoryRow]);
+      return { story: resolved[0] };
+    }
+
+    if (error) {
+      lastErrorMessage = error.message;
+      if (!isMissingColumnOrSchemaError(error)) {
+        return { error: error.message };
+      }
+    }
   }
 
-  const resolved = await resolveStoriesWithAuthorUsernames([data as RawStoryRow]);
-  return { story: resolved[0] };
+  return { error: lastErrorMessage };
 }
 
 export async function updateWriterStory(
@@ -562,7 +863,7 @@ export async function updateWriterStory(
       audio_url: input.audioUrl ?? null,
     })
     .eq('id', storyId)
-    .select('id, author_id, title, summary, body, audio_url, status, likes_count, created_at')
+    .select('*')
     .single();
 
   if (error || !data) {

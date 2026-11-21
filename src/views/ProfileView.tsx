@@ -8,6 +8,12 @@ import {
   type AchievementIconKey,
 } from '../utils/readerAchievements';
 import {
+  canAccessWriterStudio,
+  hasVisitedWriterPortal,
+} from '../lib/writerStories';
+import { ReaderAvatar } from '../components/ReaderAvatar';
+import { HighlightColor } from '../types';
+import {
   Camera,
   Check,
   CheckCircle2,
@@ -28,6 +34,11 @@ import {
   Compass,
   Bookmark,
   Lock,
+  Feather,
+  Highlighter,
+  Search,
+  Pencil,
+  X,
 } from 'lucide-react';
 
 const ACHIEVEMENT_ICON_MAP: Record<AchievementIconKey, React.ComponentType<{ className?: string }>> = {
@@ -41,6 +52,30 @@ const ACHIEVEMENT_ICON_MAP: Record<AchievementIconKey, React.ComponentType<{ cla
   bookmark: Bookmark,
 };
 
+const PROFILE_HIGHLIGHT_SWATCHES: Record<
+  HighlightColor,
+  { label: string; dot: string; accentBorder: string; tintBg: string }
+> = {
+  terracotta: {
+    label: 'Terracotta',
+    dot: 'bg-[#C85A32]',
+    accentBorder: 'border-[#C85A32]/35',
+    tintBg: 'bg-[#C85A32]/[0.06]',
+  },
+  gold: {
+    label: 'Ochre Gold',
+    dot: 'bg-amber-500',
+    accentBorder: 'border-amber-500/40',
+    tintBg: 'bg-amber-500/[0.07]',
+  },
+  sage: {
+    label: 'Forest Sage',
+    dot: 'bg-emerald-600',
+    accentBorder: 'border-emerald-600/35',
+    tintBg: 'bg-emerald-600/[0.06]',
+  },
+};
+
 export const ProfileView: React.FC = () => {
   const {
     user,
@@ -49,6 +84,9 @@ export const ProfileView: React.FC = () => {
     highlights,
     paragraphBookmarks,
     updateProfile,
+    updateHighlight,
+    removeHighlight,
+    refreshUserRole,
     navigate,
     buildHref,
   } = useApp();
@@ -61,19 +99,41 @@ export const ProfileView: React.FC = () => {
   const [savingForm, setSavingForm] = useState(false);
   const [processingUpload, setProcessingUpload] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [imageLoadError, setImageLoadError] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [achievementFilter, setAchievementFilter] = useState<'all' | 'unlocked' | 'locked'>('all');
 
+  const [highlightQuery, setHighlightQuery] = useState('');
+  const [highlightFilter, setHighlightFilter] = useState<'all' | 'notes' | HighlightColor>('all');
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteText, setEditingNoteText] = useState('');
+  const [editingNoteColor, setEditingNoteColor] = useState<HighlightColor>('terracotta');
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      void refreshUserRole();
+    }
+  }, [isAuthenticated, refreshUserRole]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#highlights-notes') {
+      const timer = window.setTimeout(() => {
+        document.getElementById('highlights-notes')?.scrollIntoView({ behavior: 'smooth' });
+      }, 120);
+      return () => window.clearTimeout(timer);
+    }
+  }, []);
 
   useEffect(() => {
     setDraftName(user.name || 'Guest Reader');
     setDraftNickname(user.nickname || '');
     setDraftBio(user.bio || '');
     setDraftAvatar(user.avatar);
-    setImageLoadError(false);
   }, [user.id, user.name, user.nickname, user.bio, user.avatar]);
+
+  const hasWriterAccess = isAuthenticated && canAccessWriterStudio(user.role);
+  const writerPortalSaved = hasWriterAccess && hasVisitedWriterPortal(user.id);
 
   const previewDisplayName = (draftNickname.trim() || draftName.trim() || 'Reader');
   const rank = computeReaderRank(user, stories);
@@ -145,7 +205,6 @@ export const ProfileView: React.FC = () => {
 
   const handleSelectPreset = async (presetSrc: string, presetLabel: string) => {
     setStatusMessage(null);
-    setImageLoadError(false);
     setDraftAvatar(presetSrc);
     const result = await updateProfile({ avatar: presetSrc });
     if (!result.ok) {
@@ -157,7 +216,6 @@ export const ProfileView: React.FC = () => {
 
   const handleClearAvatar = async () => {
     setStatusMessage(null);
-    setImageLoadError(false);
     setDraftAvatar(undefined);
     const result = await updateProfile({ avatar: null });
     if (!result.ok) {
@@ -173,7 +231,6 @@ export const ProfileView: React.FC = () => {
     setProcessingUpload(true);
     try {
       const croppedDataUrl = await processGalleryImageFile(file);
-      setImageLoadError(false);
       setDraftAvatar(croppedDataUrl);
       const result = await updateProfile({ avatar: croppedDataUrl });
       if (!result.ok) {
@@ -264,26 +321,58 @@ export const ProfileView: React.FC = () => {
           </div>
         )}
 
+        {hasWriterAccess && (
+          <section
+            aria-label="Writer Studio quick access"
+            className="editorial-card rounded-2xl border border-[#C85A32]/35 bg-[#2D142C] text-[#F9F6F0] p-6 sm:p-7 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-6"
+          >
+            <div className="space-y-2 max-w-2xl">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-sans-ui font-semibold uppercase tracking-[0.18em] text-[#C85A32]">
+                <Feather className="w-3.5 h-3.5" />
+                <span>Approved Writer Side</span>
+                <span className="opacity-40">&middot;</span>
+                <span>Role: {user.role}</span>
+                {writerPortalSaved && (
+                  <>
+                    <span className="opacity-40">&middot;</span>
+                    <span className="text-emerald-300">Quick-Access Linked</span>
+                  </>
+                )}
+              </div>
+              <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white">
+                Your Private Writer Studio Desk
+              </h2>
+              <p className="font-reader text-xs sm:text-sm text-white/80 leading-relaxed">
+                Open your Lorethos publishing desk directly from your profile anytime to submit new stories, upload trailer audio, and edit or manage your published works—no need to search for your invite link again.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 shrink-0 font-sans-ui">
+              <a
+                href={buildHref('writer')}
+                onClick={(e) => handleLink(e, 'writer')}
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold shadow-sm transition-colors whitespace-nowrap"
+              >
+                <Feather className="w-4 h-4" />
+                <span>Open Writer Studio</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          </section>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* Left Column: Live Profile Preview + Details Form */}
           <section className="lg:col-span-5 space-y-6">
             {/* Live Preview Card */}
-            <div className="p-6 rounded-2xl bg-white dark:bg-[#1E111E] sepia:bg-[#EDE3D5] border border-[#2D142C]/12 dark:border-white/12 sepia:border-[#2C1E18]/15 shadow-xs space-y-5">
+            <div className="editorial-card p-6 rounded-2xl bg-white dark:bg-[#1E111E] sepia:bg-[#EDE3D5] border border-[#2D142C]/12 dark:border-white/12 sepia:border-[#2C1E18]/15 shadow-xs space-y-5">
               <div className="flex items-start gap-4">
                 <div className="relative w-24 h-24 rounded-full overflow-hidden border-2 border-[#C85A32] bg-[#2D142C] text-[#F9F6F0] flex items-center justify-center shrink-0 shadow-sm">
-                  {draftAvatar && !imageLoadError ? (
-                    <img
-                      src={draftAvatar}
-                      alt={previewDisplayName}
-                      referrerPolicy="no-referrer"
-                      onError={() => setImageLoadError(true)}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <span className="font-display text-3xl font-bold select-none">
-                      {previewDisplayName.charAt(0).toUpperCase()}
-                    </span>
-                  )}
+                  <ReaderAvatar
+                    src={draftAvatar}
+                    name={previewDisplayName}
+                    initialClassName="font-display text-3xl font-bold select-none leading-none"
+                  />
                 </div>
 
                 <div className="min-w-0 flex-1 space-y-1.5 pt-1">
@@ -742,6 +831,296 @@ export const ProfileView: React.FC = () => {
               })}
             </div>
           )}
+        </section>
+
+        {/* Saved Highlights & Personal Story Notes */}
+        <section
+          id="highlights-notes"
+          aria-labelledby="profile-highlights-heading"
+          className="p-6 sm:p-8 rounded-2xl bg-white dark:bg-[#1E111E] sepia:bg-[#EDE3D5] border border-[#2D142C]/12 dark:border-white/12 sepia:border-[#2C1E18]/15 shadow-xs space-y-6 scroll-mt-24"
+        >
+          {(() => {
+            const notesCount = highlights.filter((h) => Boolean(h.note && h.note.trim())).length;
+            const trimmedQ = highlightQuery.trim().toLowerCase();
+            const filteredHighlights = highlights.filter((hl) => {
+              if (highlightFilter === 'notes' && (!hl.note || !hl.note.trim())) return false;
+              if (
+                (highlightFilter === 'terracotta' ||
+                  highlightFilter === 'gold' ||
+                  highlightFilter === 'sage') &&
+                hl.color !== highlightFilter
+              ) {
+                return false;
+              }
+              if (!trimmedQ) return true;
+              return (
+                hl.storyTitle.toLowerCase().includes(trimmedQ) ||
+                hl.chapterTitle.toLowerCase().includes(trimmedQ) ||
+                (hl.selectedText || '').toLowerCase().includes(trimmedQ) ||
+                hl.excerpt.toLowerCase().includes(trimmedQ) ||
+                (hl.note || '').toLowerCase().includes(trimmedQ)
+              );
+            });
+
+            return (
+              <>
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/12 pb-5">
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#C85A32] font-sans-ui block">
+                      Margin Annotations
+                    </span>
+                    <div className="flex flex-wrap items-baseline gap-3">
+                      <h2
+                        id="profile-highlights-heading"
+                        className="font-display text-2xl sm:text-3xl font-bold tracking-tight"
+                      >
+                        Saved Highlights &amp; Personal Notes
+                      </h2>
+                      <span className="text-xs font-sans-ui font-semibold text-[#C85A32] tabular-nums">
+                        {highlights.length} {highlights.length === 1 ? 'Highlight' : 'Highlights'} &middot; {notesCount}{' '}
+                        {notesCount === 1 ? 'Personal Note' : 'Personal Notes'}
+                      </span>
+                    </div>
+                    <p className="text-xs sm:text-sm font-reader opacity-75 max-w-2xl">
+                      Revisit any highlighted line or personal paragraph note you saved while reading stories, edit your thoughts anytime, or jump straight back into that exact passage.
+                    </p>
+                  </div>
+
+                  {highlights.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 font-sans-ui text-xs">
+                      <div className="relative">
+                        <label htmlFor="profile-highlights-search" className="sr-only">
+                          Search highlights and personal notes
+                        </label>
+                        <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 opacity-50 pointer-events-none" />
+                        <input
+                          id="profile-highlights-search"
+                          type="search"
+                          value={highlightQuery}
+                          onChange={(e) => setHighlightQuery(e.target.value)}
+                          placeholder="Search notes or passages..."
+                          className="pl-8 pr-3 py-1.5 rounded-lg border border-[#2D142C]/18 dark:border-white/18 sepia:border-[#2C1E18]/20 bg-[#F9F6F0]/70 dark:bg-[#160C16]/70 sepia:bg-[#F4ECE1]/70 text-xs focus:outline-none focus:border-[#C85A32] w-52 sm:w-60"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {highlights.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 font-sans-ui text-xs">
+                    {(
+                      [
+                        { id: 'all', label: `All (${highlights.length})` },
+                        { id: 'notes', label: `With Notes (${notesCount})` },
+                        { id: 'terracotta', label: 'Terracotta' },
+                        { id: 'gold', label: 'Ochre Gold' },
+                        { id: 'sage', label: 'Forest Sage' },
+                      ] as const
+                    ).map((tab) => {
+                      const active = highlightFilter === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setHighlightFilter(tab.id)}
+                          className={`px-3 py-1.5 rounded-lg border font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 tabular-nums ${
+                            active
+                              ? 'bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] border-[#2D142C] dark:border-white'
+                              : 'border-[#2D142C]/15 dark:border-white/15 sepia:border-[#2C1E18]/20 opacity-75 hover:opacity-100 hover:border-[#C85A32]'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {highlights.length === 0 ? (
+                  <div className="p-8 rounded-xl border border-dashed border-[#2D142C]/18 dark:border-white/18 sepia:border-[#2C1E18]/20 text-center space-y-3">
+                    <div className="w-11 h-11 rounded-full bg-[#C85A32]/12 text-[#C85A32] flex items-center justify-center mx-auto">
+                      <Highlighter className="w-5 h-5" />
+                    </div>
+                    <div className="space-y-1 max-w-md mx-auto">
+                      <h3 className="font-display text-lg font-bold">No Saved Highlights or Notes Yet</h3>
+                      <p className="text-xs font-reader opacity-75 leading-relaxed">
+                        Open any story chapter, select a line or tap <strong className="text-[#C85A32]">Highlight / Note</strong> beside any paragraph, and your personal margin thoughts will gather here for review.
+                      </p>
+                    </div>
+                    <a
+                      href={buildHref('stories')}
+                      onClick={(e) => handleLink(e, 'stories')}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold font-sans-ui transition-colors whitespace-nowrap"
+                    >
+                      <span>Browse Stories to Read</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                ) : filteredHighlights.length === 0 ? (
+                  <div className="py-8 text-center text-xs font-sans-ui opacity-70">
+                    No highlights match your current search or filter.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {filteredHighlights.map((hl) => {
+                      const swatch = PROFILE_HIGHLIGHT_SWATCHES[hl.color] || PROFILE_HIGHLIGHT_SWATCHES.terracotta;
+                      const isEditing = editingNoteId === hl.id;
+                      const readerParams = {
+                        slug: hl.storySlug,
+                        chapterNumber: hl.chapterNumber,
+                        paragraph: hl.paragraphIndex,
+                        highlight: hl.id,
+                      };
+
+                      return (
+                        <article
+                          key={hl.id}
+                          className={`rounded-xl p-5 border ${swatch.accentBorder} ${swatch.tintBg} flex flex-col justify-between gap-4`}
+                        >
+                          <div className="space-y-3">
+                            <div className="flex items-start justify-between gap-2 text-[11px] font-sans-ui">
+                              <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                <span
+                                  className={`w-2.5 h-2.5 rounded-full shrink-0 ${swatch.dot}`}
+                                  aria-hidden="true"
+                                />
+                                <span className="font-semibold text-[#C85A32] truncate">
+                                  {hl.storyTitle}
+                                </span>
+                                <span className="opacity-40">&middot;</span>
+                                <span className="opacity-75 tabular-nums whitespace-nowrap">
+                                  Ch. {hl.chapterNumber}
+                                </span>
+                                <span className="opacity-40">&middot;</span>
+                                <span className="opacity-75 tabular-nums whitespace-nowrap">
+                                  Para. {hl.paragraphIndex + 1}
+                                </span>
+                              </div>
+                              <span className="opacity-60 whitespace-nowrap shrink-0 tabular-nums">
+                                {hl.createdAt}
+                              </span>
+                            </div>
+
+                            <blockquote className="font-reader text-sm italic leading-relaxed opacity-90 line-clamp-4">
+                              &ldquo;{hl.selectedText || hl.excerpt}&rdquo;
+                            </blockquote>
+
+                            {isEditing ? (
+                              <form
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  updateHighlight(hl.id, {
+                                    color: editingNoteColor,
+                                    note: editingNoteText.trim() || null,
+                                  });
+                                  setEditingNoteId(null);
+                                }}
+                                className="p-3 rounded-lg bg-white/85 dark:bg-[#160C16]/85 sepia:bg-[#F4ECE1]/90 border border-[#C85A32]/30 space-y-2.5 font-sans-ui text-xs"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-semibold text-[11px] opacity-80">Edit Personal Note</span>
+                                  <div className="flex items-center gap-1.5">
+                                    {(['terracotta', 'gold', 'sage'] as const).map((color) => (
+                                      <button
+                                        key={color}
+                                        type="button"
+                                        onClick={() => setEditingNoteColor(color)}
+                                        aria-label={PROFILE_HIGHLIGHT_SWATCHES[color].label}
+                                        className={`w-4 h-4 rounded-full ${PROFILE_HIGHLIGHT_SWATCHES[color].dot} cursor-pointer transition-transform ${
+                                          editingNoteColor === color
+                                            ? 'ring-2 ring-offset-1 ring-[#C85A32] scale-110'
+                                            : 'opacity-65 hover:opacity-100'
+                                        }`}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                                <textarea
+                                  rows={2}
+                                  maxLength={1000}
+                                  value={editingNoteText}
+                                  onChange={(e) => setEditingNoteText(e.target.value)}
+                                  placeholder="Write your personal reflection on this passage..."
+                                  className="w-full px-3 py-2 rounded-lg border border-current/20 bg-transparent text-xs focus:outline-none focus:border-[#C85A32]"
+                                />
+                                <div className="flex items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingNoteId(null)}
+                                    className="px-2.5 py-1 rounded border border-current/20 opacity-80 hover:opacity-100 cursor-pointer inline-flex items-center gap-1"
+                                  >
+                                    <X className="w-3 h-3" />
+                                    <span>Cancel</span>
+                                  </button>
+                                  <button
+                                    type="submit"
+                                    className="px-3 py-1 rounded bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold cursor-pointer inline-flex items-center gap-1"
+                                  >
+                                    <Check className="w-3 h-3" />
+                                    <span>Save Note</span>
+                                  </button>
+                                </div>
+                              </form>
+                            ) : hl.note ? (
+                              <div className="p-3 rounded-lg bg-white/70 dark:bg-[#160C16]/70 sepia:bg-[#F4ECE1]/80 border border-current/10 text-xs font-sans-ui leading-relaxed">
+                                <span className="font-semibold text-[#C85A32] mr-1.5">Personal Note:</span>
+                                <span className="opacity-90 whitespace-pre-line">{hl.note}</span>
+                              </div>
+                            ) : (
+                              <p className="text-[11px] font-sans-ui italic opacity-60">
+                                Highlighted passage — add a personal note to capture your thoughts.
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between gap-3 pt-2 border-t border-current/10 text-xs font-sans-ui">
+                            <div className="flex items-center gap-3">
+                              {!isEditing && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingNoteId(hl.id);
+                                    setEditingNoteText(hl.note || '');
+                                    setEditingNoteColor(hl.color);
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#C85A32] hover:underline cursor-pointer whitespace-nowrap"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                  <span>{hl.note ? 'Edit Note' : 'Add Note'}</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => removeHighlight(hl.id)}
+                                aria-label={`Delete highlight from ${hl.storyTitle}`}
+                                className="inline-flex items-center gap-1 text-[11px] opacity-60 hover:opacity-100 hover:text-red-600 dark:hover:text-red-400 cursor-pointer whitespace-nowrap"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>Delete</span>
+                              </button>
+                            </div>
+
+                            <a
+                              href={buildHref('reader', readerParams)}
+                              onClick={(e) => {
+                                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                                e.preventDefault();
+                                navigate('reader', readerParams);
+                              }}
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-[#C85A32] hover:underline whitespace-nowrap shrink-0"
+                            >
+                              <span>Revisit Passage</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </a>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </section>
       </div>
     </div>

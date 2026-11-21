@@ -27,13 +27,19 @@ import {
   getCurrentSupabaseAuthAndProfile,
   normalizeWriterRole,
   updateSupabaseUserProfile,
+  uploadProfileAvatarToSupabaseStorage,
 } from '../lib/writerStories';
 import {
   createCommentInSupabase,
   deleteCommentInSupabase,
   fetchCommentsFromSupabase,
 } from '../lib/chapterComments';
+import { normalizePortableAvatarUrl } from '../utils/avatarImage';
 import { recordNightReadingTelemetry } from '../utils/readerAchievements';
+import {
+  DailyStreakSummary,
+  touchDailyEngagementStreak,
+} from '../utils/dailyEngagementStreak';
 
 export interface RouteParams {
   slug?: string;
@@ -49,6 +55,7 @@ export interface RouteParams {
   interests?: string;
   redirect?: string;
   reauth?: string;
+  tab?: string;
 }
 
 export function sanitizeInternalRedirect(target?: string | null): string | null {
@@ -239,6 +246,7 @@ interface AppContextType {
   activeProgress: { story: Story; chapterNumber: number; progressPercent: number; lastReadAt: string } | null;
 
   // Reading goals (calendar rollover & deduplication)
+  dailyStreak: DailyStreakSummary;
   updateReadingGoal: (partial: Partial<ReadingGoal>) => void;
   logChapterCompleted: (chapterId?: string) => boolean;
 
@@ -430,7 +438,7 @@ function loadGuestProfileOverlay(): GuestProfileOverlay {
     return {
       name: typeof parsed.name === 'string' && parsed.name.trim().length >= 2 ? parsed.name.trim() : undefined,
       nickname: typeof parsed.nickname === 'string' && parsed.nickname.trim() ? parsed.nickname.trim() : undefined,
-      avatar: typeof parsed.avatar === 'string' && parsed.avatar.trim() ? parsed.avatar.trim() : undefined,
+      avatar: normalizePortableAvatarUrl(parsed.avatar),
       bio: typeof parsed.bio === 'string' && parsed.bio.trim() ? parsed.bio.trim() : undefined,
     };
   } catch {
@@ -516,6 +524,7 @@ export function buildHref(route: string, params?: RouteParams): string {
       const safeRedirect = sanitizeInternalRedirect(params?.redirect);
       if (safeRedirect) qs.set('redirect', safeRedirect);
       if (params?.reauth) qs.set('reauth', params.reauth);
+      if (params?.tab) qs.set('tab', params.tab);
       const queryStr = qs.toString();
       return queryStr ? `/account?${queryStr}` : '/account';
     }
@@ -605,9 +614,11 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
   if (cleanPath === '/account') {
     const safeRedirect = sanitizeInternalRedirect(qs.get('redirect'));
     const reauth = qs.get('reauth') || undefined;
+    const tab = qs.get('tab') || undefined;
     const params: RouteParams = {};
     if (safeRedirect) params.redirect = safeRedirect;
     if (reauth) params.reauth = reauth;
+    if (tab) params.tab = tab;
     return {
       route: 'account',
       params
@@ -706,8 +717,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     data: null
   });
   const [checkoutStatusMessage, setCheckoutStatusMessage] = useState<string | null>(null);
+  const [dailyStreak, setDailyStreak] = useState<DailyStreakSummary>(() =>
+    touchDailyEngagementStreak(
+      user.id,
+      new Date(),
+      user.readingGoal.streakDays,
+      user.readingGoal.bestStreakDays
+    )
+  );
 
   const progressSaveTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setDailyStreak(
+      touchDailyEngagementStreak(
+        user.id,
+        new Date(),
+        user.readingGoal.streakDays,
+        user.readingGoal.bestStreakDays
+      )
+    );
+  }, [user.id, user.readingGoal.streakDays, user.readingGoal.bestStreakDays, currentRoute]);
 
   // Persist reader display preferences locally
   useEffect(() => {
@@ -858,8 +888,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 : loadSavedPreferredGenres(sessionJson.user.id);
 
             let resolvedRole = normalizeWriterRole(sessionJson.user.role);
+            let resolvedAvatar = normalizePortableAvatarUrl(sessionJson.user.avatar);
+            let resolvedNickname = sessionJson.user.nickname;
+            let resolvedBio = sessionJson.user.bio;
             if (isSupabaseConfigured && supabase) {
               try {
+                const sbState = await getCurrentSupabaseAuthAndProfile();
                 const { data: sbSession } = await supabase.auth.getSession();
                 const sbAuthId = sbSession.session?.user?.id;
                 const sbLookup = await fetchLatestSupabaseUserRole(
@@ -874,13 +908,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                       ? 'owner'
                       : sbLookup.role;
                 }
+                const sbAvatar = normalizePortableAvatarUrl(sbState.profile?.avatar_url);
+                if (!resolvedAvatar && sbAvatar) {
+                  resolvedAvatar = sbAvatar;
+                } else if (resolvedAvatar && !sbAvatar && sbAuthId) {
+                  void updateSupabaseUserProfile(
+                    sbAuthId,
+                    { avatar: resolvedAvatar, nickname: resolvedNickname, bio: resolvedBio },
+                    sessionJson.user.email
+                  );
+                }
+                if (!resolvedNickname && sbState.profile?.nickname) {
+                  resolvedNickname = sbState.profile.nickname;
+                }
+                if (!resolvedBio && sbState.profile?.bio) {
+                  resolvedBio = sbState.profile.bio;
+                }
               } catch {
-                // Keep Express session role if Supabase lookup fails
+                // Keep Express session fields if Supabase lookup fails
               }
             }
 
             const serverUser: UserProfile = {
               ...sessionJson.user,
+              avatar: resolvedAvatar,
+              nickname: resolvedNickname,
+              bio: resolvedBio,
               role: resolvedRole,
               preferredGenres: savedGenres,
               readingGoal: reconcileReadingGoalRollover(
@@ -1103,13 +1156,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         requiresEmailVerification?: boolean;
       }>(res);
 
-      // Synchronize Supabase Auth session & live role from public.users alongside Express login
+      // Synchronize Supabase Auth session & live role/profile from Supabase alongside Express login
       let sbLoginOk = false;
       let sbUserId: string | null = null;
       let sbEmail: string | null = null;
       let sbRole: WriterRole = 'reader';
       let sbRoleSource: 'users' | 'profiles' | 'none' = 'none';
       let sbUsername = '';
+      let sbAvatar: string | undefined;
+      let sbNickname: string | undefined;
+      let sbBio: string | undefined;
 
       if (isSupabaseConfigured && supabase) {
         try {
@@ -1137,14 +1193,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           }
 
-          // Always fetch live role directly from public.users in Supabase (never rely on localStorage)
-          const liveLookup = await fetchLatestSupabaseUserRole(
-            sbUserId || data?.user?.id,
-            sbEmail || cleanEmail
-          );
+          // Always fetch live role & saved profile fields directly from Supabase
+          const [liveLookup, sbProfileState] = await Promise.all([
+            fetchLatestSupabaseUserRole(
+              sbUserId || data?.user?.id,
+              sbEmail || cleanEmail
+            ),
+            getCurrentSupabaseAuthAndProfile(),
+          ]);
           if (liveLookup.source !== 'none') {
             sbRole = liveLookup.role;
             sbRoleSource = liveLookup.source;
+          }
+          sbAvatar = normalizePortableAvatarUrl(sbProfileState.profile?.avatar_url);
+          sbNickname = sbProfileState.profile?.nickname || undefined;
+          sbBio = sbProfileState.profile?.bio || undefined;
+          if (!sbUsername && sbProfileState.profile?.username) {
+            sbUsername = sbProfileState.profile.username;
           }
         } catch {
           // Keep Express flow independent if Supabase is unavailable
@@ -1160,7 +1225,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ...guestBase,
             id: sbUserId,
             name: displayName,
-            nickname: displayName,
+            nickname: sbNickname || displayName,
+            avatar: sbAvatar,
+            bio: sbBio,
             email: sbEmail || cleanEmail,
             role: sbRole,
             preferredGenres: savedGenres,
@@ -1183,12 +1250,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : sbRoleSource === 'profiles' && expressRole !== 'owner'
           ? sbRole
           : expressRole;
+      const expressAvatar = normalizePortableAvatarUrl(data.user.avatar);
+      const finalAvatar = expressAvatar || sbAvatar;
+      if (expressAvatar && !sbAvatar && sbUserId) {
+        void updateSupabaseUserProfile(
+          sbUserId,
+          { avatar: expressAvatar, nickname: data.user.nickname, bio: data.user.bio },
+          sbEmail || data.user.email
+        );
+      }
       const savedGenres =
         Array.isArray(data.user.preferredGenres) && data.user.preferredGenres.length > 0
           ? data.user.preferredGenres
           : loadSavedPreferredGenres(data.user.id);
       setUser({
         ...data.user,
+        avatar: finalAvatar,
+        nickname: data.user.nickname || sbNickname,
+        bio: data.user.bio || sbBio,
         role: finalRole,
         preferredGenres: savedGenres,
         readingGoal: reconcileReadingGoalRollover(
@@ -1410,27 +1489,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { ok: false, error: 'Bio must be 200 characters or fewer.' };
       }
 
+      let normalizedPatch = { ...patch };
+      if (patch.avatar !== undefined) {
+        if (patch.avatar === null) {
+          normalizedPatch.avatar = null;
+        } else {
+          const normalizedUrl = normalizePortableAvatarUrl(patch.avatar);
+          normalizedPatch.avatar = normalizedUrl ?? null;
+        }
+      }
+
       if (!isAuthenticated) {
         const nextUser: UserProfile = {
           ...user,
-          name: patch.name !== undefined ? patch.name.trim() : user.name,
+          name: normalizedPatch.name !== undefined ? normalizedPatch.name.trim() : user.name,
           nickname:
-            patch.nickname === null
+            normalizedPatch.nickname === null
               ? undefined
-              : patch.nickname !== undefined
-              ? patch.nickname.trim() || undefined
+              : normalizedPatch.nickname !== undefined
+              ? normalizedPatch.nickname.trim() || undefined
               : user.nickname,
           avatar:
-            patch.avatar === null
+            normalizedPatch.avatar === null
               ? undefined
-              : patch.avatar !== undefined
-              ? patch.avatar.trim() || undefined
+              : normalizedPatch.avatar !== undefined
+              ? normalizedPatch.avatar.trim() || undefined
               : user.avatar,
           bio:
-            patch.bio === null
+            normalizedPatch.bio === null
               ? undefined
-              : patch.bio !== undefined
-              ? patch.bio.trim() || undefined
+              : normalizedPatch.bio !== undefined
+              ? normalizedPatch.bio.trim() || undefined
               : user.bio,
         };
         saveGuestProfileOverlay({
@@ -1443,11 +1532,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { ok: true, user: nextUser };
       }
 
+      // If uploading a gallery photo while authenticated with Supabase, try cloud storage first
+      // so the avatar loads cleanly via HTTPS across all phones and web origins.
+      let supabaseUserId: string | null = null;
+      let supabaseEmail: string | null = user.email || null;
+      if (isSupabaseConfigured && supabase) {
+        try {
+          const { data: sbSess } = await supabase.auth.getSession();
+          supabaseUserId = sbSess.session?.user?.id || null;
+          supabaseEmail = sbSess.session?.user?.email || supabaseEmail;
+          if (
+            supabaseUserId &&
+            typeof normalizedPatch.avatar === 'string' &&
+            normalizedPatch.avatar.startsWith('data:image/')
+          ) {
+            const uploadedUrl = await uploadProfileAvatarToSupabaseStorage(
+              normalizedPatch.avatar,
+              supabaseUserId
+            );
+            if (uploadedUrl) {
+              normalizedPatch = { ...normalizedPatch, avatar: uploadedUrl };
+            }
+          }
+        } catch {
+          // Keep compact inline data URL fallback when storage bucket upload is unavailable
+        }
+      }
+
       try {
         const res = await apiFetch('/api/account/profile', {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(patch),
+          body: JSON.stringify(normalizedPatch),
         });
         const data = await parseJsonSafe<{ user?: UserProfile; error?: string }>(res);
 
@@ -1455,53 +1571,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const nextUser: UserProfile = {
             ...user,
             ...data.user,
+            avatar: normalizePortableAvatarUrl(data.user.avatar ?? normalizedPatch.avatar ?? user.avatar),
             preferredGenres: user.preferredGenres,
             readingGoal: user.readingGoal,
           };
           setUser(nextUser);
 
-          if (isSupabaseConfigured && supabase) {
-            const { data: sbSess } = await supabase.auth.getSession();
-            if (sbSess.session?.user?.id) {
-              void updateSupabaseUserProfile(sbSess.session.user.id, patch);
-            }
+          if (supabaseUserId) {
+            await updateSupabaseUserProfile(supabaseUserId, normalizedPatch, supabaseEmail);
           }
 
           return { ok: true, user: nextUser };
         }
 
-        if (res.status === 401 && isSupabaseConfigured && supabase) {
-          const { data: sbSess } = await supabase.auth.getSession();
-          if (sbSess.session?.user?.id) {
-            const sbRes = await updateSupabaseUserProfile(sbSess.session.user.id, patch);
-            if (!sbRes.ok) {
-              return { ok: false, error: sbRes.error || 'Could not update your profile.' };
-            }
-            const nextUser: UserProfile = {
-              ...user,
-              name: patch.name !== undefined ? patch.name.trim() : user.name,
-              nickname:
-                patch.nickname === null
-                  ? undefined
-                  : patch.nickname !== undefined
-                  ? patch.nickname.trim() || undefined
-                  : user.nickname,
-              avatar:
-                patch.avatar === null
-                  ? undefined
-                  : patch.avatar !== undefined
-                  ? patch.avatar.trim() || undefined
-                  : user.avatar,
-              bio:
-                patch.bio === null
-                  ? undefined
-                  : patch.bio !== undefined
-                  ? patch.bio.trim() || undefined
-                  : user.bio,
-            };
-            setUser(nextUser);
-            return { ok: true, user: nextUser };
+        if (res.status === 401 && supabaseUserId) {
+          const sbRes = await updateSupabaseUserProfile(supabaseUserId, normalizedPatch, supabaseEmail);
+          if (!sbRes.ok) {
+            return { ok: false, error: sbRes.error || 'Could not update your profile.' };
           }
+          const nextUser: UserProfile = {
+            ...user,
+            name: normalizedPatch.name !== undefined ? normalizedPatch.name.trim() : user.name,
+            nickname:
+              normalizedPatch.nickname === null
+                ? undefined
+                : normalizedPatch.nickname !== undefined
+                ? normalizedPatch.nickname.trim() || undefined
+                : user.nickname,
+            avatar:
+              normalizedPatch.avatar === null
+                ? undefined
+                : normalizedPatch.avatar !== undefined
+                ? normalizedPatch.avatar.trim() || undefined
+                : user.avatar,
+            bio:
+              normalizedPatch.bio === null
+                ? undefined
+                : normalizedPatch.bio !== undefined
+                ? normalizedPatch.bio.trim() || undefined
+                : user.bio,
+          };
+          setUser(nextUser);
+          return { ok: true, user: nextUser };
         }
 
         return { ok: false, error: data?.error || `Failed to update profile (${res.status}).` };
@@ -1590,6 +1701,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (rounded >= 10) {
         recordNightReadingTelemetry(user.id);
+        setDailyStreak(
+          touchDailyEngagementStreak(
+            user.id,
+            new Date(),
+            user.readingGoal.streakDays,
+            user.readingGoal.bestStreakDays
+          )
+        );
       }
 
       if (isAuthenticated) {
@@ -1713,11 +1832,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (wasLogged) {
         recordNightReadingTelemetry(user.id);
+        setDailyStreak(
+          touchDailyEngagementStreak(
+            user.id,
+            new Date(),
+            user.readingGoal.streakDays + 1,
+            user.readingGoal.bestStreakDays + 1
+          )
+        );
       }
 
       return wasLogged;
     },
-    [syncGoalToServer, user.id]
+    [syncGoalToServer, user.id, user.readingGoal.streakDays, user.readingGoal.bestStreakDays]
   );
 
   const saveHighlight = (input: HighlightInput): TextHighlight => {
@@ -2142,6 +2269,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [isAuthenticated, user]
   );
 
+  const formatProgressTimestamp = (raw?: string): string => {
+    if (!raw || typeof raw !== 'string') return 'Recently';
+    const trimmed = raw.trim();
+    if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
+      const parsed = new Date(trimmed);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      }
+    }
+    return trimmed;
+  };
+
   const activeProgress = React.useMemo(() => {
     const progressKeys = Object.keys(user.readingProgress);
     if (progressKeys.length === 0) return null;
@@ -2153,7 +2292,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       story,
       chapterNumber: progressData.chapterNumber,
       progressPercent: progressData.progressPercent,
-      lastReadAt: progressData.lastReadAt
+      lastReadAt: formatProgressTimestamp(progressData.lastReadAt)
     };
   }, [user.readingProgress, stories]);
 
@@ -2204,6 +2343,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         hasAccessToChapter,
         setTheme,
         activeProgress,
+        dailyStreak,
         updateReadingGoal,
         logChapterCompleted,
         highlights,

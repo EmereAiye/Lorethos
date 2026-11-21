@@ -65,6 +65,8 @@ const MainContent: React.FC = () => {
     clearCheckoutStatusMessage
   } = useApp();
 
+  const [progressDockDismissed, setProgressDockDismissed] = React.useState(false);
+
   const renderCurrentView = () => {
     switch (currentRoute) {
       case 'home':
@@ -138,11 +140,11 @@ const MainContent: React.FC = () => {
       <PaystackModal />
       <ReadingPreferencesModal />
 
-      {/* Global Floating Reading Progress Dock */}
-      {currentRoute !== 'reader' && activeProgress && (
+      {/* Global Floating Reading Progress Dock (Desktop XL+ only so footer & mobile remain clear) */}
+      {currentRoute !== 'reader' && activeProgress && !progressDockDismissed && (
         <aside
           aria-label="Reading progress quick dock"
-          className="fixed bottom-5 left-5 z-40 hidden md:flex items-center gap-3 p-2.5 pr-4 rounded-xl shadow-2xl border border-[#C85A32]/40 bg-white/95 dark:bg-[#1E111E]/95 sepia:bg-[#EDE3D5]/95 backdrop-blur-md text-xs font-sans-ui"
+          className="fixed bottom-5 left-5 z-40 hidden xl:flex items-center gap-3 p-2.5 pr-3 rounded-xl shadow-2xl border border-[#C85A32]/35 bg-white/95 dark:bg-[#1E111E]/95 sepia:bg-[#EDE3D5]/95 backdrop-blur-md text-xs font-sans-ui"
         >
           <img
             src={activeProgress.story.coverImage}
@@ -153,7 +155,7 @@ const MainContent: React.FC = () => {
             <div className="flex items-center gap-1.5 text-[10px] text-[#C85A32] font-bold uppercase tracking-wider">
               <span>Reading Progress</span>
               <span>&middot;</span>
-              <span className="font-mono">{activeProgress.progressPercent}%</span>
+              <span className="font-mono tabular-nums">{activeProgress.progressPercent}%</span>
             </div>
             <span className="font-display text-sm font-bold truncate max-w-[170px] text-current">
               {activeProgress.story.title}
@@ -181,10 +183,19 @@ const MainContent: React.FC = () => {
                 chapterNumber: activeProgress.chapterNumber
               });
             }}
-            className="ml-2 px-3 py-1.5 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs rounded-lg transition-colors shadow-2xs shrink-0"
+            className="ml-1 px-3 py-1.5 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs rounded-lg transition-colors shadow-2xs shrink-0"
           >
             Resume &rarr;
           </a>
+          <button
+            type="button"
+            onClick={() => setProgressDockDismissed(true)}
+            aria-label="Hide reading progress dock"
+            title="Hide reading progress dock"
+            className="p-1 rounded-md opacity-55 hover:opacity-100 hover:bg-current/10 transition-all cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </aside>
       )}
     </div>

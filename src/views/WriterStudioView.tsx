@@ -9,6 +9,7 @@ import {
   ShieldAlert,
   Trash2,
   Upload,
+  UserCheck,
   X,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
@@ -23,6 +24,7 @@ import {
   formatTrailerSummaryWithLorethosCta,
   getCurrentSupabaseAuthAndProfile,
   isWriterStudioAdmin,
+  markWriterPortalVisited,
   normalizeWriterRole,
   updateWriterStory,
   uploadTrailerAudioToBucket,
@@ -31,7 +33,7 @@ import type { SupabaseProfile, UserProfile, WriterStory } from '../types';
 import { ExclusiveAudioPlayer } from '../components/ExclusiveAudioPlayer';
 
 export const WriterStudioView: React.FC = () => {
-  const { navigate, buildHref, refreshUserRole } = useApp();
+  const { navigate, buildHref, refreshUserRole, user } = useApp();
 
   const [checkingAccess, setCheckingAccess] = useState(true);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
@@ -57,10 +59,10 @@ export const WriterStudioView: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const loadStories = useCallback(async (uid: string, isAdmin: boolean) => {
+  const loadStories = useCallback(async (uid: string, isAdmin: boolean, aliases: string[] = []) => {
     setStoriesLoading(true);
     setStoriesError(null);
-    const res = await fetchManageableWriterStories(uid, isAdmin);
+    const res = await fetchManageableWriterStories(uid, isAdmin, aliases);
     if (res.error) {
       setStoriesError(res.error);
     }
@@ -141,7 +143,17 @@ export const WriterStudioView: React.FC = () => {
         effectiveProfile &&
         canAccessWriterStudio(effectiveProfile.role)
       ) {
-        await loadStories(effectiveUserId, isWriterStudioAdmin(effectiveProfile.role));
+        markWriterPortalVisited(effectiveUserId);
+        if (user.id && user.id !== 'guest') {
+          markWriterPortalVisited(user.id);
+        }
+        const aliases = [
+          effectiveProfile.username,
+          user.name,
+          user.nickname,
+          user.email,
+        ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+        await loadStories(effectiveUserId, isWriterStudioAdmin(effectiveProfile.role), aliases);
       } else {
         setSubmittedStories([]);
       }
@@ -151,7 +163,7 @@ export const WriterStudioView: React.FC = () => {
       setSubmittedStories([]);
       setCheckingAccess(false);
     }
-  }, [loadStories, refreshUserRole]);
+  }, [loadStories, refreshUserRole, user.email, user.id, user.name, user.nickname]);
 
   useEffect(() => {
     void refreshAccessAndData();
@@ -252,6 +264,7 @@ export const WriterStudioView: React.FC = () => {
       } else {
         const createRes = await createWriterStory({
           authorId: authUserId,
+          authorUsername: profile.username,
           title: cleanTitle,
           summary: cleanSummary,
           body: cleanBody,
@@ -265,7 +278,10 @@ export const WriterStudioView: React.FC = () => {
       }
 
       resetForm();
-      await loadStories(authUserId, isWriterStudioAdmin(profile.role));
+      const aliases = [profile.username, user.name, user.nickname, user.email].filter(
+        (v): v is string => typeof v === 'string' && v.trim().length > 0
+      );
+      await loadStories(authUserId, isWriterStudioAdmin(profile.role), aliases);
     } finally {
       setUploadingAudio(false);
       setSubmitting(false);
@@ -367,31 +383,49 @@ export const WriterStudioView: React.FC = () => {
               {editingStoryId ? 'Edit Published Story' : 'Publish a New Story'}
             </h1>
             <p className="text-xs font-sans-ui text-[#2D142C]/70 dark:text-white/70">
-              Signed in as <strong className="text-[#2D142C] dark:text-white">{profile.username}</strong>{' '}
-              <span className="inline-block ml-1 px-2 py-0.5 rounded bg-[#C85A32]/15 text-[#C85A32] font-semibold uppercase text-[10px]">
+              Signed in as <strong className="text-[#2D142C] dark:text-white">{profile.username}</strong>
+              {' · '}
+              <span className="text-[#C85A32] font-semibold uppercase tracking-wide text-[11px]">
                 {profile.role}
               </span>
+              {' · '}
+              <span className="opacity-85">Saved to your Profile quick-access desk</span>
             </p>
           </div>
 
-          <a
-            href={buildHref('home')}
-            onClick={(e) => {
-              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-              e.preventDefault();
-              navigate('home');
-            }}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] text-xs font-semibold font-sans-ui self-start sm:self-auto"
-          >
-            <Home className="w-3.5 h-3.5" />
-            <span>View Reader Feed</span>
-          </a>
+          <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+            <a
+              href={buildHref('profile')}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                navigate('profile');
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] text-xs font-semibold font-sans-ui"
+            >
+              <UserCheck className="w-3.5 h-3.5 text-[#C85A32]" />
+              <span>My Profile Desk</span>
+            </a>
+
+            <a
+              href={buildHref('home')}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                navigate('home');
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] text-xs font-semibold font-sans-ui"
+            >
+              <Home className="w-3.5 h-3.5" />
+              <span>View Reader Feed</span>
+            </a>
+          </div>
         </header>
 
         {/* Writer Posting Form */}
         <form
           onSubmit={handleSubmit}
-          className="p-6 sm:p-8 rounded-2xl bg-white dark:bg-[#1E111E] sepia:bg-[#FAF4EB] border border-[#2D142C]/12 dark:border-white/12 shadow-xs space-y-5 font-sans-ui"
+          className="editorial-card p-6 sm:p-8 rounded-2xl bg-white dark:bg-[#1E111E] sepia:bg-[#FAF4EB] border border-[#2D142C]/12 dark:border-white/12 shadow-xs space-y-5 font-sans-ui"
         >
           <div className="flex items-center justify-between gap-3">
             <h2 className="font-display text-xl font-bold flex items-center gap-2">

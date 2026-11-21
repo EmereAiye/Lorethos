@@ -886,7 +886,16 @@ export async function createApp(options?: {
             res.status(400).json({ error: 'Invalid profile image format or size.' });
             return;
           }
-          patch.avatar = val;
+          const lowerVal = val.toLowerCase();
+          const presetMatch = [
+            'avatar_bronze_scribe',
+            'avatar_moonlit_reader',
+            'avatar_celestial_astrolabe',
+            'avatar_baobab_lantern',
+            'avatar_crimson_mask',
+            'avatar_sunlit_chronicler',
+          ].find((stem) => lowerVal.includes(stem));
+          patch.avatar = presetMatch ? `/assets/images/avatars/${presetMatch}.jpg` : val;
         }
       } else {
         res.status(400).json({ error: 'Invalid profile image payload.' });

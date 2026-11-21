@@ -734,7 +734,7 @@ class LorethosRepository {
       name: user.name,
       nickname: user.nickname || undefined,
       email: user.email,
-      avatar: user.avatar || undefined,
+      avatar: normalizeServerAvatarUrl(user.avatar),
       bio: user.bio || undefined,
       role: user.role,
       subscription: user.subscription,
@@ -795,7 +795,7 @@ class LorethosRepository {
         name: u.name,
         nickname: u.nickname || undefined,
         email: String(u.email).trim().toLowerCase(),
-        avatar: u.avatar || undefined,
+        avatar: normalizeServerAvatarUrl(u.avatar),
         bio: u.bio || undefined,
         passwordHash: u.password_hash,
         role: u.role === 'owner' || String(u.email).trim().toLowerCase() === getOwnerEmail() ? 'owner' : 'reader',
@@ -893,7 +893,7 @@ class LorethosRepository {
       user.nickname = patch.nickname === null ? undefined : patch.nickname.trim() || undefined;
     }
     if (patch.avatar !== undefined) {
-      user.avatar = patch.avatar === null ? undefined : patch.avatar.trim() || undefined;
+      user.avatar = patch.avatar === null ? undefined : normalizeServerAvatarUrl(patch.avatar);
     }
     if (patch.bio !== undefined) {
       user.bio = patch.bio === null ? undefined : patch.bio.trim() || undefined;
@@ -1730,6 +1730,35 @@ class LorethosRepository {
 
     return { liked, count: updated.length };
   }
+}
+
+const SERVER_PRESET_AVATAR_STEMS = [
+  'avatar_bronze_scribe',
+  'avatar_moonlit_reader',
+  'avatar_celestial_astrolabe',
+  'avatar_baobab_lantern',
+  'avatar_crimson_mask',
+  'avatar_sunlit_chronicler',
+] as const;
+
+export function normalizeServerAvatarUrl(raw: string | undefined | null): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const val = raw.trim();
+  if (!val) return undefined;
+  const lower = val.toLowerCase();
+  if (
+    lower.startsWith('javascript:') ||
+    lower.startsWith('vbscript:') ||
+    lower.startsWith('data:image/svg+xml')
+  ) {
+    return undefined;
+  }
+  for (const stem of SERVER_PRESET_AVATAR_STEMS) {
+    if (lower.includes(stem)) {
+      return `/assets/images/avatars/${stem}.jpg`;
+    }
+  }
+  return val;
 }
 
 export const repo = new LorethosRepository();

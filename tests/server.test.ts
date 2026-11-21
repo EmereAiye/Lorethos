@@ -1624,7 +1624,7 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     assert.equal(presetData.user.name, 'Sade Oladipo');
     assert.equal(presetData.user.nickname, 'MoonlitKeeper');
     assert.equal(presetData.user.bio, 'Collector of bronze-age chronicles and twilight verse.');
-    assert.equal(presetData.user.avatar, '/assets/avatar_moonlit_reader.jpg');
+    assert.equal(presetData.user.avatar, '/assets/images/avatars/avatar_moonlit_reader.jpg');
 
     // 5. Valid update with base64 gallery image
     const sampleDataUrl = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA==';
@@ -1776,6 +1776,218 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     assert.equal(byId['flame-keeper'].unlocked, true);
     assert.equal(byId['genre-explorer'].unlocked, true);
     assert.equal(byId['archivist'].unlocked, true);
+  });
+
+  test('dailyEngagementStreak starts at 1, holds idempotently same day, increments consecutive days, and resets on gaps', async () => {
+    const { advanceDailyEngagementRecord, formatLocalCalendarDate } = await import(
+      '../src/utils/dailyEngagementStreak'
+    );
+
+    const day1 = new Date(2026, 10, 18, 9, 15, 0);
+    const day1Iso = formatLocalCalendarDate(day1);
+    assert.equal(day1Iso, '2026-11-18');
+
+    const step1 = advanceDailyEngagementRecord(
+      { streakDays: 0, bestStreakDays: 0, lastActiveDate: '', activeDates: [] },
+      day1
+    );
+    assert.equal(step1.streakDays, 1);
+    assert.equal(step1.bestStreakDays, 1);
+    assert.equal(step1.lastActiveDate, '2026-11-18');
+
+    // Same calendar day remains idempotent
+    const sameDay = advanceDailyEngagementRecord(step1, new Date(2026, 10, 18, 22, 30, 0));
+    assert.equal(sameDay.streakDays, 1);
+    assert.equal(sameDay.activeDates.length, 1);
+
+    // Consecutive day increments streak
+    const day2 = new Date(2026, 10, 19, 8, 0, 0);
+    const step2 = advanceDailyEngagementRecord(sameDay, day2);
+    assert.equal(step2.streakDays, 2);
+    assert.equal(step2.bestStreakDays, 2);
+    assert.equal(step2.lastActiveDate, '2026-11-19');
+
+    // Day 3 increments streak to 3
+    const day3 = new Date(2026, 10, 20, 19, 45, 0);
+    const step3 = advanceDailyEngagementRecord(step2, day3);
+    assert.equal(step3.streakDays, 3);
+    assert.equal(step3.bestStreakDays, 3);
+
+    // Skipping a day resets current streak to 1 while preserving bestStreakDays
+    const day5 = new Date(2026, 10, 22, 10, 0, 0);
+    const stepAfterGap = advanceDailyEngagementRecord(step3, day5);
+    assert.equal(stepAfterGap.streakDays, 1);
+    assert.equal(stepAfterGap.bestStreakDays, 3);
+    assert.equal(stepAfterGap.lastActiveDate, '2026-11-22');
+  });
+
+  test('schema-adaptive writer story helpers resolve rows when stories.author_id is absent', async () => {
+    const {
+      extractRawAuthorId,
+      mapRawStoryRowToWriterStory,
+      filterManageableRowsForAuthor,
+    } = await import('../src/lib/writerStories');
+
+    const legacyRows = [
+      {
+        id: 'st-user-col',
+        user_id: 'writer-uuid-1',
+        author_username: 'EmereAiye',
+        title: 'Lanterns Over Brass',
+        summary: 'A bronze bell awakens the city. Read the full story on Lorethos.',
+        body: 'Long narrative body...',
+        status: 'published',
+        created_at: '2026-11-18T13:50:57.935Z',
+      },
+      {
+        id: 'st-name-only',
+        author: 'EmereAiye',
+        title: 'Harmattan Letters',
+        synopsis: 'Whispered vows in red dust.',
+        content: ['Paragraph one.', 'Paragraph two.'],
+        publication_status: 'published',
+        created_at: '2026-11-17T10:00:00.000Z',
+      },
+      {
+        id: 'st-other-writer',
+        writer_id: 'other-writer-uuid',
+        author_username: 'OtherAuthor',
+        title: 'Someone Else Story',
+        summary: 'Another tale.',
+        body: 'Different body...',
+        status: 'published',
+        created_at: '2026-11-16T10:00:00.000Z',
+      },
+    ];
+
+    assert.equal(extractRawAuthorId(legacyRows[0]), 'writer-uuid-1');
+    assert.equal(extractRawAuthorId(legacyRows[1]), '');
+    assert.equal(extractRawAuthorId(legacyRows[2]), 'other-writer-uuid');
+
+    const mapped0 = mapRawStoryRowToWriterStory(legacyRows[0]);
+    assert.equal(mapped0.author_id, 'writer-uuid-1');
+    assert.equal(mapped0.author_username, 'EmereAiye');
+
+    const mapped1 = mapRawStoryRowToWriterStory(legacyRows[1]);
+    assert.equal(mapped1.author_username, 'EmereAiye');
+    assert.equal(mapped1.summary, 'Whispered vows in red dust.');
+    assert.equal(mapped1.body, 'Paragraph one.\n\nParagraph two.');
+
+    const scoped = filterManageableRowsForAuthor(legacyRows, 'writer-uuid-1', false, ['EmereAiye']);
+    assert.deepEqual(
+      scoped.map((r) => r.id),
+      ['st-user-col', 'st-name-only']
+    );
+
+    const adminScoped = filterManageableRowsForAuthor(legacyRows, 'writer-uuid-1', true, []);
+    assert.equal(adminScoped.length, 3);
+  });
+
+  test('normalizePortableAvatarUrl and server profile endpoint heal legacy Vite preset paths and block unsafe schemes', async () => {
+    const { normalizePortableAvatarUrl } = await import('../src/utils/avatarImage');
+    const { normalizeServerAvatarUrl } = await import('../server/db');
+
+    assert.equal(
+      normalizePortableAvatarUrl('/src/assets/images/avatar_bronze_scribe_1795168939968.jpg'),
+      '/assets/images/avatars/avatar_bronze_scribe.jpg'
+    );
+    assert.equal(
+      normalizePortableAvatarUrl('https://lorethos-two.vercel.app/assets/avatar_moonlit_reader_1795168940080-Xk91Ab.jpg'),
+      '/assets/images/avatars/avatar_moonlit_reader.jpg'
+    );
+    assert.equal(
+      normalizePortableAvatarUrl('https://cdn.example.com/avatars/reader-1.webp'),
+      'https://cdn.example.com/avatars/reader-1.webp'
+    );
+    assert.equal(
+      normalizePortableAvatarUrl('data:image/jpeg;base64,/9j/4AAQSkZJRg=='),
+      'data:image/jpeg;base64,/9j/4AAQSkZJRg=='
+    );
+    assert.equal(normalizePortableAvatarUrl('javascript:alert(1)'), undefined);
+    assert.equal(normalizePortableAvatarUrl('data:image/svg+xml;base64,PHN2Zz4='), undefined);
+    assert.equal(
+      normalizeServerAvatarUrl('/assets/avatar_baobab_lantern_1795168940763-Hash99.jpg'),
+      '/assets/images/avatars/avatar_baobab_lantern.jpg'
+    );
+
+    const profileRes = await fetch(`${baseUrl}/api/account/profile`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: readerCookie,
+      },
+      body: JSON.stringify({
+        nickname: 'ScribeReader',
+        avatar: '/src/assets/images/avatar_bronze_scribe_1795168939968.jpg',
+      }),
+    });
+    assert.equal(profileRes.status, 200);
+    const profileJson = await profileRes.json();
+    assert.equal(profileJson.user.avatar, '/assets/images/avatars/avatar_bronze_scribe.jpg');
+    assert.equal(profileJson.user.nickname, 'ScribeReader');
+  });
+
+  test('highlighted-text annotation with selected spans and personal notes persists across POST, PATCH, GET, and DELETE', async () => {
+    const obsidian = repoRef.getStoryBySlug('the-obsidian-throne')!;
+    const ch1 = obsidian.chapters.find((c) => c.chapterNumber === 1)!;
+    const para0 = ch1.content[0];
+    const selectedSpan = para0.slice(0, Math.min(28, para0.length));
+
+    const createRes = await fetch(`${baseUrl}/api/account/highlights`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: readerCookie,
+      },
+      body: JSON.stringify({
+        storyId: obsidian.id,
+        chapterId: ch1.id,
+        paragraphIndex: 0,
+        excerpt: para0,
+        selectedText: selectedSpan,
+        startOffset: 0,
+        endOffset: selectedSpan.length,
+        color: 'gold',
+        note: 'Key sensory motif of the royal foundry.',
+      }),
+    });
+    assert.equal(createRes.status, 200);
+    const createdData = await createRes.json();
+    assert.ok(Array.isArray(createdData.highlights));
+    const created = createdData.highlights.find(
+      (h: { selectedText?: string }) => h.selectedText === selectedSpan
+    );
+    assert.ok(created, 'Expected created highlight with selected text');
+    assert.equal(created.color, 'gold');
+    assert.equal(created.note, 'Key sensory motif of the royal foundry.');
+
+    const patchRes = await fetch(`${baseUrl}/api/account/highlights/${encodeURIComponent(created.id)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: readerCookie,
+      },
+      body: JSON.stringify({
+        color: 'sage',
+        note: 'Updated personal reflection on the foundry symbolism.',
+      }),
+    });
+    assert.equal(patchRes.status, 200);
+    const patchedData = await patchRes.json();
+    const patched = patchedData.highlights.find((h: { id: string }) => h.id === created.id);
+    assert.equal(patched.color, 'sage');
+    assert.equal(patched.note, 'Updated personal reflection on the foundry symbolism.');
+
+    const deleteRes = await fetch(`${baseUrl}/api/account/highlights/${encodeURIComponent(created.id)}`, {
+      method: 'DELETE',
+      headers: { Cookie: readerCookie },
+    });
+    assert.equal(deleteRes.status, 200);
+    const afterDelete = await deleteRes.json();
+    assert.equal(
+      afterDelete.highlights.some((h: { id: string }) => h.id === created.id),
+      false
+    );
   });
 });
 

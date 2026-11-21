@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp, sanitizeInternalRedirect } from '../context/AppContext';
+import { ReaderAvatar } from '../components/ReaderAvatar';
 import {
   ShieldCheck,
   BookOpen,
@@ -85,6 +86,30 @@ export const AccountView: React.FC = () => {
   );
 
   const pendingRedirectTarget = sanitizeInternalRedirect(routeParams.redirect || pendingAuthRedirect);
+
+  useEffect(() => {
+    const validTabs = new Set([
+      'library',
+      'stats',
+      'goals',
+      'highlights',
+      'bookmarks',
+      'subscription',
+      'settings',
+    ]);
+    if (routeParams.tab && validTabs.has(routeParams.tab)) {
+      setActiveTab(
+        routeParams.tab as
+          | 'library'
+          | 'stats'
+          | 'goals'
+          | 'highlights'
+          | 'bookmarks'
+          | 'subscription'
+          | 'settings'
+      );
+    }
+  }, [routeParams.tab]);
 
   useEffect(() => {
     const sb = supabase;
@@ -403,16 +428,11 @@ export const AccountView: React.FC = () => {
           <div className="p-8 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 rounded-full overflow-hidden bg-[#2D142C] text-[#F9F6F0] flex items-center justify-center font-display text-2xl font-bold border-2 border-[#C85A32] shrink-0">
-                {user.avatar ? (
-                  <img
-                    src={user.avatar}
-                    alt={displayName}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  displayName.charAt(0).toUpperCase()
-                )}
+                <ReaderAvatar
+                  src={user.avatar}
+                  name={displayName}
+                  initialClassName="font-display text-2xl font-bold select-none leading-none"
+                />
               </div>
               <div className="space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
