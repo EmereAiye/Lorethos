@@ -25,10 +25,18 @@ import {
   X,
   MessageSquare,
   Feather,
-  Users
+  Users,
+  Trophy,
+  Mail,
+  RefreshCw,
+  KeyRound,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { ReadingStatisticsDashboard } from '../components/ReadingStatisticsDashboard';
 import { ReadingGoal } from '../components/ReadingGoal';
+import { ReadingLeaderboardSection } from '../components/ReadingLeaderboardSection';
 import { getDisplayName, computeReaderRank, READER_RANK_TIERS } from '../utils/readerProfile';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { canAccessWriterStudio } from '../lib/writerStories';
@@ -61,10 +69,13 @@ export const AccountView: React.FC = () => {
     pendingAuthRedirect,
     readingPromptOpen,
     completePostAuthRedirect,
-    refreshUserRole
+    refreshUserRole,
+    checkEmailVerificationStatus,
+    requestEmailVerification,
+    confirmEmailVerificationCode
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'library' | 'stats' | 'goals' | 'highlights' | 'bookmarks' | 'subscription' | 'settings'>('library');
+  const [activeTab, setActiveTab] = useState<'library' | 'stats' | 'goals' | 'leaderboard' | 'highlights' | 'bookmarks' | 'subscription' | 'settings'>('library');
   const [hlSearch, setHlSearch] = useState('');
   const [hlColorFilter, setHlColorFilter] = useState<'all' | 'terracotta' | 'gold' | 'sage'>('all');
   const [hlNotesOnly, setHlNotesOnly] = useState(false);
@@ -88,6 +99,18 @@ export const AccountView: React.FC = () => {
   const [reauthChecked, setReauthChecked] = useState(
     !(routeParams.reauth === '1' && isSupabaseConfigured)
   );
+  const [emailVerifyExpanded, setEmailVerifyExpanded] = useState(false);
+  const [checkingEmailVerify, setCheckingEmailVerify] = useState(false);
+  const [sendingEmailVerify, setSendingEmailVerify] = useState(false);
+  const [confirmingEmailVerify, setConfirmingEmailVerify] = useState(false);
+  const [emailVerifyCode, setEmailVerifyCode] = useState('');
+  const [showVerifyCodeEntry, setShowVerifyCodeEntry] = useState(false);
+  const [emailVerifyDeliveryMode, setEmailVerifyDeliveryMode] = useState<'email' | 'supabase' | 'preview' | null>(null);
+  const [emailVerifyPreviewCode, setEmailVerifyPreviewCode] = useState<string | null>(null);
+  const [emailVerifyFeedback, setEmailVerifyFeedback] = useState<{
+    type: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
 
   const pendingRedirectTarget = sanitizeInternalRedirect(routeParams.redirect || pendingAuthRedirect);
 
@@ -96,6 +119,7 @@ export const AccountView: React.FC = () => {
       'library',
       'stats',
       'goals',
+      'leaderboard',
       'highlights',
       'bookmarks',
       'subscription',
@@ -107,13 +131,26 @@ export const AccountView: React.FC = () => {
           | 'library'
           | 'stats'
           | 'goals'
+          | 'leaderboard'
           | 'highlights'
           | 'bookmarks'
           | 'subscription'
           | 'settings'
       );
     }
-  }, [routeParams.tab]);
+    if (
+      routeParams.verify === '1' ||
+      (typeof window !== 'undefined' && window.location.hash === '#email-verification')
+    ) {
+      setActiveTab('settings');
+      setEmailVerifyExpanded(true);
+      if (typeof window !== 'undefined') {
+        window.setTimeout(() => {
+          document.getElementById('email-verification')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 120);
+      }
+    }
+  }, [routeParams.tab, routeParams.verify]);
 
   useEffect(() => {
     const sb = supabase;
@@ -178,12 +215,16 @@ export const AccountView: React.FC = () => {
   const isPatron = isAuthenticated && user.subscription.status === 'active';
   const hasWriterAccess = isAuthenticated && canAccessWriterStudio(user.role);
   const isOwner = isAuthenticated && user.role === 'owner';
+  const isWriterOrAdmin = isAuthenticated && (user.role === 'writer' || user.role === 'admin');
   const displayName = getDisplayName(user);
   const rank = computeReaderRank(user, stories);
 
   const unlockedStories = stories.filter(s =>
     isAuthenticated &&
-    (user.unlockedStoryIds.includes(s.id) || (isPatron && s.accessTier === 'subscription') || user.role === 'owner')
+    (isOwner ||
+      (isWriterOrAdmin && !s.writerRequiresPurchase) ||
+      user.unlockedStoryIds.includes(s.id) ||
+      (isPatron && s.accessTier === 'subscription'))
   );
 
   const bookmarkedChapters = stories.flatMap(s =>
@@ -205,6 +246,113 @@ export const AccountView: React.FC = () => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
     navigate(route, params);
+  };
+
+  const handleCheckEmailVerification = async (expandOnCheck = true) => {
+    if (expandOnCheck) {
+      setEmailVerifyExpanded(true);
+    }
+    setCheckingEmailVerify(true);
+    const result = await checkEmailVerificationStatus();
+    setCheckingEmailVerify(false);
+    if (result.error) {
+      setEmailVerifyFeedback({ type: 'error', text: result.error });
+    } else if (result.verified) {
+      setEmailVerifyFeedback({
+        type: 'success',
+        text: result.message || 'Confirmed: your email address is verified.',
+      });
+    } else {
+      setEmailVerifyFeedback({
+        type: 'info',
+        text: 'Your email is not verified yet. Request a verification email or enter your 6-digit code below.',
+      });
+    }
+  };
+
+  const handleToggleEmailVerificationSpot = async () => {
+    const nextExpanded = !emailVerifyExpanded;
+    setEmailVerifyExpanded(nextExpanded);
+    if (nextExpanded) {
+      await handleCheckEmailVerification(false);
+    }
+  };
+
+  const handleOpenEmailVerificationInSettings = async () => {
+    setActiveTab('settings');
+    setEmailVerifyExpanded(true);
+    await handleCheckEmailVerification(false);
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => {
+        document.getElementById('email-verification')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 80);
+    }
+  };
+
+  const handleSendVerificationEmail = async () => {
+    setSendingEmailVerify(true);
+    setEmailVerifyFeedback(null);
+    const res = await requestEmailVerification();
+    setSendingEmailVerify(false);
+
+    if (!res.ok) {
+      setEmailVerifyFeedback({
+        type: 'error',
+        text: res.error || 'Could not send verification email.',
+      });
+      return;
+    }
+
+    if (res.alreadyVerified) {
+      setEmailVerifyPreviewCode(null);
+      setEmailVerifyFeedback({
+        type: 'success',
+        text: res.message || 'Your email address is already verified.',
+      });
+      return;
+    }
+
+    if (res.deliveryMode) {
+      setEmailVerifyDeliveryMode(res.deliveryMode);
+    }
+    if (res.deliveryMode === 'preview' && res.previewCode) {
+      setEmailVerifyPreviewCode(res.previewCode);
+      setShowVerifyCodeEntry(true);
+    } else if (res.deliveryMode === 'email') {
+      setEmailVerifyPreviewCode(null);
+      setShowVerifyCodeEntry(true);
+    } else {
+      setEmailVerifyPreviewCode(null);
+    }
+
+    setEmailVerifyFeedback({
+      type: 'info',
+      text: res.message || 'Verification instructions sent.',
+    });
+  };
+
+  const handleConfirmVerificationCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setConfirmingEmailVerify(true);
+    setEmailVerifyFeedback(null);
+    const res = await confirmEmailVerificationCode(emailVerifyCode);
+    setConfirmingEmailVerify(false);
+
+    if (!res.ok) {
+      setEmailVerifyFeedback({
+        type: 'error',
+        text: res.error || 'Invalid or expired verification code.',
+      });
+      return;
+    }
+
+    setEmailVerifyCode('');
+    setEmailVerifyPreviewCode(null);
+    setShowVerifyCodeEntry(false);
+    setEmailVerifyFeedback({
+      type: 'success',
+      text: res.message || 'Email verified successfully!',
+    });
   };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
@@ -434,6 +582,11 @@ export const AccountView: React.FC = () => {
                     : 'Create Account'}
                 </span>
               </button>
+              {authMode === 'signup' && (
+                <p className="text-[11px] opacity-65 text-center leading-relaxed pt-1">
+                  You can begin reading immediately and verify your email anytime later in Account &rarr; Settings.
+                </p>
+              )}
             </form>
           </div>
         ) : (
@@ -451,7 +604,7 @@ export const AccountView: React.FC = () => {
                   <h1 className="font-display text-2xl font-bold">{displayName}</h1>
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-[#C85A32]/15 text-[#C85A32] border border-[#C85A32]/30 px-2 py-0.5 rounded font-sans-ui">
                     <Award className="w-3 h-3" />
-                    <span>Rank {rank.roman} &middot; {rank.title}</span>
+                    <span>{rank.title}</span>
                   </span>
                   {isOwner && (
                     <span className="text-[11px] font-semibold bg-[#2D142C] text-white px-2 py-0.5 rounded font-sans-ui">
@@ -470,7 +623,15 @@ export const AccountView: React.FC = () => {
                       <span>Editorial Admin</span>
                     </span>
                   )}
-                  {isPatron ? (
+                  {isOwner ? (
+                    <span className="text-[11px] font-semibold bg-[#C85A32] text-white px-2 py-0.5 rounded font-sans-ui">
+                      Total All-Access
+                    </span>
+                  ) : isWriterOrAdmin ? (
+                    <span className="text-[11px] font-semibold bg-emerald-700 text-white px-2 py-0.5 rounded font-sans-ui">
+                      Writer Complimentary Access
+                    </span>
+                  ) : isPatron ? (
                     <span className="text-[11px] font-semibold bg-[#C85A32] text-white px-2 py-0.5 rounded font-sans-ui">
                       Active Subscriber
                     </span>
@@ -480,11 +641,34 @@ export const AccountView: React.FC = () => {
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
-                  {user.nickname && user.nickname.trim() !== user.name.trim()
-                    ? `${user.name} · ${user.email}`
-                    : user.email}
-                </p>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                  <span>
+                    {user.nickname && user.nickname.trim() !== user.name.trim()
+                      ? `${user.name} · ${user.email}`
+                      : user.email}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenEmailVerificationInSettings()}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-semibold text-[11px] transition-colors cursor-pointer ${
+                      user.emailVerified
+                        ? 'bg-emerald-600/12 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-600/20'
+                        : 'bg-amber-500/15 text-amber-800 dark:text-amber-300 hover:bg-amber-500/25'
+                    }`}
+                  >
+                    {user.emailVerified ? (
+                      <>
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Email Verified</span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertCircle className="w-3 h-3" />
+                        <span>Not Verified · Check Settings</span>
+                      </>
+                    )}
+                  </button>
+                </div>
                 {user.bio && (
                   <p className="text-xs font-reader text-[#2D142C]/80 dark:text-white/80 max-w-xl pt-0.5">
                     {user.bio}
@@ -552,7 +736,7 @@ export const AccountView: React.FC = () => {
                 </a>
               )}
 
-              {!isPatron && (
+              {!isPatron && !isOwner && !isWriterOrAdmin && (
                 <button
                   type="button"
                   onClick={() =>
@@ -628,7 +812,7 @@ export const AccountView: React.FC = () => {
           </section>
         )}
 
-        {/* Reader Rank & Completion Progress */}
+        {/* Literary Distinction & Completion Progress */}
         <section className="p-6 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 shadow-xs space-y-4 font-sans-ui">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
@@ -637,7 +821,7 @@ export const AccountView: React.FC = () => {
               </div>
               <div>
                 <div className="text-[11px] uppercase tracking-wider font-semibold text-[#C85A32]">
-                  Reader Rank &amp; Completion
+                  Literary Distinction &amp; Completion
                 </div>
                 <h2 className="font-display text-xl font-bold">
                   {rank.title}
@@ -662,8 +846,8 @@ export const AccountView: React.FC = () => {
             <div className="flex items-center justify-between text-[11px]">
               <span className="font-medium opacity-75">
                 {rank.nextTitle
-                  ? `${rank.remainingToNext} more ${rank.remainingToNext === 1 ? 'chapter' : 'chapters'} to unlock Rank ${READER_RANK_TIERS.find((t) => t.title === rank.nextTitle)?.roman}: ${rank.nextTitle}`
-                  : 'Highest Lorethos Reader Rank unlocked'}
+                  ? `${rank.remainingToNext} more ${rank.remainingToNext === 1 ? 'chapter' : 'chapters'} to unlock ${rank.nextTitle}`
+                  : 'Highest Lorethos Literary Distinction unlocked'}
               </span>
               <span className="font-mono font-semibold text-[#C85A32]">{rank.progressToNextPercent}%</span>
             </div>
@@ -675,7 +859,7 @@ export const AccountView: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-1">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 pt-1">
             {READER_RANK_TIERS.map((tier) => {
               const unlocked = rank.completedChapters >= tier.minChapters;
               const isCurrent = rank.level === tier.level;
@@ -691,7 +875,7 @@ export const AccountView: React.FC = () => {
                   }`}
                 >
                   <div className="flex items-center justify-between font-mono font-bold">
-                    <span>Rank {tier.roman}</span>
+                    <span className="text-[#C85A32]">{tier.roman}</span>
                     <span>{tier.minChapters}+ ch</span>
                   </div>
                   <div className="font-semibold truncate mt-0.5">{tier.title}</div>
@@ -747,6 +931,19 @@ export const AccountView: React.FC = () => {
 
           <button
             type="button"
+            onClick={() => setActiveTab('leaderboard')}
+            className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
+              activeTab === 'leaderboard'
+                ? 'border-[#C85A32] text-[#C85A32] font-semibold'
+                : 'border-transparent text-[#2D142C]/70 dark:text-white/70 hover:text-[#C85A32]'
+            }`}
+          >
+            <Trophy className="w-3.5 h-3.5 text-[#C85A32]" />
+            <span>Leaderboard</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('highlights')}
             className={`py-3 px-4 border-b-2 transition-all cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0 ${
               activeTab === 'highlights'
@@ -794,7 +991,13 @@ export const AccountView: React.FC = () => {
             }`}
           >
             <Settings className="w-3.5 h-3.5" />
-            <span>Preferences</span>
+            <span>Settings &amp; Preferences</span>
+            {!user.emailVerified && (
+              <span
+                title="Email verification pending"
+                className="w-2 h-2 rounded-full bg-amber-500 shrink-0"
+              />
+            )}
           </button>
         </div>
 
@@ -922,6 +1125,11 @@ export const AccountView: React.FC = () => {
 
         {/* Tab 2: Reading Goals */}
         {activeTab === 'goals' && <ReadingGoal variant="full" />}
+
+        {/* Tab 2b: Community Reading Leaderboard */}
+        {activeTab === 'leaderboard' && (
+          <ReadingLeaderboardSection onOpenFullLeaderboard={() => navigate('leaderboard')} />
+        )}
 
         {/* Tab 3: Highlights */}
         {activeTab === 'highlights' && (() => {
@@ -1336,7 +1544,7 @@ export const AccountView: React.FC = () => {
             <div className="p-6 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <h2 className="font-display text-xl font-bold">Membership Status</h2>
-                {isPatron && (
+                {isPatron && !isOwner && (
                   <button
                     type="button"
                     disabled={cancelingSub}
@@ -1356,17 +1564,37 @@ export const AccountView: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-sans-ui">
                 <div className="p-4 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] space-y-1">
                   <span className="text-[#2D142C]/60 dark:text-white/60 block">Plan</span>
-                  <span className="font-bold text-sm capitalize">{user.subscription.plan} Tier</span>
+                  <span className="font-bold text-sm capitalize">
+                    {isOwner
+                      ? 'Owner Total All-Access'
+                      : isWriterOrAdmin
+                      ? 'Writer Complimentary Tier'
+                      : `${user.subscription.plan} Tier`}
+                  </span>
                 </div>
                 <div className="p-4 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] space-y-1">
                   <span className="text-[#2D142C]/60 dark:text-white/60 block">Status</span>
                   <span className="font-bold text-sm capitalize">
-                    {isPatron ? 'Active' : user.subscription.status === 'expired' ? 'Canceled' : 'Free Access'}
+                    {isOwner
+                      ? 'Complimentary · Unrestricted'
+                      : isWriterOrAdmin
+                      ? 'Complimentary (Owner Exclusions Apply)'
+                      : isPatron
+                      ? 'Active'
+                      : user.subscription.status === 'expired'
+                      ? 'Canceled'
+                      : 'Free Access'}
                   </span>
                 </div>
                 <div className="p-4 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] space-y-1">
-                  <span className="text-[#2D142C]/60 dark:text-white/60 block">Payment Provider</span>
-                  <span className="font-bold text-sm">Paystack Hosted Checkout</span>
+                  <span className="text-[#2D142C]/60 dark:text-white/60 block">Billing &amp; Access</span>
+                  <span className="font-bold text-sm">
+                    {isOwner
+                      ? '₦0 · Full Publisher Entitlement'
+                      : isWriterOrAdmin
+                      ? 'Only Owner-Restricted Books Paid'
+                      : 'Paystack Hosted Checkout'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -1416,49 +1644,243 @@ export const AccountView: React.FC = () => {
           </div>
         )}
 
-        {/* Tab 6: Preferences */}
+        {/* Tab 6: Settings & Preferences */}
         {activeTab === 'settings' && (
-          <div className="p-6 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-6 max-w-2xl">
-            <h2 className="font-display text-xl font-bold">Default Reading Preferences</h2>
-
-            <div className="space-y-4 text-xs font-sans-ui">
-              <div>
-                <span className="block font-semibold mb-2">Default Color Theme</span>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['day', 'sepia', 'night'] as const).map(t => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => updateReaderSettings({ theme: t })}
-                      className={`py-2 px-3 rounded border capitalize cursor-pointer ${
-                        readerSettings.theme === t
-                          ? 'border-[#C85A32] font-semibold text-[#C85A32]'
-                          : 'border-[#2D142C]/15 dark:border-white/15'
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
+          <div className="space-y-6 max-w-2xl">
+            {/* Clickable Email Verification Status Spot */}
+            <section
+              id="email-verification"
+              className="rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 overflow-hidden"
+            >
+              <button
+                type="button"
+                onClick={() => void handleToggleEmailVerificationSpot()}
+                aria-expanded={emailVerifyExpanded}
+                className="w-full p-6 text-left flex items-center justify-between gap-4 hover:bg-[#2D142C]/[0.025] dark:hover:bg-white/[0.03] transition-colors cursor-pointer"
+              >
+                <div className="flex items-start gap-3.5 min-w-0">
+                  <div
+                    className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                      user.emailVerified
+                        ? 'bg-emerald-600/15 text-emerald-700 dark:text-emerald-300'
+                        : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                    }`}
+                  >
+                    <Mail className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="font-display text-xl font-bold">Email Verification</h2>
+                      <span
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold font-sans-ui ${
+                          user.emailVerified
+                            ? 'bg-emerald-600/15 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-amber-500/15 text-amber-800 dark:text-amber-300'
+                        }`}
+                      >
+                        {user.emailVerified ? (
+                          <>
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Verified</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3.5 h-3.5" />
+                            <span>Not Verified</span>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    <p className="text-xs font-sans-ui text-[#2D142C]/70 dark:text-white/70 truncate">
+                      {user.emailVerified
+                        ? `${user.email} is confirmed. Click to inspect or re-check status.`
+                        : `${user.email} · Skipped or pending verification. Click here to check status or verify now.`}
+                    </p>
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <span className="block font-semibold mb-2">Default Typeface</span>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['literata', 'garamond', 'sans'] as const).map(f => (
-                    <button
-                      key={f}
-                      type="button"
-                      onClick={() => updateReaderSettings({ font: f })}
-                      className={`py-2 px-3 rounded border capitalize cursor-pointer ${
-                        readerSettings.font === f
-                          ? 'border-[#C85A32] font-semibold text-[#C85A32]'
-                          : 'border-[#2D142C]/15 dark:border-white/15'
+                <div className="flex items-center gap-2 shrink-0 text-xs font-semibold font-sans-ui text-[#C85A32]">
+                  {checkingEmailVerify ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : emailVerifyExpanded ? (
+                    <ChevronUp className="w-4 h-4" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
+                </div>
+              </button>
+
+              {emailVerifyExpanded && (
+                <div className="px-6 pb-6 pt-4 border-t border-[#2D142C]/10 dark:border-white/10 space-y-4 text-xs font-sans-ui">
+                  {user.emailVerified ? (
+                    <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="space-y-0.5 text-emerald-800 dark:text-emerald-200">
+                        <p className="font-semibold flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          <span>Your email address ({user.email}) is verified.</span>
+                        </p>
+                        {user.emailVerifiedAt && (
+                          <p className="text-[11px] opacity-80">
+                            Verified on {new Date(user.emailVerifiedAt).toLocaleDateString()}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        disabled={checkingEmailVerify}
+                        onClick={() => void handleCheckEmailVerification(true)}
+                        className="px-3 py-1.5 rounded-lg border border-emerald-700/30 dark:border-emerald-400/30 text-emerald-800 dark:text-emerald-200 font-semibold hover:bg-emerald-600/10 inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60 shrink-0"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${checkingEmailVerify ? 'animate-spin' : ''}`} />
+                        <span>{checkingEmailVerify ? 'Checking...' : 'Re-check Status'}</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="p-4 rounded-lg bg-amber-50 dark:bg-amber-950/25 border border-amber-200 dark:border-amber-800/50 text-amber-900 dark:text-amber-200 space-y-1">
+                        <p className="font-semibold flex items-center gap-1.5">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span>Email verification has not been completed yet.</span>
+                        </p>
+                        <p className="text-[11px] opacity-85 leading-relaxed">
+                          If you skipped verifying {user.email} when creating your account, send a verification email below or tap Check Verification Status if you already clicked an inbox link.
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <button
+                          type="button"
+                          disabled={sendingEmailVerify}
+                          onClick={() => void handleSendVerificationEmail()}
+                          className="px-4 py-2 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          <Mail className="w-3.5 h-3.5" />
+                          <span>{sendingEmailVerify ? 'Sending...' : 'Send Verification Email'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={checkingEmailVerify}
+                          onClick={() => void handleCheckEmailVerification(true)}
+                          className="px-4 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 hover:border-[#C85A32] font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${checkingEmailVerify ? 'animate-spin' : ''}`} />
+                          <span>{checkingEmailVerify ? 'Checking...' : 'Check Verification Status'}</span>
+                        </button>
+
+                        {!showVerifyCodeEntry && (
+                          <button
+                            type="button"
+                            onClick={() => setShowVerifyCodeEntry(true)}
+                            className="px-3 py-2 rounded-lg text-[#C85A32] font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                            <span>Enter 6-Digit Code</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {emailVerifyDeliveryMode === 'preview' && emailVerifyPreviewCode && (
+                        <div className="p-3.5 rounded-lg bg-[#2D142C]/5 dark:bg-white/5 border border-[#C85A32]/30 space-y-1">
+                          <p className="text-[11px] uppercase tracking-wider font-semibold text-[#C85A32]">
+                            Preview Verification Code (Local / No Mailer Configured)
+                          </p>
+                          <p className="font-mono text-base font-bold tracking-[0.25em]">
+                            {emailVerifyPreviewCode}
+                          </p>
+                        </div>
+                      )}
+
+                      {showVerifyCodeEntry && (
+                        <form onSubmit={handleConfirmVerificationCode} className="flex flex-col sm:flex-row gap-2.5 pt-1">
+                          <div className="flex-1">
+                            <label htmlFor="email-verify-code" className="sr-only">
+                              6-digit verification code
+                            </label>
+                            <input
+                              id="email-verify-code"
+                              type="text"
+                              inputMode="numeric"
+                              maxLength={6}
+                              value={emailVerifyCode}
+                              onChange={(e) => setEmailVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                              placeholder="Enter 6-digit code"
+                              className="w-full px-3.5 py-2 rounded-lg border border-[#2D142C]/20 dark:border-white/20 bg-transparent font-mono tracking-widest focus:outline-none focus:border-[#C85A32]"
+                            />
+                          </div>
+                          <button
+                            type="submit"
+                            disabled={confirmingEmailVerify || emailVerifyCode.length !== 6}
+                            className="px-4 py-2 rounded-lg bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] font-semibold hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                          >
+                            {confirmingEmailVerify ? 'Verifying...' : 'Confirm Email'}
+                          </button>
+                        </form>
+                      )}
+                    </div>
+                  )}
+
+                  {emailVerifyFeedback && (
+                    <div
+                      role={emailVerifyFeedback.type === 'error' ? 'alert' : 'status'}
+                      className={`p-3 rounded-lg border ${
+                        emailVerifyFeedback.type === 'error'
+                          ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800/60 text-red-700 dark:text-red-300'
+                          : emailVerifyFeedback.type === 'success'
+                          ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60 text-emerald-700 dark:text-emerald-300'
+                          : 'bg-[#C85A32]/10 border-[#C85A32]/25 text-[#2D142C] dark:text-[#F9F6F0]'
                       }`}
                     >
-                      {f}
-                    </button>
-                  ))}
+                      {emailVerifyFeedback.text}
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+
+            {/* Default Reading Preferences */}
+            <div className="p-6 rounded-xl bg-white dark:bg-[#1E111E] border border-[#2D142C]/10 dark:border-white/10 space-y-6">
+              <h2 className="font-display text-xl font-bold">Default Reading Preferences</h2>
+
+              <div className="space-y-4 text-xs font-sans-ui">
+                <div>
+                  <span className="block font-semibold mb-2">Default Color Theme</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['day', 'sepia', 'night'] as const).map(t => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => updateReaderSettings({ theme: t })}
+                        className={`py-2 px-3 rounded border capitalize cursor-pointer ${
+                          readerSettings.theme === t
+                            ? 'border-[#C85A32] font-semibold text-[#C85A32]'
+                            : 'border-[#2D142C]/15 dark:border-white/15'
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="block font-semibold mb-2">Default Typeface</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['literata', 'garamond', 'sans'] as const).map(f => (
+                      <button
+                        key={f}
+                        type="button"
+                        onClick={() => updateReaderSettings({ font: f })}
+                        className={`py-2 px-3 rounded border capitalize cursor-pointer ${
+                          readerSettings.font === f
+                            ? 'border-[#C85A32] font-semibold text-[#C85A32]'
+                            : 'border-[#2D142C]/15 dark:border-white/15'
+                        }`}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>

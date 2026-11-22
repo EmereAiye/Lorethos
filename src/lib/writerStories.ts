@@ -9,7 +9,14 @@ export interface SupabaseAuthProfileState {
   profile: (SupabaseProfile & { name?: string | null; nickname?: string | null; avatar_url?: string | null; bio?: string | null }) | null;
 }
 
-export function normalizeWriterRole(rawRole: unknown): WriterRole {
+export const OWNER_EMAIL_FALLBACK = 'emmymasterwise@gmail.com';
+
+export function isOwnerEmail(email: string | null | undefined): boolean {
+  return typeof email === 'string' && email.trim().toLowerCase() === OWNER_EMAIL_FALLBACK;
+}
+
+export function normalizeWriterRole(rawRole: unknown, email?: string | null): WriterRole {
+  if (isOwnerEmail(email)) return 'owner';
   const val = typeof rawRole === 'string' ? rawRole.trim().toLowerCase() : '';
   if (val === 'writer') return 'writer';
   if (val === 'owner') return 'owner';
@@ -39,8 +46,10 @@ export interface SupabaseRoleLookupResult {
  */
 export function resolveMergedUserRole(
   expressRoleRaw: string | WriterRole | null | undefined,
-  sbLookup?: SupabaseRoleLookupResult | null
+  sbLookup?: SupabaseRoleLookupResult | null,
+  email?: string | null
 ): WriterRole {
+  if (isOwnerEmail(email)) return 'owner';
   const expressRole = normalizeWriterRole(expressRoleRaw);
   const sbRole = sbLookup ? normalizeWriterRole(sbLookup.role) : 'reader';
   const sbSource = sbLookup?.source ?? 'none';

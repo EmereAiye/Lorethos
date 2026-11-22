@@ -834,6 +834,7 @@ export function sanitizeStoryForPublic(story: Story): Story {
   const hydrated = withOfficialTrailerMetadata(story);
   return {
     ...hydrated,
+    writerRequiresPurchase: Boolean(hydrated.writerRequiresPurchase),
     totalChapters: hydrated.chapters.length,
     chapters: hydrated.chapters.map((ch): Chapter => ({
       ...ch,

@@ -405,13 +405,38 @@ export const ProfileView: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-2 pt-0.5 text-xs font-sans-ui">
                     <span className="inline-flex items-center gap-1 font-semibold text-[#C85A32]">
                       <Award className="w-3.5 h-3.5" />
-                      <span>Rank {rank.roman} &middot; {rank.title}</span>
+                      <span>{rank.title}</span>
                     </span>
                     <span className="opacity-40">&middot;</span>
                     <span className="opacity-70 tabular-nums">
                       {rank.completedChapters} ch read
                     </span>
                   </div>
+                  {isAuthenticated && user.email && (
+                    <div className="pt-1.5">
+                      <a
+                        href={buildHref('account', { tab: 'settings', verify: '1' })}
+                        onClick={(e) => handleLink(e, 'account', { tab: 'settings', verify: '1' })}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-semibold font-sans-ui transition-colors ${
+                          user.emailVerified
+                            ? 'bg-emerald-600/12 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-600/20'
+                            : 'bg-amber-500/15 text-amber-800 dark:text-amber-300 hover:bg-amber-500/25'
+                        }`}
+                      >
+                        {user.emailVerified ? (
+                          <>
+                            <CheckCircle2 className="w-3 h-3 shrink-0" />
+                            <span>Email Verified</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3 h-3 shrink-0" />
+                            <span>Email Not Verified &middot; Check in Settings &rarr;</span>
+                          </>
+                        )}
+                      </a>
+                    </div>
+                  )}
                 </div>
               </div>
 

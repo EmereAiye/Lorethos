@@ -17,15 +17,25 @@ import type {
   StoryBookshelf,
   BookshelfVisibility,
   WriterRole,
-  AdminUserDirectoryEntry
+  AdminUserDirectoryEntry,
+  LeaderboardPeriod,
+  LeaderboardEntry,
+  LeaderboardViewerStanding,
+  LeaderboardResponse
 } from '../src/types/index.js';
 import { AUTHORITATIVE_STORIES, withOfficialTrailerMetadata } from './catalog.js';
+import { getDisplayName, getTierForCompletedChapters } from '../src/utils/readerProfile.js';
 
 export interface StoredUserRecord {
   id: string;
   name: string;
   nickname?: string;
   email: string;
+  emailVerified?: boolean;
+  emailVerifiedAt?: string;
+  emailVerificationTokenHash?: string;
+  emailVerificationExpiresAt?: string;
+  emailVerificationAttempts?: number;
   avatar?: string;
   bio?: string;
   passwordHash: string;
@@ -127,6 +137,7 @@ function buildDefaultReadingGoal(): ReadingGoal {
     bestStreakDays: 0,
     lastUpdatedDate: iso(now),
     completedChapterIds: [],
+    completedAtByChapter: {},
     history: Array.from({ length: 14 }, (_, idx) => {
       const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (13 - idx));
       return {
@@ -276,6 +287,7 @@ class LorethosRepository {
         publication_status TEXT NOT NULL DEFAULT 'published' CHECK (publication_status IN ('draft', 'review', 'published')),
         access_tier TEXT NOT NULL DEFAULT 'subscription' CHECK (access_tier IN ('free', 'subscription', 'purchase')),
         price_ngn INTEGER NOT NULL DEFAULT 0 CHECK (price_ngn >= 0),
+        writer_requires_purchase BOOLEAN NOT NULL DEFAULT FALSE,
         free_chapters_count INTEGER NOT NULL DEFAULT 3 CHECK (free_chapters_count >= 0),
         featured BOOLEAN NOT NULL DEFAULT FALSE,
         spotlight_order INTEGER,
@@ -284,6 +296,7 @@ class LorethosRepository {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       ALTER TABLE stories ADD COLUMN IF NOT EXISTS publication_status TEXT NOT NULL DEFAULT 'published';
+      ALTER TABLE stories ADD COLUMN IF NOT EXISTS writer_requires_purchase BOOLEAN NOT NULL DEFAULT FALSE;
       CREATE TABLE IF NOT EXISTS chapters (
         id TEXT PRIMARY KEY,
         story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
@@ -567,6 +580,7 @@ class LorethosRepository {
             publicationStatus: row.publication_status || 'published',
             accessTier: row.access_tier,
             priceNgn: Number(row.price_ngn),
+            writerRequiresPurchase: Boolean(row.writer_requires_purchase),
             rating: 0,
             ratingsCount: 0,
             totalChapters: chs.length,
@@ -624,6 +638,8 @@ class LorethosRepository {
         name: u.name,
         nickname: u.nickname || undefined,
         email: u.email,
+        emailVerified: Boolean(u.email_verified),
+        emailVerifiedAt: u.email_verified_at ? new Date(u.email_verified_at).toISOString() : undefined,
         avatar: u.avatar || undefined,
         bio: u.bio || undefined,
         passwordHash: u.password_hash,
@@ -779,6 +795,8 @@ class LorethosRepository {
       name: user.name,
       nickname: user.nickname || undefined,
       email: user.email,
+      emailVerified: Boolean(user.emailVerified),
+      emailVerifiedAt: user.emailVerifiedAt || undefined,
       avatar: normalizeServerAvatarUrl(user.avatar),
       bio: user.bio || undefined,
       role: user.role,
@@ -840,6 +858,8 @@ class LorethosRepository {
         name: u.name,
         nickname: u.nickname || undefined,
         email: String(u.email).trim().toLowerCase(),
+        emailVerified: Boolean(u.email_verified),
+        emailVerifiedAt: u.email_verified_at ? new Date(u.email_verified_at).toISOString() : undefined,
         avatar: normalizeServerAvatarUrl(u.avatar),
         bio: u.bio || undefined,
         passwordHash: u.password_hash,
@@ -886,6 +906,7 @@ class LorethosRepository {
       name: name.trim(),
       nickname: trimmedNickname,
       email: normalizedEmail,
+      emailVerified: false,
       passwordHash: hashPassword(password),
       role: isOwner ? 'owner' : 'reader',
       subscription: { plan: 'free', status: 'none', amountNgn: 0 },
@@ -968,6 +989,59 @@ class LorethosRepository {
     return user;
   }
 
+  public issueEmailVerificationCode(userId: string, tokenHash: string, expiresAtIso: string): StoredUserRecord | null {
+    const user = this.getUserById(userId);
+    if (!user) return null;
+    user.emailVerificationTokenHash = tokenHash;
+    user.emailVerificationExpiresAt = expiresAtIso;
+    user.emailVerificationAttempts = 0;
+    this.persistSnapshot();
+    return user;
+  }
+
+  public incrementEmailVerificationAttempt(userId: string): number {
+    const user = this.getUserById(userId);
+    if (!user) return 0;
+    const nextAttempts = (user.emailVerificationAttempts || 0) + 1;
+    user.emailVerificationAttempts = nextAttempts;
+    if (nextAttempts >= 5) {
+      user.emailVerificationTokenHash = undefined;
+      user.emailVerificationExpiresAt = undefined;
+    }
+    this.persistSnapshot();
+    return nextAttempts;
+  }
+
+  public markEmailVerified(userId: string, verifiedAtIso?: string): StoredUserRecord | null {
+    const user = this.getUserById(userId);
+    if (!user) return null;
+    const confirmedAt = verifiedAtIso || new Date().toISOString();
+    user.emailVerified = true;
+    user.emailVerifiedAt = confirmedAt;
+    user.emailVerificationTokenHash = undefined;
+    user.emailVerificationExpiresAt = undefined;
+    user.emailVerificationAttempts = 0;
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `ALTER TABLE users
+         ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+         ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ`
+      );
+      await pool.query(
+        `UPDATE users
+         SET email_verified = TRUE,
+             email_verified_at = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [userId, confirmedAt]
+      );
+    });
+
+    return user;
+  }
+
   public getStories(options?: { includeUnpublished?: boolean }): Story[] {
     const includeUnpublished = Boolean(options?.includeUnpublished);
     return this.state.stories
@@ -995,15 +1069,25 @@ class LorethosRepository {
   }
 
   public hasAccessToChapter(user: StoredUserRecord | undefined, story: Story, chapter: Chapter): boolean {
+    const isOwner = Boolean(
+      user && (user.role === 'owner' || user.email.trim().toLowerCase() === getOwnerEmail())
+    );
+    if (isOwner) return true;
+
     const pubStatus = story.publicationStatus || 'published';
-    if (pubStatus !== 'published' && user?.role !== 'owner') {
+    if (pubStatus !== 'published') {
       return false;
     }
     if (chapter.isFree || story.accessTier === 'free') return true;
     if (!user) return false;
-    if (user.role === 'owner') return true;
-    if (user.subscription.status === 'active' && story.accessTier === 'subscription') return true;
     if (user.unlockedStoryIds.includes(story.id)) return true;
+
+    // Writers and editorial admins read all published books complimentary unless Owner requires purchase
+    if (user.role === 'writer' || user.role === 'admin') {
+      return !Boolean(story.writerRequiresPurchase);
+    }
+
+    if (user.subscription.status === 'active' && story.accessTier === 'subscription') return true;
     return false;
   }
 
@@ -1037,6 +1121,7 @@ class LorethosRepository {
       id,
       slug,
       publicationStatus: input.publicationStatus || 'draft',
+      writerRequiresPurchase: Boolean(input.writerRequiresPurchase),
       rating: 0,
       ratingsCount: 0,
       totalReads: 0,
@@ -1052,8 +1137,8 @@ class LorethosRepository {
         `INSERT INTO stories (
           id, slug, title, subtitle, author, author_bio, genre, tags, cover_image,
           synopsis, prologue_lore, status, publication_status, access_tier, price_ngn,
-          free_chapters_count, featured, updated_at_label
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+          writer_requires_purchase, free_chapters_count, featured, updated_at_label
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
         [
           newStory.id,
           newStory.slug,
@@ -1070,6 +1155,7 @@ class LorethosRepository {
           newStory.publicationStatus,
           newStory.accessTier,
           newStory.priceNgn,
+          Boolean(newStory.writerRequiresPurchase),
           newStory.freeChaptersCount,
           newStory.featured,
           newStory.updatedAt
@@ -1142,12 +1228,21 @@ class LorethosRepository {
     return newChapter;
   }
 
-  public updateStoryPricing(storyId: string, tier: AccessTier, priceNgn: number, freeChaptersCount: number): Story | null {
+  public updateStoryPricing(
+    storyId: string,
+    tier: AccessTier,
+    priceNgn: number,
+    freeChaptersCount: number,
+    writerRequiresPurchase?: boolean
+  ): Story | null {
     const story = this.state.stories.find((s) => s.id === storyId);
     if (!story) return null;
     story.accessTier = tier;
     story.priceNgn = Math.max(0, Math.round(priceNgn));
     story.freeChaptersCount = Math.max(0, Math.round(freeChaptersCount));
+    if (typeof writerRequiresPurchase === 'boolean') {
+      story.writerRequiresPurchase = writerRequiresPurchase;
+    }
     story.chapters = story.chapters.map((ch, idx) => ({
       ...ch,
       isFree: tier === 'free' ? true : idx < story.freeChaptersCount
@@ -1156,8 +1251,14 @@ class LorethosRepository {
 
     this.mirrorToPostgres(async (pool) => {
       await pool.query(
-        'UPDATE stories SET access_tier = $1, price_ngn = $2, free_chapters_count = $3, updated_at = NOW() WHERE id = $4',
-        [story.accessTier, story.priceNgn, story.freeChaptersCount, storyId]
+        'UPDATE stories SET access_tier = $1, price_ngn = $2, free_chapters_count = $3, writer_requires_purchase = $4, updated_at = NOW() WHERE id = $5',
+        [
+          story.accessTier,
+          story.priceNgn,
+          story.freeChaptersCount,
+          Boolean(story.writerRequiresPurchase),
+          storyId
+        ]
       );
       for (const ch of story.chapters) {
         await pool.query('UPDATE chapters SET is_free = $1 WHERE id = $2', [ch.isFree, ch.id]);
@@ -1217,12 +1318,41 @@ class LorethosRepository {
     const user = this.getUserById(userId);
     if (!user) return null;
     const clamped = Math.min(100, Math.max(0, Math.round(progressPercent)));
+    const nowIso = new Date().toISOString();
+    const todayDateStr = nowIso.slice(0, 10);
+
     user.readingProgress[storyId] = {
       chapterId,
       chapterNumber,
       progressPercent: clamped,
-      lastReadAt: new Date().toISOString()
+      lastReadAt: nowIso
     };
+
+    let goalUpdated = false;
+    if (clamped >= 95 && chapterId) {
+      const existingCompleted = Array.isArray(user.readingGoal?.completedChapterIds)
+        ? [...user.readingGoal.completedChapterIds]
+        : [];
+      const existingDates = {
+        ...(user.readingGoal?.completedAtByChapter || {})
+      };
+      if (!existingCompleted.includes(chapterId)) {
+        existingCompleted.push(chapterId);
+        goalUpdated = true;
+      }
+      if (!existingDates[chapterId]) {
+        existingDates[chapterId] = todayDateStr;
+        goalUpdated = true;
+      }
+      if (goalUpdated) {
+        user.readingGoal = {
+          ...(user.readingGoal || buildDefaultReadingGoal()),
+          completedChapterIds: existingCompleted,
+          completedAtByChapter: existingDates
+        };
+      }
+    }
+
     this.persistSnapshot();
 
     this.mirrorToPostgres(async (pool) => {
@@ -1236,6 +1366,12 @@ class LorethosRepository {
            last_read_at = NOW()`,
         [userId, storyId, chapterId, chapterNumber, clamped]
       );
+      if (goalUpdated) {
+        await pool.query('UPDATE users SET reading_goal = $1::jsonb, updated_at = NOW() WHERE id = $2', [
+          JSON.stringify(user.readingGoal),
+          userId
+        ]);
+      }
     });
 
     return user.readingProgress;
@@ -1244,12 +1380,64 @@ class LorethosRepository {
   public updateReadingGoal(userId: string, goal: ReadingGoal): ReadingGoal | null {
     const user = this.getUserById(userId);
     if (!user) return null;
-    user.readingGoal = goal;
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const mergedDates: Record<string, string> = {};
+
+    const normalizeDateKey = (val: unknown): string | null => {
+      if (typeof val !== 'string') return null;
+      const trimmed = val.trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+        return trimmed.slice(0, 10);
+      }
+      const parsed = new Date(trimmed);
+      if (Number.isNaN(parsed.getTime())) return null;
+      return parsed.toISOString().slice(0, 10);
+    };
+
+    const existingDates = user.readingGoal?.completedAtByChapter || {};
+    for (const [chId, rawDate] of Object.entries(existingDates)) {
+      const normalized = normalizeDateKey(rawDate);
+      if (chId && normalized) {
+        mergedDates[chId] = normalized;
+      }
+    }
+    if (goal.completedAtByChapter && typeof goal.completedAtByChapter === 'object') {
+      for (const [chId, rawDate] of Object.entries(goal.completedAtByChapter)) {
+        const cleanId = typeof chId === 'string' ? chId.trim().slice(0, 120) : '';
+        const normalized = normalizeDateKey(rawDate);
+        if (cleanId && normalized) {
+          mergedDates[cleanId] = normalized;
+        }
+      }
+    }
+
+    const completedSet = new Set<string>(
+      Array.isArray(user.readingGoal?.completedChapterIds) ? user.readingGoal.completedChapterIds : []
+    );
+    if (Array.isArray(goal.completedChapterIds)) {
+      for (const chId of goal.completedChapterIds) {
+        if (typeof chId === 'string' && chId.trim()) {
+          const clean = chId.trim().slice(0, 120);
+          completedSet.add(clean);
+          if (!mergedDates[clean]) {
+            mergedDates[clean] = todayIso;
+          }
+        }
+      }
+    }
+
+    const sanitizedGoal: ReadingGoal = {
+      ...goal,
+      completedChapterIds: Array.from(completedSet),
+      completedAtByChapter: mergedDates
+    };
+
+    user.readingGoal = sanitizedGoal;
     this.persistSnapshot();
 
     this.mirrorToPostgres(async (pool) => {
       await pool.query('UPDATE users SET reading_goal = $1::jsonb, updated_at = NOW() WHERE id = $2', [
-        JSON.stringify(goal),
+        JSON.stringify(sanitizedGoal),
         userId
       ]);
     });
@@ -1513,6 +1701,180 @@ class LorethosRepository {
         if (diff !== 0) return diff;
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
+  }
+
+  public getReadingLeaderboard(
+    viewerUserId?: string,
+    period: LeaderboardPeriod = 'weekly'
+  ): LeaderboardResponse {
+    const now = new Date();
+    const todayUtcMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const parseUtcDayMs = (raw: unknown): number | null => {
+      if (typeof raw !== 'string') return null;
+      const trimmed = raw.trim();
+      if (!trimmed) return null;
+      const ymdMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (ymdMatch) {
+        const y = Number(ymdMatch[1]);
+        const m = Number(ymdMatch[2]);
+        const d = Number(ymdMatch[3]);
+        if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+          return Date.UTC(y, m - 1, d);
+        }
+      }
+      const parsed = new Date(trimmed);
+      if (Number.isNaN(parsed.getTime())) return null;
+      return Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
+    };
+
+    const isWithinDays = (dayMs: number | null, maxDays: number): boolean => {
+      if (dayMs === null) return false;
+      const diffDays = Math.floor((todayUtcMs - dayMs) / 86_400_000);
+      return diffDays >= -1 && diffDays < maxDays;
+    };
+
+    const publishedStories = this.state.stories.filter(
+      (s) => (s.publicationStatus || 'published') === 'published'
+    );
+
+    const baseRows = this.state.users.map((user) => {
+      const allCompletedIds = new Set<string>(
+        Array.isArray(user.readingGoal?.completedChapterIds)
+          ? user.readingGoal.completedChapterIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+          : []
+      );
+      const weeklyIds = new Set<string>();
+      const monthlyIds = new Set<string>();
+
+      const completionMap = user.readingGoal?.completedAtByChapter;
+      if (completionMap && typeof completionMap === 'object') {
+        for (const [chId, dateStr] of Object.entries(completionMap)) {
+          if (!chId) continue;
+          allCompletedIds.add(chId);
+          const dayMs = parseUtcDayMs(dateStr);
+          if (isWithinDays(dayMs, 30)) {
+            monthlyIds.add(chId);
+          }
+          if (isWithinDays(dayMs, 7)) {
+            weeklyIds.add(chId);
+          }
+        }
+      }
+
+      for (const prog of Object.values(user.readingProgress || {})) {
+        if (prog && prog.progressPercent >= 95 && prog.chapterId) {
+          allCompletedIds.add(prog.chapterId);
+          const dayMs = parseUtcDayMs(prog.lastReadAt);
+          if (isWithinDays(dayMs, 30)) {
+            monthlyIds.add(prog.chapterId);
+          }
+          if (isWithinDays(dayMs, 7)) {
+            weeklyIds.add(prog.chapterId);
+          }
+        }
+      }
+
+      let historyWeeklySum = 0;
+      let historyMonthlySum = 0;
+      for (const h of user.readingGoal?.history || []) {
+        const count = typeof h?.chaptersRead === 'number' && Number.isFinite(h.chaptersRead) ? Math.max(0, Math.floor(h.chaptersRead)) : 0;
+        if (count <= 0) continue;
+        const dayMs = parseUtcDayMs(h.dateIso);
+        if (isWithinDays(dayMs, 30)) {
+          historyMonthlySum += count;
+        }
+        if (isWithinDays(dayMs, 7)) {
+          historyWeeklySum += count;
+        }
+      }
+
+      const weeklyChapters = Math.max(weeklyIds.size, historyWeeklySum);
+      const monthlyChapters = Math.max(monthlyIds.size, weeklyChapters, historyMonthlySum);
+      const allTimeChapters = Math.max(allCompletedIds.size, monthlyChapters);
+
+      let completedStoriesCount = 0;
+      for (const story of publishedStories) {
+        const chs = story.chapters || [];
+        if (chs.length === 0) continue;
+        const allDone = chs.every((ch) => allCompletedIds.has(ch.id));
+        const lastProg = user.readingProgress?.[story.id];
+        const finishedLast =
+          Boolean(lastProg) && lastProg.chapterNumber >= chs.length && lastProg.progressPercent >= 95;
+        if (allDone || finishedLast) {
+          completedStoriesCount += 1;
+        }
+      }
+
+      const { currentTier } = getTierForCompletedChapters(allTimeChapters);
+      const streakDays = Math.max(
+        0,
+        Number.isFinite(user.readingGoal?.streakDays) ? Math.floor(user.readingGoal.streakDays) : 0
+      );
+
+      return {
+        userId: user.id,
+        displayName: getDisplayName(user),
+        avatar: normalizeServerAvatarUrl(user.avatar),
+        tierTitle: currentTier.title,
+        tierRoman: currentTier.roman,
+        tierLevel: currentTier.level,
+        weeklyChapters,
+        monthlyChapters,
+        allTimeChapters,
+        completedStoriesCount,
+        streakDays,
+        isCurrentUser: Boolean(viewerUserId && user.id === viewerUserId),
+      };
+    });
+
+    const sortForPeriod = (key: 'weeklyChapters' | 'monthlyChapters'): LeaderboardEntry[] =>
+      [...baseRows]
+        .sort((a, b) => {
+          if (b[key] !== a[key]) return b[key] - a[key];
+          if (b.completedStoriesCount !== a.completedStoriesCount) {
+            return b.completedStoriesCount - a.completedStoriesCount;
+          }
+          if (b.allTimeChapters !== a.allTimeChapters) return b.allTimeChapters - a.allTimeChapters;
+          if (b.streakDays !== a.streakDays) return b.streakDays - a.streakDays;
+          return a.displayName.localeCompare(b.displayName);
+        })
+        .map((row, idx) => ({
+          position: idx + 1,
+          ...row,
+        }));
+
+    const weeklyRanked = sortForPeriod('weeklyChapters');
+    const monthlyRanked = sortForPeriod('monthlyChapters');
+
+    let viewerStanding: LeaderboardViewerStanding | null = null;
+    if (viewerUserId) {
+      const wIdx = weeklyRanked.findIndex((e) => e.userId === viewerUserId);
+      const mIdx = monthlyRanked.findIndex((e) => e.userId === viewerUserId);
+      const ref = wIdx >= 0 ? weeklyRanked[wIdx] : mIdx >= 0 ? monthlyRanked[mIdx] : null;
+      if (ref) {
+        viewerStanding = {
+          weeklyPosition: wIdx >= 0 ? weeklyRanked[wIdx].position : null,
+          monthlyPosition: mIdx >= 0 ? monthlyRanked[mIdx].position : null,
+          weeklyChapters: ref.weeklyChapters,
+          monthlyChapters: ref.monthlyChapters,
+          allTimeChapters: ref.allTimeChapters,
+          completedStoriesCount: ref.completedStoriesCount,
+          streakDays: ref.streakDays,
+          tierTitle: ref.tierTitle,
+          tierRoman: ref.tierRoman,
+          tierLevel: ref.tierLevel,
+        };
+      }
+    }
+
+    return {
+      period,
+      weekly: weeklyRanked.slice(0, 50),
+      monthly: monthlyRanked.slice(0, 50),
+      totalReaders: baseRows.length,
+      viewerStanding,
+      generatedAt: now.toISOString(),
+    };
   }
 
   public updateUserRoleByOwner(

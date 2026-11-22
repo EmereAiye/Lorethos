@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext';
 import { canAccessWriterStudio } from '../lib/writerStories';
 import { getDisplayName, computeReaderRank } from '../utils/readerProfile';
 import { ReaderAvatar } from './ReaderAvatar';
-import { BookOpen, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck, Search, ArrowRight, Film, Award, Flame, Feather } from 'lucide-react';
+import { BookOpen, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck, Search, ArrowRight, Film, Award, Flame, Feather, Trophy } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const {
@@ -145,6 +145,20 @@ export const Navbar: React.FC = () => {
             }`}
           >
             Library
+          </a>
+
+          <a
+            href={buildHref('leaderboard')}
+            onClick={(e) => handleNavClick(e, 'leaderboard')}
+            aria-current={currentRoute === 'leaderboard' ? 'page' : undefined}
+            className={`transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+              currentRoute === 'leaderboard'
+                ? 'text-[#C85A32] font-semibold'
+                : 'text-[#2D142C]/80 dark:text-[#F9F6F0]/80 sepia:text-[#2C1E18]/80 hover:text-[#C85A32]'
+            }`}
+          >
+            <Trophy className="w-3.5 h-3.5 text-[#C85A32]" />
+            <span>Leaderboard</span>
           </a>
 
           <a
@@ -568,6 +582,16 @@ export const Navbar: React.FC = () => {
               Library
             </a>
             <a
+              href={buildHref('leaderboard')}
+              onClick={(e) => handleNavClick(e, 'leaderboard')}
+              className={`px-3 py-2.5 rounded-lg font-medium flex items-center gap-2 ${
+                currentRoute === 'leaderboard' ? 'bg-[#C85A32]/15 text-[#C85A32] font-semibold' : ''
+              }`}
+            >
+              <Trophy className="w-4 h-4 text-[#C85A32]" />
+              <span>Reading Leaderboard</span>
+            </a>
+            <a
               href={buildHref('pricing')}
               onClick={(e) => handleNavClick(e, 'pricing')}
               className={`px-3 py-2.5 rounded-lg font-medium ${
@@ -635,8 +659,8 @@ export const Navbar: React.FC = () => {
             >
               <span>{isAuthenticated ? `${displayName} · Account` : 'Sign In / Create Account'}</span>
               {isAuthenticated && (
-                <span className="text-[11px] font-mono font-bold text-[#C85A32]">
-                  Rank {rank.roman} · {rank.title}
+                <span className="text-[11px] font-semibold text-[#C85A32]">
+                  {rank.title}
                 </span>
               )}
             </a>

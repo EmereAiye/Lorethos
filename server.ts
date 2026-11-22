@@ -506,6 +506,7 @@ export async function createApp(options?: {
   const aiLimiter = createRateLimiter(20, 60_000);
   const videoPollLimiter = createRateLimiter(120, 60_000);
   const authLimiter = createRateLimiter(25, 60_000);
+  const emailVerificationLimiter = createRateLimiter(25, 60_000);
   const inquiryLimiter = createRateLimiter(10, 60_000);
 
   // =========================================================================
@@ -680,6 +681,224 @@ export async function createApp(options?: {
     res.json({ ok: true });
   });
 
+  const hashEmailVerificationCode = (userId: string, email: string, code: string): string => {
+    return crypto
+      .createHmac('sha256', getSessionSecret())
+      .update(`verify-email:${userId}:${email.trim().toLowerCase()}:${code.trim()}`)
+      .digest('hex');
+  };
+
+  const getConfiguredSupabaseServerConfig = (): { url: string; anonKey: string } | null => {
+    const rawUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim().replace(/^["']|["']$/g, '');
+    const rawKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '').trim().replace(/^["']|["']$/g, '');
+    if (!rawUrl || !rawKey || rawUrl.includes('YOUR_PROJECT_ID') || rawKey.includes('YOUR_SUPABASE')) {
+      return null;
+    }
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.protocol !== 'https:' || !parsed.hostname.includes('.')) {
+        return null;
+      }
+      return { url: `${parsed.origin}`, anonKey: rawKey };
+    } catch {
+      return null;
+    }
+  };
+
+  app.get('/api/auth/email-verification/status', requireAuth, (req: AuthedRequest, res) => {
+    const user = req.currentUser!;
+    const resendConfigured = Boolean(process.env.RESEND_API_KEY?.trim());
+    const supabaseConfigured = Boolean(getConfiguredSupabaseServerConfig());
+    res.json({
+      email: user.email,
+      emailVerified: Boolean(user.emailVerified),
+      emailVerifiedAt: user.emailVerifiedAt || null,
+      deliveryConfigured: resendConfigured || supabaseConfigured,
+      hasMailProvider: resendConfigured,
+      supabaseConfigured,
+    });
+  });
+
+  app.post('/api/auth/email-verification/request', requireAuth, emailVerificationLimiter, async (req: AuthedRequest, res) => {
+    const user = req.currentUser!;
+    if (user.emailVerified) {
+      res.json({
+        alreadyVerified: true,
+        sent: false,
+        user: repo.toPublicProfile(user),
+      });
+      return;
+    }
+
+    const code = String(crypto.randomInt(100000, 1000000));
+    const codeHash = hashEmailVerificationCode(user.id, user.email, code);
+    const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+    repo.issueEmailVerificationCode(user.id, codeHash, expiresAt);
+
+    const resendKey = process.env.RESEND_API_KEY?.trim();
+    const supabaseConfig = getConfiguredSupabaseServerConfig();
+
+    if (resendKey) {
+      const fromAddress = (process.env.RESEND_FROM_EMAIL || '').trim() || 'Lorethos <onboarding@resend.dev>';
+      try {
+        const mailRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${resendKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: fromAddress,
+            to: [user.email],
+            subject: 'Verify your Lorethos account email',
+            text: `Hello ${user.nickname || user.name},\n\nYour Lorethos email verification code is: ${code}\n\nThis code expires in 15 minutes. Enter it under Account -> Settings to verify ${user.email}.\n`,
+            html: `<p>Hello ${user.nickname || user.name},</p><p>Your Lorethos email verification code is:</p><p style="font-size:24px;font-weight:bold;letter-spacing:4px;">${code}</p><p>This code expires in 15 minutes. Enter it under <strong>Account &rarr; Settings</strong> to verify ${user.email}.</p>`,
+          }),
+        });
+        if (!mailRes.ok) {
+          res.status(502).json({ error: 'Unable to send verification email right now. Please try again shortly.' });
+          return;
+        }
+        res.json({
+          sent: true,
+          deliveryMode: 'email',
+          expiresInMinutes: 15,
+        });
+        return;
+      } catch {
+        res.status(502).json({ error: 'Email service unavailable. Please try again shortly.' });
+        return;
+      }
+    }
+
+    if (supabaseConfig) {
+      res.json({
+        sent: true,
+        deliveryMode: 'supabase',
+        expiresInMinutes: 15,
+      });
+      return;
+    }
+
+    // Standalone local/preview environment with neither Resend nor Supabase configured
+    res.json({
+      sent: true,
+      deliveryMode: 'preview',
+      previewCode: code,
+      expiresInMinutes: 15,
+    });
+  });
+
+  app.post('/api/auth/email-verification/confirm', requireAuth, emailVerificationLimiter, (req: AuthedRequest, res) => {
+    const user = req.currentUser!;
+    if (user.emailVerified) {
+      res.json({ verified: true, user: repo.toPublicProfile(user) });
+      return;
+    }
+
+    const rawCode = typeof (req.body as { code?: unknown })?.code === 'string'
+      ? (req.body as { code: string }).code.trim()
+      : '';
+
+    if (!/^\d{6}$/.test(rawCode)) {
+      res.status(400).json({ error: 'Please enter a valid 6-digit verification code.' });
+      return;
+    }
+
+    if (!user.emailVerificationTokenHash || !user.emailVerificationExpiresAt) {
+      res.status(400).json({ error: 'No active verification code found. Request a new code in Settings.' });
+      return;
+    }
+
+    if (new Date(user.emailVerificationExpiresAt).getTime() < Date.now()) {
+      res.status(400).json({ error: 'Verification code has expired. Please request a new code.' });
+      return;
+    }
+
+    const expectedHex = user.emailVerificationTokenHash;
+    const candidateHex = hashEmailVerificationCode(user.id, user.email, rawCode);
+    const expectedBuf = Buffer.from(expectedHex, 'hex');
+    const candidateBuf = Buffer.from(candidateHex, 'hex');
+
+    if (
+      expectedBuf.length !== candidateBuf.length ||
+      !crypto.timingSafeEqual(expectedBuf, candidateBuf)
+    ) {
+      const attempts = repo.incrementEmailVerificationAttempt(user.id);
+      res.status(400).json({
+        error:
+          attempts >= 5
+            ? 'Too many incorrect attempts. Please request a new verification code.'
+            : 'Invalid verification code. Please check and try again.',
+      });
+      return;
+    }
+
+    const updated = repo.markEmailVerified(user.id);
+    if (!updated) {
+      res.status(404).json({ error: 'Account not found.' });
+      return;
+    }
+    res.json({ verified: true, user: repo.toPublicProfile(updated) });
+  });
+
+  app.post('/api/auth/email-verification/sync-supabase', requireAuth, emailVerificationLimiter, async (req: AuthedRequest, res) => {
+    const user = req.currentUser!;
+    if (user.emailVerified) {
+      res.json({ emailVerified: true, user: repo.toPublicProfile(user) });
+      return;
+    }
+
+    const accessToken = typeof (req.body as { accessToken?: unknown })?.accessToken === 'string'
+      ? (req.body as { accessToken: string }).accessToken.trim()
+      : '';
+    if (accessToken.length < 20 || accessToken.length > 4096) {
+      res.status(400).json({ error: 'Valid Supabase session token is required.' });
+      return;
+    }
+
+    const sbConfig = getConfiguredSupabaseServerConfig();
+    if (!sbConfig) {
+      res.json({ emailVerified: Boolean(user.emailVerified), user: repo.toPublicProfile(user) });
+      return;
+    }
+
+    try {
+      const sbRes = await fetch(`${sbConfig.url}/auth/v1/user`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          apikey: sbConfig.anonKey,
+        },
+      });
+      if (!sbRes.ok) {
+        res.status(401).json({ error: 'Could not verify Supabase session status.' });
+        return;
+      }
+      const sbUser = (await sbRes.json()) as {
+        email?: string;
+        email_confirmed_at?: string | null;
+        confirmed_at?: string | null;
+      };
+      const sbEmail = typeof sbUser.email === 'string' ? sbUser.email.trim().toLowerCase() : '';
+      const confirmedAt = sbUser.email_confirmed_at || sbUser.confirmed_at || null;
+      if (sbEmail === user.email.trim().toLowerCase() && confirmedAt) {
+        const updated = repo.markEmailVerified(user.id, confirmedAt);
+        res.json({
+          emailVerified: true,
+          user: repo.toPublicProfile(updated || user),
+        });
+        return;
+      }
+      res.json({
+        emailVerified: false,
+        user: repo.toPublicProfile(user),
+      });
+    } catch {
+      res.status(502).json({ error: 'Unable to check Supabase verification status right now.' });
+    }
+  });
+
   // =========================================================================
   // PUBLIC CATALOG & SERVER-GATED CHAPTER DELIVERY
   // =========================================================================
@@ -779,9 +998,14 @@ export async function createApp(options?: {
 
     const allowed = repo.hasAccessToChapter(user, story, chapter);
     if (!allowed) {
+      const isWriterRestricted = Boolean(
+        user && (user.role === 'writer' || user.role === 'admin') && story.writerRequiresPurchase
+      );
       res.status(403).json({
         locked: true,
-        error: 'This chapter requires an active Patron membership or individual story unlock.',
+        error: isWriterRestricted
+          ? 'This title was designated by the Owner as an individual purchase release for writers. Purchase the story to unlock remaining chapters.'
+          : 'This chapter requires an active Patron membership or individual story unlock.',
         story: sanitizeStoryForPublic(story),
         chapter: {
           ...chapter,
@@ -1183,6 +1407,14 @@ export async function createApp(options?: {
     res.json(shelves);
   });
 
+  app.get('/api/leaderboard', async (req, res) => {
+    const viewer = await getAuthenticatedUserAsync(req);
+    const rawPeriod = typeof req.query.period === 'string' ? req.query.period.trim().toLowerCase() : '';
+    const period = rawPeriod === 'monthly' ? 'monthly' : 'weekly';
+    const leaderboard = repo.getReadingLeaderboard(viewer?.id, period);
+    res.json(leaderboard);
+  });
+
   app.post('/api/account/bookshelves', requireAuth, (req: AuthedRequest, res) => {
     const body = req.body as {
       name?: unknown;
@@ -1416,12 +1648,26 @@ export async function createApp(options?: {
     };
 
     const user = req.currentUser!;
+    if (user.role === 'owner') {
+      res.status(400).json({
+        error: 'Owner accounts include complimentary total access to all Lorethos stories and features.',
+      });
+      return;
+    }
+
+    const isWriterOrAdmin = user.role === 'writer' || user.role === 'admin';
     let amountNgn = 0;
     let itemName = '';
     let resolvedPlanId: 'monthly' | 'annual' | undefined;
     let resolvedStoryId: string | undefined;
 
     if (itemType === 'subscription') {
+      if (isWriterOrAdmin) {
+        res.status(400).json({
+          error: 'Writer accounts include complimentary reading access across catalog titles. Only Owner-designated books require individual purchase.',
+        });
+        return;
+      }
       const pid = planId === 'annual' ? 'annual' : 'monthly';
       const plan = PLAN_PRICES_NGN[pid];
       amountNgn = plan.amountNgn;
@@ -1433,8 +1679,18 @@ export async function createApp(options?: {
         res.status(404).json({ error: 'Selected story not found.' });
         return;
       }
-      if (story.priceNgn <= 0) {
+      if (story.priceNgn <= 0 || story.accessTier === 'free') {
         res.status(400).json({ error: 'This title does not require purchase.' });
+        return;
+      }
+      if (isWriterOrAdmin && !story.writerRequiresPurchase) {
+        res.status(400).json({
+          error: 'This title is included complimentary with your Writer access.',
+        });
+        return;
+      }
+      if (user.unlockedStoryIds.includes(story.id)) {
+        res.status(400).json({ error: 'You have already unlocked this story.' });
         return;
       }
       amountNgn = story.priceNgn;
@@ -1646,6 +1902,7 @@ export async function createApp(options?: {
       coverImage?: string;
       accessTier?: AccessTier;
       priceNgn?: number;
+      writerRequiresPurchase?: boolean;
       publicationStatus?: PublicationStatus;
     };
 
@@ -1677,6 +1934,7 @@ export async function createApp(options?: {
         ? body.accessTier
         : 'subscription') as AccessTier,
       priceNgn: Math.max(0, Number(body.priceNgn || 2500)),
+      writerRequiresPurchase: Boolean(body.writerRequiresPurchase),
       rating: 0,
       ratingsCount: 0,
       totalChapters: 1,
@@ -1749,10 +2007,11 @@ export async function createApp(options?: {
   });
 
   app.patch('/api/admin/stories/:storyId/pricing', requireAuth, requireOwner, (req, res) => {
-    const { accessTier, priceNgn, freeChaptersCount } = req.body as {
+    const { accessTier, priceNgn, freeChaptersCount, writerRequiresPurchase } = req.body as {
       accessTier?: AccessTier;
       priceNgn?: number;
       freeChaptersCount?: number;
+      writerRequiresPurchase?: boolean;
     };
 
     const updated = repo.updateStoryPricing(
@@ -1761,7 +2020,8 @@ export async function createApp(options?: {
         ? accessTier
         : 'subscription') as AccessTier,
       Number(priceNgn ?? 2500),
-      Number(freeChaptersCount ?? 3)
+      Number(freeChaptersCount ?? 3),
+      typeof writerRequiresPurchase === 'boolean' ? writerRequiresPurchase : undefined
     );
 
     if (!updated) {

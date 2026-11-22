@@ -52,6 +52,7 @@ export interface Story {
   publicationStatus?: PublicationStatus;
   accessTier: AccessTier;
   priceNgn: number;
+  writerRequiresPurchase?: boolean;
   rating: number;
   ratingsCount: number;
   totalChapters: number;
@@ -95,6 +96,7 @@ export interface ReadingGoal {
   bestStreakDays: number;
   lastUpdatedDate: string;
   completedChapterIds?: string[];
+  completedAtByChapter?: Record<string, string>;
   history: DayGoalHistory[];
 }
 
@@ -163,6 +165,8 @@ export interface UserProfile {
   name: string;
   nickname?: string;
   email: string;
+  emailVerified?: boolean;
+  emailVerifiedAt?: string;
   avatar?: string;
   bio?: string;
   role: WriterRole;
@@ -249,5 +253,45 @@ export interface AdminUserDirectoryEntry {
   bookshelvesCount: number;
   createdAt: string;
   source?: 'server' | 'supabase' | 'merged';
+}
+
+export type LeaderboardPeriod = 'weekly' | 'monthly';
+
+export interface LeaderboardEntry {
+  position: number;
+  userId: string;
+  displayName: string;
+  avatar?: string;
+  tierTitle: string;
+  tierRoman: string;
+  tierLevel: number;
+  weeklyChapters: number;
+  monthlyChapters: number;
+  allTimeChapters: number;
+  completedStoriesCount: number;
+  streakDays: number;
+  isCurrentUser: boolean;
+}
+
+export interface LeaderboardViewerStanding {
+  weeklyPosition: number | null;
+  monthlyPosition: number | null;
+  weeklyChapters: number;
+  monthlyChapters: number;
+  allTimeChapters: number;
+  completedStoriesCount: number;
+  streakDays: number;
+  tierTitle: string;
+  tierRoman: string;
+  tierLevel: number;
+}
+
+export interface LeaderboardResponse {
+  period: LeaderboardPeriod;
+  weekly: LeaderboardEntry[];
+  monthly: LeaderboardEntry[];
+  totalReaders: number;
+  viewerStanding: LeaderboardViewerStanding | null;
+  generatedAt: string;
 }
 

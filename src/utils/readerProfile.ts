@@ -1,4 +1,4 @@
-import type { Story, UserProfile } from '../types';
+import type { Story, UserProfile } from '../types/index.js';
 
 export interface ReaderRankTier {
   level: number;
@@ -9,12 +9,35 @@ export interface ReaderRankTier {
 
 export const READER_RANK_TIERS: ReaderRankTier[] = [
   { level: 1, roman: 'I', title: 'Novice Wanderer', minChapters: 0 },
-  { level: 2, roman: 'II', title: 'Page Seeker', minChapters: 2 },
-  { level: 3, roman: 'III', title: 'Lore Chronicler', minChapters: 5 },
-  { level: 4, roman: 'IV', title: 'Archive Keeper', minChapters: 10 },
-  { level: 5, roman: 'V', title: 'Mythic Vanguard', minChapters: 18 },
-  { level: 6, roman: 'VI', title: 'Grand Lorekeeper', minChapters: 30 },
+  { level: 2, roman: 'II', title: 'Page Seeker', minChapters: 5 },
+  { level: 3, roman: 'III', title: 'Ink Initiate', minChapters: 12 },
+  { level: 4, roman: 'IV', title: 'Lore Chronicler', minChapters: 25 },
+  { level: 5, roman: 'V', title: 'Folio Scholar', minChapters: 40 },
+  { level: 6, roman: 'VI', title: 'Archive Keeper', minChapters: 60 },
+  { level: 7, roman: 'VII', title: 'Vellum Warden', minChapters: 85 },
+  { level: 8, roman: 'VIII', title: 'Mythic Vanguard', minChapters: 115 },
+  { level: 9, roman: 'IX', title: 'Elder Scribe', minChapters: 150 },
+  { level: 10, roman: 'X', title: 'Grand Lorekeeper', minChapters: 200 },
 ];
+
+export const READER_TIERS = READER_RANK_TIERS;
+
+export function getTierForCompletedChapters(completedChapters: number): {
+  currentTier: ReaderRankTier;
+  nextTier: ReaderRankTier | null;
+} {
+  const safeCount = Math.max(0, Math.floor(completedChapters || 0));
+  let currentIdx = 0;
+  for (let i = 0; i < READER_RANK_TIERS.length; i += 1) {
+    if (safeCount >= READER_RANK_TIERS[i].minChapters) {
+      currentIdx = i;
+    }
+  }
+  return {
+    currentTier: READER_RANK_TIERS[currentIdx],
+    nextTier: READER_RANK_TIERS[currentIdx + 1] || null,
+  };
+}
 
 export interface ReaderRankStatus {
   level: number;
@@ -73,15 +96,7 @@ export function computeReaderRank(user: UserProfile, stories: Story[] = []): Rea
       ? Math.min(100, Math.round((completedChapters / totalCatalogChapters) * 100))
       : 0;
 
-  let currentIdx = 0;
-  for (let i = 0; i < READER_RANK_TIERS.length; i += 1) {
-    if (completedChapters >= READER_RANK_TIERS[i].minChapters) {
-      currentIdx = i;
-    }
-  }
-
-  const currentTier = READER_RANK_TIERS[currentIdx];
-  const nextTier = READER_RANK_TIERS[currentIdx + 1] || null;
+  const { currentTier, nextTier } = getTierForCompletedChapters(completedChapters);
 
   const remainingToNext = nextTier ? Math.max(0, nextTier.minChapters - completedChapters) : 0;
   const span = nextTier ? Math.max(1, nextTier.minChapters - currentTier.minChapters) : 1;

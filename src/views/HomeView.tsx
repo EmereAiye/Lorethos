@@ -5,6 +5,7 @@ import { BookOpen, Sparkles, ArrowRight, Check, MessageSquare, Headphones, Film,
 import { StoryTrailerPlayer } from '../components/StoryTrailerPlayer';
 import { WriterStoriesFeed } from '../components/WriterStoriesFeed';
 import { StoryLikeButton } from '../components/StoryLikeButton';
+import { ReadingLeaderboardSection } from '../components/ReadingLeaderboardSection';
 import { fetchLikesForStories } from '../lib/storyLikes';
 import { supabase } from '../lib/supabase';
 
@@ -247,7 +248,7 @@ export const HomeView: React.FC = () => {
                   <span className="opacity-40">&middot;</span>
                   <span className="inline-flex items-center gap-1 text-[#2D142C] dark:text-[#F9F6F0] sepia:text-[#2C1E18]">
                     <Award className="w-3.5 h-3.5 text-[#C85A32]" />
-                    <span>Rank {readerRank.roman} &middot; {readerRank.title}</span>
+                    <span>{readerRank.title}</span>
                   </span>
                 </div>
                 <h2 className="font-display text-2xl sm:text-3xl font-semibold tracking-tight">
@@ -318,7 +319,7 @@ export const HomeView: React.FC = () => {
               <div className="text-[11px] uppercase tracking-wider font-semibold text-[#C85A32] font-sans-ui flex items-center gap-2">
                 <span>Personalize Your Feed</span>
                 <span>&middot;</span>
-                <span>Rank {readerRank.roman}: {readerRank.title}</span>
+                <span>{readerRank.title}</span>
               </div>
               <p className="font-display text-xl font-semibold">
                 What do you want to read next, {displayName}?
@@ -711,31 +712,63 @@ export const HomeView: React.FC = () => {
 
               <div className="relative pt-6 mt-6 border-t border-white/10 space-y-3">
                 <div className="flex items-baseline justify-between">
-                  <span className="text-xs text-white/70 font-sans-ui">Monthly Plan</span>
+                  <span className="text-xs text-white/70 font-sans-ui">
+                    {isAuthenticated && user.role === 'owner'
+                      ? 'Owner Access'
+                      : isAuthenticated && (user.role === 'writer' || user.role === 'admin')
+                      ? 'Writer Access'
+                      : 'Monthly Plan'}
+                  </span>
                   <span className="font-sans-ui text-xl font-bold text-white tabular-nums">
-                    ₦3,500 <span className="text-xs font-normal text-white/60">/ month</span>
+                    {isAuthenticated && (user.role === 'owner' || user.role === 'writer' || user.role === 'admin') ? (
+                      <>₦0 <span className="text-xs font-normal text-white/60">/ complimentary</span></>
+                    ) : (
+                      <>₦3,500 <span className="text-xs font-normal text-white/60">/ month</span></>
+                    )}
                   </span>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() =>
-                    openPaystackCheckout({
-                      type: 'subscription',
-                      title: 'Patron Monthly Subscription',
-                      amountNgn: 3500,
-                      planId: 'monthly'
-                    })
-                  }
-                  className="w-full py-3 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs tracking-wide rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md hover:shadow-lg"
-                >
-                  <span>Subscribe Monthly</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+                {isAuthenticated && (user.role === 'owner' || user.role === 'writer' || user.role === 'admin') ? (
+                  <a
+                    href={buildHref('stories')}
+                    onClick={(e) => handleNav(e, 'stories')}
+                    className="w-full py-3 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs tracking-wide rounded-lg flex items-center justify-center gap-2 transition-all shadow-md hover:shadow-lg"
+                  >
+                    <span>
+                      {user.role === 'owner'
+                        ? 'Owner Total Access Active · Browse Library'
+                        : 'Writer Access Active · Browse Library'}
+                    </span>
+                    <ArrowRight className="w-4 h-4" />
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openPaystackCheckout({
+                        type: 'subscription',
+                        title: 'Patron Monthly Subscription',
+                        amountNgn: 3500,
+                        planId: 'monthly'
+                      })
+                    }
+                    className="w-full py-3 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs tracking-wide rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md hover:shadow-lg"
+                  >
+                    <span>Subscribe Monthly</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
 
           </div>
+        </div>
+      </section>
+
+      {/* Public Weekly & Monthly Reading Completion Leaderboard */}
+      <section className="py-12 border-t border-[#2D142C]/10 dark:border-white/10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <ReadingLeaderboardSection compact />
         </div>
       </section>
 

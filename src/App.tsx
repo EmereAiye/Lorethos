@@ -19,6 +19,7 @@ const VideoStudioView = lazyWithRetry(() => import('./views/VideoStudioView').th
 const AdminView = lazyWithRetry(() => import('./views/AdminView').then((m) => ({ default: m.AdminView })));
 const WriterStudioView = lazyWithRetry(() => import('./views/WriterStudioView').then((m) => ({ default: m.WriterStudioView })));
 const ProfileView = lazyWithRetry(() => import('./views/ProfileView').then((m) => ({ default: m.ProfileView })));
+const LeaderboardView = lazyWithRetry(() => import('./views/LeaderboardView').then((m) => ({ default: m.LeaderboardView })));
 
 class AppErrorBoundary extends Component<
   { children: ReactNode },
@@ -115,6 +116,8 @@ const MainContent: React.FC = () => {
         return <WriterStudioView />;
       case 'profile':
         return <ProfileView />;
+      case 'leaderboard':
+        return <LeaderboardView />;
       default:
         return <HomeView />;
     }

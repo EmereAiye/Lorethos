@@ -29,6 +29,7 @@ import {
   fetchAllSupabaseProfilesForOwner,
   fetchLatestSupabaseUserRole,
   getCurrentSupabaseAuthAndProfile,
+  isOwnerEmail,
   normalizeWriterRole,
   resolveMergedUserRole,
   updateSupabaseUserProfile,
@@ -62,6 +63,7 @@ export interface RouteParams {
   redirect?: string;
   reauth?: string;
   tab?: string;
+  verify?: string;
   shelf?: string;
 }
 
@@ -176,6 +178,25 @@ interface AppContextType {
   }>;
   logout: () => Promise<void>;
   refreshUserRole: () => Promise<WriterRole>;
+  checkEmailVerificationStatus: () => Promise<{
+    verified: boolean;
+    emailVerifiedAt?: string;
+    message?: string;
+    error?: string;
+  }>;
+  requestEmailVerification: () => Promise<{
+    ok: boolean;
+    alreadyVerified?: boolean;
+    deliveryMode?: 'email' | 'supabase' | 'preview';
+    previewCode?: string;
+    message?: string;
+    error?: string;
+  }>;
+  confirmEmailVerificationCode: (code: string) => Promise<{
+    ok: boolean;
+    message?: string;
+    error?: string;
+  }>;
   updateProfile: (patch: {
     name?: string;
     nickname?: string | null;
@@ -225,6 +246,7 @@ interface AppContextType {
     coverImage: string;
     accessTier: AccessTier;
     priceNgn: number;
+    writerRequiresPurchase?: boolean;
     publicationStatus?: PublicationStatus;
   }) => Promise<{ ok: boolean; error?: string }>;
   addChapterToStory: (
@@ -241,7 +263,8 @@ interface AppContextType {
     storyId: string,
     tier: AccessTier,
     priceNgn: number,
-    freeChaptersCount: number
+    freeChaptersCount: number,
+    writerRequiresPurchase?: boolean
   ) => Promise<{ ok: boolean; error?: string }>;
   updateStoryWorkflow: (
     storyId: string,
@@ -372,6 +395,7 @@ function reconcileReadingGoalRollover(goal: ReadingGoal, todayIso: string = getL
       ...goal,
       lastUpdatedDate: todayIso,
       completedChapterIds: goal.completedChapterIds || [],
+      completedAtByChapter: goal.completedAtByChapter || {},
       history: migratedHistory
     };
   }
@@ -390,6 +414,7 @@ function reconcileReadingGoalRollover(goal: ReadingGoal, todayIso: string = getL
     return {
       ...goal,
       completedChapterIds: goal.completedChapterIds || [],
+      completedAtByChapter: goal.completedAtByChapter || {},
       history: aligned.slice(-14)
     };
   }
@@ -442,6 +467,7 @@ function reconcileReadingGoalRollover(goal: ReadingGoal, todayIso: string = getL
     bestStreakDays: Math.max(goal.bestStreakDays, nextStreak),
     lastUpdatedDate: todayIso,
     completedChapterIds: goal.completedChapterIds || [],
+    completedAtByChapter: goal.completedAtByChapter || {},
     history: nextHistory
   };
 }
@@ -517,6 +543,7 @@ function createGuestUser(withSavedOverlay = false): UserProfile {
       bestStreakDays: 0,
       lastUpdatedDate: todayIso,
       completedChapterIds: [],
+      completedAtByChapter: {},
       history: buildEmpty14DayHistory(todayIso, 2)
     }
   };
@@ -561,6 +588,7 @@ export function buildHref(route: string, params?: RouteParams): string {
       if (safeRedirect) qs.set('redirect', safeRedirect);
       if (params?.reauth) qs.set('reauth', params.reauth);
       if (params?.tab) qs.set('tab', params.tab);
+      if (params?.verify) qs.set('verify', params.verify);
       const queryStr = qs.toString();
       return queryStr ? `/account?${queryStr}` : '/account';
     }
@@ -574,6 +602,8 @@ export function buildHref(route: string, params?: RouteParams): string {
       return '/writer';
     case 'profile':
       return '/profile';
+    case 'leaderboard':
+      return '/leaderboard';
     default:
       return '/';
   }
@@ -652,10 +682,12 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
     const safeRedirect = sanitizeInternalRedirect(qs.get('redirect'));
     const reauth = qs.get('reauth') || undefined;
     const tab = qs.get('tab') || undefined;
+    const verify = qs.get('verify') || undefined;
     const params: RouteParams = {};
     if (safeRedirect) params.redirect = safeRedirect;
     if (reauth) params.reauth = reauth;
     if (tab) params.tab = tab;
+    if (verify) params.verify = verify;
     return {
       route: 'account',
       params
@@ -666,6 +698,7 @@ function parseLocationToRoute(pathname: string, search: string): { route: string
   if (cleanPath === '/admin') return { route: 'admin', params: {} };
   if (cleanPath === '/writer') return { route: 'writer', params: {} };
   if (cleanPath === '/profile') return { route: 'profile', params: {} };
+  if (cleanPath === '/leaderboard') return { route: 'leaderboard', params: {} };
 
   return { route: 'home', params: {} };
 }
@@ -1032,7 +1065,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   sbSession.session?.user?.email || sessionJson.user.email
                 );
                 if (sbLookup.source !== 'none') {
-                  resolvedRole = resolveMergedUserRole(resolvedRole, sbLookup);
+                  resolvedRole = resolveMergedUserRole(
+                    resolvedRole,
+                    sbLookup,
+                    sbSession.session?.user?.email || sessionJson.user.email
+                  );
+                } else {
+                  resolvedRole = normalizeWriterRole(
+                    resolvedRole,
+                    sbSession.session?.user?.email || sessionJson.user.email
+                  );
                 }
                 const sbAvatar = normalizePortableAvatarUrl(sbState.profile?.avatar_url);
                 if (!resolvedAvatar && sbAvatar) {
@@ -1055,8 +1097,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               }
             }
 
+            let resolvedEmailVerified = Boolean(sessionJson.user.emailVerified);
+            let resolvedEmailVerifiedAt = sessionJson.user.emailVerifiedAt;
+            if (!resolvedEmailVerified && isSupabaseConfigured && supabase) {
+              try {
+                const { data: sbSess } = await supabase.auth.getSession();
+                const sbUsr = sbSess.session?.user;
+                const sbConfirmedAt =
+                  sbUsr?.email_confirmed_at ||
+                  (sbUsr as { confirmed_at?: string | null } | undefined)?.confirmed_at ||
+                  null;
+                if (sbConfirmedAt && sbSess.session?.access_token) {
+                  const syncRes = await apiFetch('/api/auth/email-verification/sync-supabase', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ accessToken: sbSess.session.access_token }),
+                  });
+                  const syncJson = await parseJsonSafe<{ emailVerified?: boolean; user?: UserProfile }>(syncRes);
+                  if (syncRes.ok && syncJson?.emailVerified) {
+                    resolvedEmailVerified = true;
+                    resolvedEmailVerifiedAt = syncJson.user?.emailVerifiedAt || sbConfirmedAt;
+                  }
+                }
+              } catch {
+                // Keep Express status if Supabase sync fails
+              }
+            }
+
             const serverUser: UserProfile = {
               ...sessionJson.user,
+              emailVerified: resolvedEmailVerified,
+              emailVerifiedAt: resolvedEmailVerifiedAt,
               avatar: resolvedAvatar,
               nickname: resolvedNickname,
               bio: resolvedBio,
@@ -1109,12 +1180,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 const guestBase = createGuestUser();
                 const displayName = sbState.profile?.username || sbState.email?.split('@')[0] || 'Reader';
                 const savedGenres = loadSavedPreferredGenres(sbState.userId);
+                const { data: sbSess } = await supabase.auth.getSession();
+                const sbConfirmedAt =
+                  sbSess.session?.user?.email_confirmed_at ||
+                  (sbSess.session?.user as { confirmed_at?: string | null } | undefined)?.confirmed_at ||
+                  undefined;
                 setUser({
                   ...guestBase,
                   id: sbState.userId,
                   name: sbState.profile?.name || displayName,
                   nickname: sbState.profile?.nickname || displayName,
                   email: sbState.email || '',
+                  emailVerified: Boolean(sbConfirmedAt),
+                  emailVerifiedAt: sbConfirmedAt,
                   avatar: sbState.profile?.avatar_url || undefined,
                   bio: sbState.profile?.bio || undefined,
                   role: normalizeWriterRole(sbState.profile?.role),
@@ -1292,6 +1370,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let sbAvatar: string | undefined;
       let sbNickname: string | undefined;
       let sbBio: string | undefined;
+      let sbConfirmedAt: string | undefined;
+      let sbAccessToken: string | undefined;
 
       if (isSupabaseConfigured && supabase) {
         try {
@@ -1303,6 +1383,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             sbLoginOk = true;
             sbUserId = sbData.user.id;
             sbEmail = sbData.user.email || cleanEmail;
+            const confirmedRaw =
+              sbData.user.email_confirmed_at ||
+              (sbData.user as { confirmed_at?: string | null }).confirmed_at ||
+              undefined;
+            if (confirmedRaw) {
+              sbConfirmedAt = confirmedRaw;
+              sbAccessToken = sbData.session?.access_token;
+            }
             const ensured = await ensureSupabaseReaderProfile(
               sbData.user.id,
               data?.user?.nickname ||
@@ -1355,7 +1443,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             avatar: sbAvatar,
             bio: sbBio,
             email: sbEmail || cleanEmail,
-            role: sbRole,
+            emailVerified: Boolean(sbConfirmedAt),
+            emailVerifiedAt: sbConfirmedAt,
+            role: normalizeWriterRole(sbRole, sbEmail || cleanEmail),
             preferredGenres: savedGenres,
           });
           setPreferredGenresState(savedGenres);
@@ -1369,12 +1459,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (data.token) {
         setStoredSessionToken(data.token);
       }
-      const expressRole = normalizeWriterRole(data.user.role);
-      const finalRole: WriterRole = resolveMergedUserRole(expressRole, {
-        role: sbRole,
-        userRow: null,
-        source: sbRoleSource,
-      });
+
+      let resolvedEmailVerified = Boolean(data.user.emailVerified);
+      let resolvedEmailVerifiedAt = data.user.emailVerifiedAt;
+      if (!resolvedEmailVerified && sbConfirmedAt && sbAccessToken) {
+        try {
+          const syncRes = await apiFetch('/api/auth/email-verification/sync-supabase', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accessToken: sbAccessToken }),
+          });
+          const syncJson = await parseJsonSafe<{ emailVerified?: boolean; user?: UserProfile }>(syncRes);
+          if (syncRes.ok && syncJson?.emailVerified) {
+            resolvedEmailVerified = true;
+            resolvedEmailVerifiedAt = syncJson.user?.emailVerifiedAt || sbConfirmedAt;
+          }
+        } catch {
+          // Non-blocking if offline
+        }
+      }
+
+      const expressRole = normalizeWriterRole(data.user.role, data.user.email);
+      const finalRole: WriterRole = resolveMergedUserRole(
+        expressRole,
+        {
+          role: sbRole,
+          userRow: null,
+          source: sbRoleSource,
+        },
+        sbEmail || data.user.email || cleanEmail
+      );
       const expressAvatar = normalizePortableAvatarUrl(data.user.avatar);
       const finalAvatar = expressAvatar || sbAvatar;
       if (expressAvatar && !sbAvatar && sbUserId) {
@@ -1390,6 +1504,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : loadSavedPreferredGenres(data.user.id);
       setUser({
         ...data.user,
+        emailVerified: resolvedEmailVerified,
+        emailVerifiedAt: resolvedEmailVerifiedAt,
         avatar: finalAvatar,
         nickname: data.user.nickname || sbNickname,
         bio: data.user.bio || sbBio,
@@ -1584,15 +1700,235 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sbUser?.id || lookupUserId,
           sbUser?.email || lookupEmail
         );
-        resolvedRole = resolveMergedUserRole(expressRole, sbLookup);
+        resolvedRole = resolveMergedUserRole(
+          expressRole,
+          sbLookup,
+          sbUser?.email || lookupEmail
+        );
       } catch {
         // Keep current resolvedRole if Supabase check fails
       }
+    } else {
+      resolvedRole = normalizeWriterRole(resolvedRole, lookupEmail);
     }
 
     setUser((prev) => (prev.role === resolvedRole ? prev : { ...prev, role: resolvedRole }));
     return resolvedRole;
   }, [user.id, user.email, user.role]);
+
+  const checkEmailVerificationStatus = useCallback(async (): Promise<{
+    verified: boolean;
+    emailVerifiedAt?: string;
+    message?: string;
+    error?: string;
+  }> => {
+    if (!isAuthenticated) {
+      return { verified: false, error: 'Sign in to check email verification status.' };
+    }
+
+    let verified = Boolean(user.emailVerified);
+    let emailVerifiedAt = user.emailVerifiedAt;
+
+    try {
+      const statusRes = await apiFetch('/api/auth/email-verification/status');
+      if (statusRes.ok) {
+        const statusJson = await parseJsonSafe<{
+          emailVerified?: boolean;
+          emailVerifiedAt?: string | null;
+        }>(statusRes);
+        if (typeof statusJson?.emailVerified === 'boolean') {
+          verified = statusJson.emailVerified;
+          emailVerifiedAt = statusJson.emailVerifiedAt || undefined;
+        }
+      }
+    } catch {
+      // Fallback cleanly to current state / Supabase
+    }
+
+    if (!verified && isSupabaseConfigured && supabase) {
+      try {
+        const { data: userRes } = await supabase.auth.getUser();
+        const sbUser = userRes.user;
+        const sbConfirmedAt =
+          sbUser?.email_confirmed_at ||
+          (sbUser as { confirmed_at?: string | null } | undefined)?.confirmed_at ||
+          null;
+        if (sbConfirmedAt) {
+          const { data: sessData } = await supabase.auth.getSession();
+          const accessToken = sessData.session?.access_token;
+          if (accessToken) {
+            const syncRes = await apiFetch('/api/auth/email-verification/sync-supabase', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ accessToken }),
+            });
+            const syncJson = await parseJsonSafe<{
+              emailVerified?: boolean;
+              user?: UserProfile;
+            }>(syncRes);
+            if (syncRes.ok && syncJson?.emailVerified) {
+              verified = true;
+              emailVerifiedAt = syncJson.user?.emailVerifiedAt || sbConfirmedAt;
+            }
+          } else {
+            verified = true;
+            emailVerifiedAt = sbConfirmedAt;
+          }
+        }
+      } catch {
+        // Non-blocking
+      }
+    }
+
+    setUser((prev) => ({
+      ...prev,
+      emailVerified: verified,
+      emailVerifiedAt,
+    }));
+
+    return {
+      verified,
+      emailVerifiedAt,
+      message: verified
+        ? 'Your email address is verified.'
+        : 'Your email address is not verified yet.',
+    };
+  }, [isAuthenticated, user.emailVerified, user.emailVerifiedAt]);
+
+  const requestEmailVerification = useCallback(async (): Promise<{
+    ok: boolean;
+    alreadyVerified?: boolean;
+    deliveryMode?: 'email' | 'supabase' | 'preview';
+    previewCode?: string;
+    message?: string;
+    error?: string;
+  }> => {
+    if (!isAuthenticated || !user.email) {
+      return { ok: false, error: 'Please sign in first to verify your email.' };
+    }
+
+    try {
+      const res = await apiFetch('/api/auth/email-verification/request', {
+        method: 'POST',
+      });
+      const json = await parseJsonSafe<{
+        alreadyVerified?: boolean;
+        sent?: boolean;
+        deliveryMode?: 'email' | 'supabase' | 'preview';
+        previewCode?: string;
+        user?: UserProfile;
+        error?: string;
+      }>(res);
+
+      if (json?.alreadyVerified) {
+        setUser((prev) => ({
+          ...prev,
+          emailVerified: true,
+          emailVerifiedAt: json.user?.emailVerifiedAt || prev.emailVerifiedAt,
+        }));
+        return {
+          ok: true,
+          alreadyVerified: true,
+          message: 'Your email is already verified.',
+        };
+      }
+
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: json?.error || `Could not send verification request (${res.status}).`,
+        };
+      }
+
+      if (json?.deliveryMode === 'supabase' && isSupabaseConfigured && supabase) {
+        try {
+          const { error: resendErr } = await supabase.auth.resend({
+            type: 'signup',
+            email: user.email,
+            options: {
+              emailRedirectTo:
+                typeof window !== 'undefined'
+                  ? `${window.location.origin}/account?tab=settings`
+                  : undefined,
+            },
+          });
+          if (resendErr) {
+            return {
+              ok: false,
+              deliveryMode: 'supabase',
+              error: resendErr.message || 'Could not send confirmation email via Supabase.',
+            };
+          }
+          return {
+            ok: true,
+            deliveryMode: 'supabase',
+            message: `Verification link sent to ${user.email}. Click the link in your inbox, then tap Check Verification Status.`,
+          };
+        } catch {
+          return {
+            ok: false,
+            deliveryMode: 'supabase',
+            error: 'Could not reach Supabase to resend your verification email.',
+          };
+        }
+      }
+
+      if (json?.deliveryMode === 'email') {
+        return {
+          ok: true,
+          deliveryMode: 'email',
+          message: `A 6-digit verification code was sent to ${user.email}. Enter it below to verify your account.`,
+        };
+      }
+
+      return {
+        ok: true,
+        deliveryMode: 'preview',
+        previewCode: json?.previewCode,
+        message: json?.previewCode
+          ? `Verification code generated (preview mode): ${json.previewCode}`
+          : 'Verification code generated. Enter it below to verify your email.',
+      };
+    } catch {
+      return { ok: false, error: 'Network error while requesting email verification.' };
+    }
+  }, [isAuthenticated, user.email]);
+
+  const confirmEmailVerificationCode = useCallback(
+    async (code: string): Promise<{ ok: boolean; message?: string; error?: string }> => {
+      if (!isAuthenticated) {
+        return { ok: false, error: 'Please sign in first.' };
+      }
+      const cleanCode = code.trim();
+      if (!/^\d{6}$/.test(cleanCode)) {
+        return { ok: false, error: 'Enter the 6-digit verification code.' };
+      }
+      try {
+        const res = await apiFetch('/api/auth/email-verification/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: cleanCode }),
+        });
+        const json = await parseJsonSafe<{
+          verified?: boolean;
+          user?: UserProfile;
+          error?: string;
+        }>(res);
+        if (!res.ok || !json?.verified) {
+          return { ok: false, error: json?.error || 'Could not verify code.' };
+        }
+        setUser((prev) => ({
+          ...prev,
+          emailVerified: true,
+          emailVerifiedAt: json.user?.emailVerifiedAt || new Date().toISOString(),
+        }));
+        return { ok: true, message: 'Email verified successfully.' };
+      } catch {
+        return { ok: false, error: 'Network error while verifying code.' };
+      }
+    },
+    [isAuthenticated]
+  );
 
   const updateProfile = useCallback(
     async (patch: {
@@ -1752,6 +2088,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const openPaystackCheckout = (request: PaystackCheckoutRequest) => {
+    if (isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email))) {
+      setCheckoutStatusMessage(
+        'Your Owner account already includes complimentary total access to all Lorethos stories and features.'
+      );
+      return;
+    }
+    if (isAuthenticated && (user.role === 'writer' || user.role === 'admin')) {
+      if (request.type === 'subscription') {
+        setCheckoutStatusMessage(
+          'Your Writer account already includes complimentary catalog reading access. Only Owner-designated books require individual purchase.'
+        );
+        return;
+      }
+      if (request.type === 'book_purchase' && request.storyId) {
+        const targetStory = stories.find((s) => s.id === request.storyId);
+        if (targetStory && !targetStory.writerRequiresPurchase) {
+          setCheckoutStatusMessage(
+            `"${targetStory.title}" is included complimentary with your Writer access.`
+          );
+          return;
+        }
+      }
+    }
     setPaystackModal({ isOpen: true, data: request });
   };
 
@@ -2038,13 +2397,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
         }
 
+        const todayIso = getLocalIsoDate();
+        const existingCompletionDates = currentGoal.completedAtByChapter || {};
         const nextGoal: ReadingGoal = {
           ...currentGoal,
           currentProgress: nextProgress,
           streakDays: newStreak,
           bestStreakDays: newBest,
-          lastUpdatedDate: getLocalIsoDate(),
+          lastUpdatedDate: todayIso,
           completedChapterIds: chapterId ? [...completedIds, chapterId] : completedIds,
+          completedAtByChapter: chapterId
+            ? { ...existingCompletionDates, [chapterId]: existingCompletionDates[chapterId] || todayIso }
+            : existingCompletionDates,
           history: updatedHistory
         };
 
@@ -2582,11 +2946,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           mergedMap.set(existingKey, sbEntry);
           if (emailKey) emailToKey.set(emailKey, existingKey);
         } else {
-          const mergedRole = resolveMergedUserRole(existing.role, {
-            role: sbEntry.role,
-            userRow: null,
-            source: 'users',
-          });
+          const mergedRole = resolveMergedUserRole(
+            existing.role,
+            {
+              role: sbEntry.role,
+              userRow: null,
+              source: 'users',
+            },
+            existing.email || sbEntry.email
+          );
           mergedMap.set(existingKey, {
             ...existing,
             nickname: existing.nickname || sbEntry.nickname,
@@ -2678,6 +3046,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     coverImage: string;
     accessTier: AccessTier;
     priceNgn: number;
+    writerRequiresPurchase?: boolean;
     publicationStatus?: PublicationStatus;
   }): Promise<{ ok: boolean; error?: string }> => {
     try {
@@ -2726,13 +3095,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     storyId: string,
     accessTier: AccessTier,
     priceNgn: number,
-    freeChaptersCount: number
+    freeChaptersCount: number,
+    writerRequiresPurchase?: boolean
   ): Promise<{ ok: boolean; error?: string }> => {
     try {
       const res = await apiFetch(`/api/admin/stories/${encodeURIComponent(storyId)}/pricing`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessTier, priceNgn, freeChaptersCount })
+        body: JSON.stringify({ accessTier, priceNgn, freeChaptersCount, writerRequiresPurchase })
       });
       const data = await res.json();
       if (!res.ok) return { ok: false, error: data.error || 'Failed to update pricing.' };
@@ -2811,11 +3181,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const hasAccessToChapter = useCallback(
     (story: Story, chapter: Chapter): boolean => {
+      if (isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email))) return true;
       if (chapter.isFree || story.accessTier === 'free') return true;
       if (!isAuthenticated) return false;
-      if (user.role === 'owner' || user.role === 'admin') return true;
-      if (user.subscription.status === 'active' && story.accessTier === 'subscription') return true;
       if (user.unlockedStoryIds.includes(story.id)) return true;
+      if (user.role === 'writer' || user.role === 'admin') {
+        return !Boolean(story.writerRequiresPurchase);
+      }
+      if (user.subscription.status === 'active' && story.accessTier === 'subscription') return true;
       return false;
     },
     [isAuthenticated, user]
@@ -2866,6 +3239,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         register,
         logout,
         refreshUserRole,
+        checkEmailVerificationStatus,
+        requestEmailVerification,
+        confirmEmailVerificationCode,
         updateProfile,
         preferredGenres,
         setPreferredGenres,

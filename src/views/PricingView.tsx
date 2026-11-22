@@ -5,6 +5,8 @@ import { Check, ShieldCheck, HelpCircle, ArrowRight } from 'lucide-react';
 export const PricingView: React.FC = () => {
   const { openPaystackCheckout, user, isAuthenticated, navigate, buildHref, stories } = useApp();
   const isPatron = isAuthenticated && user.subscription.status === 'active';
+  const isOwner = isAuthenticated && user.role === 'owner';
+  const isWriter = isAuthenticated && (user.role === 'writer' || user.role === 'admin');
 
   const handleLink = (e: React.MouseEvent<HTMLAnchorElement>, route: string) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -28,6 +30,54 @@ export const PricingView: React.FC = () => {
             Start with complimentary opening chapters on every title, subscribe for full catalog access, or unlock individual stories one by one.
           </p>
         </div>
+
+        {isOwner && (
+          <div className="p-6 sm:p-7 rounded-2xl bg-[#2D142C] text-[#F9F6F0] border border-[#C85A32]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+            <div className="space-y-1">
+              <div className="text-[11px] font-sans-ui font-semibold uppercase tracking-[0.18em] text-[#C85A32]">
+                Owner Account Active &middot; {user.email}
+              </div>
+              <h2 className="font-display text-2xl font-bold text-white">
+                Complimentary Total All-Access Included
+              </h2>
+              <p className="font-reader text-xs sm:text-sm text-white/80">
+                As Lorethos Owner, every published story, draft, premium chapter, AI studio tool, and trailer is unlocked automatically at no cost.
+              </p>
+            </div>
+            <a
+              href={buildHref('stories')}
+              onClick={(e) => handleLink(e, 'stories')}
+              className="px-5 py-2.5 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] text-white text-xs font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-2"
+            >
+              <span>Open Full Library</span>
+              <ArrowRight className="w-4 h-4" />
+            </a>
+          </div>
+        )}
+
+        {!isOwner && isWriter && (
+          <div className="p-6 sm:p-7 rounded-2xl bg-white dark:bg-[#1E111E] border border-[#C85A32]/35 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
+            <div className="space-y-1">
+              <div className="text-[11px] font-sans-ui font-semibold uppercase tracking-[0.18em] text-[#C85A32]">
+                Approved Writer Privileges
+              </div>
+              <h2 className="font-display text-2xl font-bold">
+                Complimentary Catalog Access Active
+              </h2>
+              <p className="font-reader text-xs sm:text-sm text-[#2D142C]/75 dark:text-white/75">
+                You do not need a monthly or annual subscription. All published titles are open to you except books specifically designated for purchase by the Owner.
+              </p>
+            </div>
+            <a
+              href={buildHref('writer')}
+              onClick={(e) => handleLink(e, 'writer')}
+              className="px-5 py-2.5 rounded-lg bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] text-xs font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-2"
+            >
+              <span>Open Writer Studio</span>
+              <ArrowRight className="w-4 h-4" />
+            </a>
+          </div>
+        )}
 
         {/* Pricing Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-stretch">
@@ -122,21 +172,32 @@ export const PricingView: React.FC = () => {
             </div>
 
             <div className="pt-8">
-              <button
-                type="button"
-                onClick={() =>
-                  openPaystackCheckout({
-                    type: 'subscription',
-                    title: 'Patron Monthly Subscription',
-                    amountNgn: 3500,
-                    planId: 'monthly'
-                  })
-                }
-                className="w-full py-3.5 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs tracking-wide rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all cursor-pointer"
-              >
-                <span>{isPatron ? 'Renew Monthly Plan (₦3,500)' : 'Subscribe via Paystack (₦3,500)'}</span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
+              {isOwner || isWriter ? (
+                <a
+                  href={buildHref('stories')}
+                  onClick={(e) => handleLink(e, 'stories')}
+                  className="w-full py-3.5 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs tracking-wide rounded-lg flex items-center justify-center gap-2 shadow-md transition-all"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{isOwner ? 'Included in Owner Access' : 'Included in Writer Access'}</span>
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() =>
+                    openPaystackCheckout({
+                      type: 'subscription',
+                      title: 'Patron Monthly Subscription',
+                      amountNgn: 3500,
+                      planId: 'monthly'
+                    })
+                  }
+                  className="w-full py-3.5 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs tracking-wide rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all cursor-pointer"
+                >
+                  <span>{isPatron ? 'Renew Monthly Plan (₦3,500)' : 'Subscribe via Paystack (₦3,500)'}</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
 
@@ -178,21 +239,32 @@ export const PricingView: React.FC = () => {
             </div>
 
             <div className="pt-8">
-              <button
-                type="button"
-                onClick={() =>
-                  openPaystackCheckout({
-                    type: 'subscription',
-                    title: 'Patron Annual Subscription (12 Months)',
-                    amountNgn: 32000,
-                    planId: 'annual'
-                  })
-                }
-                className="w-full py-3 px-4 rounded-lg bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer flex items-center justify-center gap-2"
-              >
-                <span>Subscribe Annual (₦32,000)</span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
+              {isOwner || isWriter ? (
+                <a
+                  href={buildHref('stories')}
+                  onClick={(e) => handleLink(e, 'stories')}
+                  className="w-full py-3 px-4 rounded-lg bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] text-xs font-semibold flex items-center justify-center gap-2"
+                >
+                  <Check className="w-4 h-4 text-[#C85A32]" />
+                  <span>{isOwner ? 'Included in Owner Access' : 'Included in Writer Access'}</span>
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() =>
+                    openPaystackCheckout({
+                      type: 'subscription',
+                      title: 'Patron Annual Subscription (12 Months)',
+                      amountNgn: 32000,
+                      planId: 'annual'
+                    })
+                  }
+                  className="w-full py-3 px-4 rounded-lg bg-[#2D142C] dark:bg-white text-white dark:text-[#160C16] text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <span>Subscribe Annual (₦32,000)</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
 
@@ -222,7 +294,13 @@ export const PricingView: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
-            {stories.map(s => (
+            {stories.map(s => {
+              const alreadyUnlocked =
+                isOwner ||
+                s.accessTier === 'free' ||
+                (isAuthenticated && user.unlockedStoryIds.includes(s.id)) ||
+                (isWriter && !s.writerRequiresPurchase);
+              return (
               <div
                 key={s.id}
                 className="p-4 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] border border-[#2D142C]/10 dark:border-white/10 flex items-center justify-between gap-3"
@@ -230,25 +308,46 @@ export const PricingView: React.FC = () => {
                 <div className="min-w-0">
                   <h3 className="font-display text-sm font-bold truncate">{s.title}</h3>
                   <div className="text-[11px] text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
-                    ₦{s.priceNgn.toLocaleString('en-NG')} one-time
+                    {s.accessTier === 'free'
+                      ? 'Free Series'
+                      : isOwner
+                      ? 'Owner All-Access'
+                      : alreadyUnlocked
+                      ? 'Complimentary Access'
+                      : `₦${s.priceNgn.toLocaleString('en-NG')} one-time`}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    openPaystackCheckout({
-                      type: 'book_purchase',
-                      title: `Book Unlock: ${s.title}`,
-                      amountNgn: s.priceNgn,
-                      storyId: s.id
-                    })
-                  }
-                  className="px-2.5 py-1.5 text-[11px] font-semibold bg-[#C85A32] text-white rounded hover:bg-[#b04d28] cursor-pointer shrink-0"
-                >
-                  Unlock
-                </button>
+                {alreadyUnlocked ? (
+                  <a
+                    href={buildHref('story-detail', { slug: s.slug })}
+                    onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                      e.preventDefault();
+                      navigate('story-detail', { slug: s.slug });
+                    }}
+                    className="px-2.5 py-1.5 text-[11px] font-semibold border border-emerald-600/40 text-emerald-700 dark:text-emerald-300 rounded hover:border-[#C85A32] shrink-0 whitespace-nowrap"
+                  >
+                    Read
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openPaystackCheckout({
+                        type: 'book_purchase',
+                        title: `Book Unlock: ${s.title}`,
+                        amountNgn: s.priceNgn,
+                        storyId: s.id
+                      })
+                    }
+                    className="px-2.5 py-1.5 text-[11px] font-semibold bg-[#C85A32] text-white rounded hover:bg-[#b04d28] cursor-pointer shrink-0 whitespace-nowrap"
+                  >
+                    Unlock
+                  </button>
+                )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

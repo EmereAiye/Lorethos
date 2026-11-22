@@ -59,6 +59,15 @@ export const Footer: React.FC = () => {
               </li>
               <li>
                 <a
+                  href={buildHref('leaderboard')}
+                  onClick={(e) => handleLink(e, 'leaderboard')}
+                  className="hover:text-[#C85A32] transition-colors"
+                >
+                  Reading Leaderboard
+                </a>
+              </li>
+              <li>
+                <a
                   href={buildHref('pricing')}
                   onClick={(e) => handleLink(e, 'pricing')}
                   className="hover:text-[#C85A32] transition-colors"

@@ -87,11 +87,13 @@ export const StoryOverviewView: React.FC = () => {
     );
   }
 
+  const isWriterOrAdmin = isAuthenticated && (user.role === 'writer' || user.role === 'admin');
   const isUnlockedForUser =
     isAuthenticated &&
-    (user.unlockedStoryIds.includes(story.id) ||
-      user.subscription.status === 'active' ||
-      user.role === 'owner' ||
+    (user.role === 'owner' ||
+      (isWriterOrAdmin && !story.writerRequiresPurchase) ||
+      user.unlockedStoryIds.includes(story.id) ||
+      (user.subscription.status === 'active' && story.accessTier === 'subscription') ||
       story.accessTier === 'free');
 
   const handleShare = async () => {
@@ -318,10 +320,22 @@ export const StoryOverviewView: React.FC = () => {
                 ) : (
                   <div className="flex items-center gap-2 text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 px-3 py-2 rounded-lg">
                     <Check className="w-4 h-4" />
-                    <span>Unlocked on your Account</span>
+                    <span>
+                      {user.role === 'owner'
+                        ? 'Owner All-Access Included'
+                        : isWriterOrAdmin
+                        ? 'Complimentary Writer Access'
+                        : 'Unlocked on your Account'}
+                    </span>
                   </div>
                 )}
               </div>
+
+              {!isUnlockedForUser && isWriterOrAdmin && story.writerRequiresPurchase && (
+                <div className="p-3 rounded-lg bg-[#C85A32]/10 border border-[#C85A32]/25 text-xs font-sans-ui text-[#2D142C] dark:text-[#F9F6F0]">
+                  Designated by the Owner as an individual purchase release for writers. Purchase once to unlock all remaining chapters.
+                </div>
+              )}
 
               <div className="text-[11px] text-[#2D142C]/65 dark:text-white/65 font-sans-ui flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span>&check; Chapters 1 to {story.freeChaptersCount} are Free</span>
@@ -363,7 +377,7 @@ export const StoryOverviewView: React.FC = () => {
               </p>
             </div>
 
-            {!isUnlockedForUser && (
+            {!isUnlockedForUser && !isWriterOrAdmin && user.role !== 'owner' && (
               <a
                 href={buildHref('pricing')}
                 onClick={(e) => handleLink(e, 'pricing')}

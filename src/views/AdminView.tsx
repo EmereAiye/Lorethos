@@ -69,6 +69,7 @@ export const AdminView: React.FC = () => {
   const [newStorySynopsis, setNewStorySynopsis] = useState('');
   const [newStoryPrice, setNewStoryPrice] = useState(2500);
   const [newStoryTier, setNewStoryTier] = useState<AccessTier>('subscription');
+  const [newStoryWriterRequiresPurchase, setNewStoryWriterRequiresPurchase] = useState(false);
   const [newStoryPubStatus, setNewStoryPubStatus] = useState<PublicationStatus>('draft');
   const [newStoryCover, setNewStoryCover] = useState('/assets/images/book_cover_obsidian_throne_1794465561565.jpg');
   const createDialogRef = useRef<HTMLDivElement | null>(null);
@@ -231,6 +232,7 @@ export const AdminView: React.FC = () => {
       coverImage: newStoryCover,
       accessTier: newStoryTier,
       priceNgn: Number(newStoryPrice),
+      writerRequiresPurchase: newStoryTier !== 'free' && newStoryWriterRequiresPurchase,
       publicationStatus: newStoryPubStatus
     });
 
@@ -242,6 +244,7 @@ export const AdminView: React.FC = () => {
     setIsCreatingStory(false);
     setNewStoryTitle('');
     setNewStorySynopsis('');
+    setNewStoryWriterRequiresPurchase(false);
     void refreshAdminOverview();
     showToast(`Story saved as ${newStoryPubStatus}.`);
   };
@@ -998,6 +1001,27 @@ export const AdminView: React.FC = () => {
                   </div>
                 </div>
 
+                {newStoryTier !== 'free' && (
+                  <label
+                    htmlFor="new-story-writer-purchase"
+                    className="flex items-start gap-2.5 p-3 rounded-lg border border-[#2D142C]/15 dark:border-white/15 bg-[#F9F6F0]/70 dark:bg-[#160C16]/70 cursor-pointer"
+                  >
+                    <input
+                      id="new-story-writer-purchase"
+                      type="checkbox"
+                      checked={newStoryWriterRequiresPurchase}
+                      onChange={(e) => setNewStoryWriterRequiresPurchase(e.target.checked)}
+                      className="mt-0.5 accent-[#C85A32]"
+                    />
+                    <span className="text-xs leading-relaxed">
+                      <strong className="block font-semibold">Require writers to purchase this book</strong>
+                      <span className="opacity-75">
+                        By default, upgraded Writers read catalog books free. Check this to require Writers to purchase this specific release (Owner always retains total access).
+                      </span>
+                    </span>
+                  </label>
+                )}
+
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label htmlFor="new-story-synopsis" className="block font-semibold">
@@ -1038,11 +1062,14 @@ export const AdminView: React.FC = () => {
         {/* Tab 2: Access & Pricing Rules */}
         {activeTab === 'pricing' && (
           <div className="bg-white dark:bg-[#1E111E] p-6 rounded-xl border border-[#2D142C]/10 dark:border-white/10 space-y-6">
-            <div>
+            <div className="space-y-2">
               <h2 className="font-display text-2xl font-bold">Access Tier &amp; Pricing Rules</h2>
-              <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui mt-0.5">
-                Server-authoritative pricing and free chapter threshold per title.
+              <p className="text-xs text-[#2D142C]/65 dark:text-white/65 font-sans-ui">
+                Server-authoritative pricing, free chapter threshold, and Owner-specified Writer paywall exclusions per title.
               </p>
+              <div className="p-3.5 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] border border-[#C85A32]/25 text-xs font-reader text-[#2D142C]/85 dark:text-white/85">
+                <strong>Owner Privilege:</strong> Your Owner account always has complimentary total access to every title and draft. Upgraded Writers read all paid books free by default unless you switch a specific book to <strong>Writers Must Pay</strong> below.
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -1053,10 +1080,14 @@ export const AdminView: React.FC = () => {
                     <th className="py-3 px-4">Access Tier</th>
                     <th className="py-3 px-4">One-Time Price (₦)</th>
                     <th className="py-3 px-4">Free Chapters</th>
+                    <th className="py-3 px-4">Writer Access</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#2D142C]/10 dark:divide-white/10">
-                  {stories.map(story => (
+                  {stories.map(story => {
+                    const isFreeTier = story.accessTier === 'free';
+                    const writerMustPay = !isFreeTier && Boolean(story.writerRequiresPurchase);
+                    return (
                     <tr key={story.id}>
                       <td className="py-3 px-4 font-bold">{story.title}</td>
                       <td className="py-3 px-4">
@@ -1068,7 +1099,8 @@ export const AdminView: React.FC = () => {
                               story.id,
                               e.target.value as AccessTier,
                               story.priceNgn,
-                              story.freeChaptersCount
+                              story.freeChaptersCount,
+                              e.target.value === 'free' ? false : Boolean(story.writerRequiresPurchase)
                             )
                           }
                           className="bg-transparent border border-slate-300 dark:border-white/20 rounded px-2 py-1 text-xs"
@@ -1088,7 +1120,8 @@ export const AdminView: React.FC = () => {
                               story.id,
                               story.accessTier,
                               Number(e.target.value),
-                              story.freeChaptersCount
+                              story.freeChaptersCount,
+                              Boolean(story.writerRequiresPurchase)
                             )
                           }
                           className="w-24 px-2 py-1 border border-slate-300 dark:border-white/20 rounded font-mono text-xs"
@@ -1103,7 +1136,8 @@ export const AdminView: React.FC = () => {
                                 story.id,
                                 story.accessTier,
                                 story.priceNgn,
-                                Math.max(0, story.freeChaptersCount - 1)
+                                Math.max(0, story.freeChaptersCount - 1),
+                                Boolean(story.writerRequiresPurchase)
                               )
                             }
                             className="px-2 py-0.5 border rounded cursor-pointer"
@@ -1118,7 +1152,8 @@ export const AdminView: React.FC = () => {
                                 story.id,
                                 story.accessTier,
                                 story.priceNgn,
-                                story.freeChaptersCount + 1
+                                story.freeChaptersCount + 1,
+                                Boolean(story.writerRequiresPurchase)
                               )
                             }
                             className="px-2 py-0.5 border rounded cursor-pointer"
@@ -1127,8 +1162,44 @@ export const AdminView: React.FC = () => {
                           </button>
                         </div>
                       </td>
+                      <td className="py-3 px-4">
+                        {isFreeTier ? (
+                          <span className="text-[11px] opacity-65">Open to All (Free)</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const nextRestricted = !writerMustPay;
+                              const res = await updateStoryPricing(
+                                story.id,
+                                story.accessTier,
+                                story.priceNgn,
+                                story.freeChaptersCount,
+                                nextRestricted
+                              );
+                              if (res.ok) {
+                                showToast(
+                                  nextRestricted
+                                    ? `Writers now require purchase for "${story.title}".`
+                                    : `Writers now have complimentary access to "${story.title}".`
+                                );
+                              } else {
+                                showToast(res.error || 'Could not update writer access rule.');
+                              }
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold cursor-pointer whitespace-nowrap shrink-0 transition-colors ${
+                              writerMustPay
+                                ? 'bg-[#C85A32] text-white hover:bg-[#b04d28]'
+                                : 'border border-emerald-600/40 text-emerald-700 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/30 hover:border-[#C85A32]'
+                            }`}
+                          >
+                            {writerMustPay ? 'Writers Must Pay' : 'Complimentary for Writers'}
+                          </button>
+                        )}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

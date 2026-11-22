@@ -206,7 +206,7 @@ export const ReaderView: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [storySlug, chapterNumber, isAuthenticated, user.subscription.status, user.unlockedStoryIds, fetchChapterContent]);
+  }, [storySlug, chapterNumber, isAuthenticated, user.role, user.subscription.status, user.unlockedStoryIds, fetchChapterContent]);
 
   useEffect(() => {
     if (chapterId) {
@@ -2464,42 +2464,64 @@ export const ReaderView: React.FC = () => {
                     Chapter {chapter.chapterNumber} Is Locked
                   </h2>
                   <p className="font-reader text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                    Chapters 1&ndash;{story.freeChaptersCount} are complimentary. Unlock Chapter {chapter.chapterNumber} by subscribing to the Monthly Plan or purchasing this story.
+                    {isAuthenticated && (user.role === 'writer' || user.role === 'admin') && story.writerRequiresPurchase
+                      ? `This title was designated by the Owner as an individual purchase release for writers. Purchase "${story.title}" once to unlock Chapter ${chapter.chapterNumber} and all remaining chapters.`
+                      : `Chapters 1–${story.freeChaptersCount} are complimentary. Unlock Chapter ${chapter.chapterNumber} by subscribing to the Monthly Plan or purchasing this story.`}
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg mx-auto pt-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      openPaystackCheckout({
-                        type: 'subscription',
-                        title: 'Patron Monthly Subscription',
-                        amountNgn: 3500,
-                        planId: 'monthly'
-                      })
-                    }
-                    className="py-3.5 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs tracking-wide rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all cursor-pointer"
-                  >
-                    <ShieldCheck className="w-4 h-4" />
-                    <span>Subscribe Monthly (₦3,500/mo)</span>
-                  </button>
+                {isAuthenticated && (user.role === 'writer' || user.role === 'admin') && story.writerRequiresPurchase ? (
+                  <div className="max-w-sm mx-auto pt-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openPaystackCheckout({
+                          type: 'book_purchase',
+                          title: `Book Unlock: ${story.title}`,
+                          amountNgn: story.priceNgn,
+                          storyId: story.id
+                        })
+                      }
+                      className="w-full py-3.5 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs tracking-wide rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all cursor-pointer"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>Unlock Story (₦{story.priceNgn.toLocaleString('en-NG')} Once)</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg mx-auto pt-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openPaystackCheckout({
+                          type: 'subscription',
+                          title: 'Patron Monthly Subscription',
+                          amountNgn: 3500,
+                          planId: 'monthly'
+                        })
+                      }
+                      className="py-3.5 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs tracking-wide rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition-all cursor-pointer"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>Subscribe Monthly (₦3,500/mo)</span>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      openPaystackCheckout({
-                        type: 'book_purchase',
-                        title: `Book Unlock: ${story.title}`,
-                        amountNgn: story.priceNgn,
-                        storyId: story.id
-                      })
-                    }
-                    className="py-3.5 px-4 border border-slate-300 dark:border-white/20 hover:border-[#C85A32] text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                  >
-                    <span>Unlock Story (₦{story.priceNgn.toLocaleString('en-NG')} Once)</span>
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openPaystackCheckout({
+                          type: 'book_purchase',
+                          title: `Book Unlock: ${story.title}`,
+                          amountNgn: story.priceNgn,
+                          storyId: story.id
+                        })
+                      }
+                      className="py-3.5 px-4 border border-slate-300 dark:border-white/20 hover:border-[#C85A32] text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <span>Unlock Story (₦{story.priceNgn.toLocaleString('en-NG')} Once)</span>
+                    </button>
+                  </div>
+                )}
 
                 <div className="text-[11px] text-slate-500 dark:text-slate-400 font-sans-ui flex items-center justify-center gap-2 pt-1">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
@@ -2618,7 +2640,7 @@ export const ReaderView: React.FC = () => {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-semibold">
-                      Posting as {getDisplayName(user)} &middot; Rank {computeReaderRank(user, stories).roman}
+                      Posting as {getDisplayName(user)} &middot; {computeReaderRank(user, stories).title}
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5">

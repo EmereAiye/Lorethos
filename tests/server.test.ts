@@ -997,7 +997,7 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     assert.equal(delCommentRes.status, 200);
   });
 
-  test('getDisplayName and computeReaderRank map completed chapters across all 6 literary tiers', async () => {
+  test('getDisplayName and computeReaderRank map completed chapters across all 10 literary tiers up to 200 chapters', async () => {
     const { getDisplayName, computeReaderRank } = await import('../src/utils/readerProfile');
     const { AUTHORITATIVE_STORIES } = await import('../server/catalog');
 
@@ -1031,15 +1031,15 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     assert.equal(rank0.roman, 'I');
     assert.equal(rank0.title, 'Novice Wanderer');
     assert.equal(rank0.nextTitle, 'Page Seeker');
-    assert.equal(rank0.remainingToNext, 2);
+    assert.equal(rank0.remainingToNext, 5);
 
-    const rank2 = computeReaderRank(
+    const rank5 = computeReaderRank(
       {
         ...baseUser,
-        readingGoal: { ...baseUser.readingGoal, completedChapterIds: ['c1'] },
+        readingGoal: { ...baseUser.readingGoal, completedChapterIds: ['c1', 'c2', 'c3', 'c4'] },
         readingProgress: {
           [AUTHORITATIVE_STORIES[0].id]: {
-            chapterId: 'c2',
+            chapterId: 'c5',
             chapterNumber: 1,
             progressPercent: 98,
             lastReadAt: '2026-01-01T00:00:00.000Z',
@@ -1048,28 +1048,44 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       },
       AUTHORITATIVE_STORIES
     );
-    assert.equal(rank2.completedChapters, 2);
-    assert.equal(rank2.roman, 'II');
-    assert.equal(rank2.title, 'Page Seeker');
+    assert.equal(rank5.completedChapters, 5);
+    assert.equal(rank5.roman, 'II');
+    assert.equal(rank5.title, 'Page Seeker');
 
     const mkIds = (count: number) => Array.from({ length: count }, (_, idx) => `ch_${idx + 1}`);
     assert.equal(
-      computeReaderRank({ ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(5) } }, AUTHORITATIVE_STORIES).roman,
+      computeReaderRank({ ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(12) } }, AUTHORITATIVE_STORIES).roman,
       'III'
     );
     assert.equal(
-      computeReaderRank({ ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(10) } }, AUTHORITATIVE_STORIES).roman,
+      computeReaderRank({ ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(25) } }, AUTHORITATIVE_STORIES).roman,
       'IV'
     );
     assert.equal(
-      computeReaderRank({ ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(18) } }, AUTHORITATIVE_STORIES).roman,
+      computeReaderRank({ ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(40) } }, AUTHORITATIVE_STORIES).roman,
       'V'
     );
+    assert.equal(
+      computeReaderRank({ ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(60) } }, AUTHORITATIVE_STORIES).roman,
+      'VI'
+    );
+    assert.equal(
+      computeReaderRank({ ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(85) } }, AUTHORITATIVE_STORIES).roman,
+      'VII'
+    );
+    assert.equal(
+      computeReaderRank({ ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(115) } }, AUTHORITATIVE_STORIES).roman,
+      'VIII'
+    );
+    assert.equal(
+      computeReaderRank({ ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(150) } }, AUTHORITATIVE_STORIES).roman,
+      'IX'
+    );
     const rankMax = computeReaderRank(
-      { ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(30) } },
+      { ...baseUser, readingGoal: { ...baseUser.readingGoal, completedChapterIds: mkIds(200) } },
       AUTHORITATIVE_STORIES
     );
-    assert.equal(rankMax.roman, 'VI');
+    assert.equal(rankMax.roman, 'X');
     assert.equal(rankMax.title, 'Grand Lorekeeper');
     assert.equal(rankMax.nextTitle, null);
     assert.equal(rankMax.progressToNextPercent, 100);
@@ -2262,6 +2278,398 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     assert.equal(demoteRes.status, 200);
     const demoteData = await demoteRes.json();
     assert.equal(demoteData.user.role, 'reader');
+  });
+
+  test('Owner has total complimentary access and Writers get complimentary access except Owner-restricted books', async () => {
+    // Register a fresh non-subscribed reader + upgrade them to writer via Owner
+    const writerRegRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Amina Scribe',
+        nickname: 'AminaScribe',
+        email: 'amina.writer@example.com',
+        password: 'WriterPassword123',
+      }),
+    });
+    assert.equal(writerRegRes.status, 201);
+    const writerCookie = extractSessionCookie(writerRegRes);
+    const writerRegData = await writerRegRes.json();
+    const writerUserId = writerRegData.user.id as string;
+
+    // Register a normal non-subscribed reader for contrast
+    const plainRegRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Tunde Reader',
+        email: 'tunde.reader@example.com',
+        password: 'ReaderPassword123',
+      }),
+    });
+    assert.equal(plainRegRes.status, 201);
+    const plainReaderCookie = extractSessionCookie(plainRegRes);
+
+    // Owner upgrades Amina to writer
+    const upgradeRes = await fetch(
+      `${baseUrl}/api/admin/users/${encodeURIComponent(writerUserId)}/role`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({ role: 'writer' }),
+      }
+    );
+    assert.equal(upgradeRes.status, 200);
+
+    // Pick two paid stories: 'the-obsidian-throne' (subscription, ch 4 locked) and 'chronicles-of-the-sunken-epoch' (purchase, ch 4 locked)
+    const catalogData = await (await fetch(`${baseUrl}/api/stories`, { headers: { Cookie: ownerCookie } })).json();
+    const obsidian = catalogData.stories.find((s: { slug: string }) => s.slug === 'the-obsidian-throne');
+    const sunken = catalogData.stories.find((s: { slug: string }) => s.slug === 'chronicles-of-the-sunken-epoch');
+    assert.ok(obsidian && sunken);
+
+    // 1. Plain reader without subscription/unlock cannot read paid chapters
+    const plainObsidianCh4 = await fetch(`${baseUrl}/api/stories/the-obsidian-throne/chapters/4`, {
+      headers: { Cookie: plainReaderCookie },
+    });
+    assert.equal(plainObsidianCh4.status, 403);
+
+    // 2. Owner without any paid subscription reads BOTH paid chapters AND unpublished drafts freely
+    const ownerObsidianCh4 = await fetch(`${baseUrl}/api/stories/the-obsidian-throne/chapters/4`, {
+      headers: { Cookie: ownerCookie },
+    });
+    assert.equal(ownerObsidianCh4.status, 200);
+    const ownerSunkenCh4 = await fetch(`${baseUrl}/api/stories/chronicles-of-the-sunken-epoch/chapters/4`, {
+      headers: { Cookie: ownerCookie },
+    });
+    assert.equal(ownerSunkenCh4.status, 200);
+
+    // Owner is never charged by checkout endpoint
+    const ownerPayRes = await fetch(`${baseUrl}/api/payments/initialize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+      body: JSON.stringify({ itemType: 'subscription', planId: 'monthly' }),
+    });
+    assert.equal(ownerPayRes.status, 400);
+
+    // 3. Upgraded writer reads both unrestricted paid books complimentary
+    const writerObsidianCh4 = await fetch(`${baseUrl}/api/stories/the-obsidian-throne/chapters/4`, {
+      headers: { Cookie: writerCookie },
+    });
+    assert.equal(writerObsidianCh4.status, 200);
+    const writerSunkenCh4 = await fetch(`${baseUrl}/api/stories/chronicles-of-the-sunken-epoch/chapters/4`, {
+      headers: { Cookie: writerCookie },
+    });
+    assert.equal(writerSunkenCh4.status, 200);
+
+    // Writer cannot access Owner pricing/admin routes
+    const writerPricingAttempt = await fetch(
+      `${baseUrl}/api/admin/stories/${encodeURIComponent(sunken.id)}/pricing`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: writerCookie },
+        body: JSON.stringify({
+          accessTier: sunken.accessTier,
+          priceNgn: sunken.priceNgn,
+          freeChaptersCount: sunken.freeChaptersCount,
+          writerRequiresPurchase: false,
+        }),
+      }
+    );
+    assert.equal(writerPricingAttempt.status, 403);
+
+    // 4. Owner marks 'chronicles-of-the-sunken-epoch' as writerRequiresPurchase = true
+    const restrictRes = await fetch(
+      `${baseUrl}/api/admin/stories/${encodeURIComponent(sunken.id)}/pricing`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          accessTier: sunken.accessTier,
+          priceNgn: sunken.priceNgn,
+          freeChaptersCount: sunken.freeChaptersCount,
+          writerRequiresPurchase: true,
+        }),
+      }
+    );
+    assert.equal(restrictRes.status, 200);
+    const restrictJson = await restrictRes.json();
+    assert.equal(restrictJson.story.writerRequiresPurchase, true);
+
+    // Writer is now locked out of the Owner-restricted book until purchased, while STILL reading Obsidian free
+    const writerRestrictedCh4 = await fetch(`${baseUrl}/api/stories/chronicles-of-the-sunken-epoch/chapters/4`, {
+      headers: { Cookie: writerCookie },
+    });
+    assert.equal(writerRestrictedCh4.status, 403);
+    const writerStillFreeCh4 = await fetch(`${baseUrl}/api/stories/the-obsidian-throne/chapters/4`, {
+      headers: { Cookie: writerCookie },
+    });
+    assert.equal(writerStillFreeCh4.status, 200);
+
+    // Owner STILL retains total complimentary access even on writerRequiresPurchase = true books
+    const ownerRestrictedCh4 = await fetch(`${baseUrl}/api/stories/chronicles-of-the-sunken-epoch/chapters/4`, {
+      headers: { Cookie: ownerCookie },
+    });
+    assert.equal(ownerRestrictedCh4.status, 200);
+
+    // Restore writerRequiresPurchase = false cleanly
+    const restoreRes = await fetch(
+      `${baseUrl}/api/admin/stories/${encodeURIComponent(sunken.id)}/pricing`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          accessTier: sunken.accessTier,
+          priceNgn: sunken.priceNgn,
+          freeChaptersCount: sunken.freeChaptersCount,
+          writerRequiresPurchase: false,
+        }),
+      }
+    );
+    assert.equal(restoreRes.status, 200);
+  });
+
+  test('public GET /api/leaderboard tracks weekly & monthly chapter completions and hides private account fields', async () => {
+    const suffix = Date.now().toString(36);
+    const aliceEmail = `alice.lb.${suffix}@example.com`;
+    const bobEmail = `bob.lb.${suffix}@example.com`;
+
+    const aliceReg = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Alice Leaderboard',
+        nickname: `AliceChampion_${suffix}`,
+        email: aliceEmail,
+        password: 'Password123!',
+      }),
+    });
+    assert.equal(aliceReg.status, 201);
+    const aliceCookie = aliceReg.headers.get('set-cookie')!.split(';')[0];
+
+    const bobReg = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Bob Leaderboard',
+        nickname: `BobContender_${suffix}`,
+        email: bobEmail,
+        password: 'Password123!',
+      }),
+    });
+    assert.equal(bobReg.status, 201);
+    const bobCookie = bobReg.headers.get('set-cookie')!.split(';')[0];
+
+    const now = new Date();
+    const todayIso = now.toISOString().slice(0, 10);
+    const fourteenDaysAgo = new Date(now.getTime() - 14 * 86_400_000).toISOString().slice(0, 10);
+
+    // Alice completes 3 chapters today + 2 chapters 14 days ago -> 3 weekly, 5 monthly, Page Seeker tier
+    const aliceGoalRes = await fetch(`${baseUrl}/api/account/goal`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Cookie: aliceCookie },
+      body: JSON.stringify({
+        readingGoal: {
+          frequency: 'daily',
+          targetChapters: 2,
+          currentProgress: 3,
+          streakDays: 4,
+          bestStreakDays: 4,
+          lastUpdatedDate: todayIso,
+          completedChapterIds: ['lb_a_1', 'lb_a_2', 'lb_a_3', 'lb_a_4', 'lb_a_5'],
+          completedAtByChapter: {
+            lb_a_1: todayIso,
+            lb_a_2: todayIso,
+            lb_a_3: todayIso,
+            lb_a_4: fourteenDaysAgo,
+            lb_a_5: fourteenDaysAgo,
+          },
+          history: [],
+        },
+      }),
+    });
+    assert.equal(aliceGoalRes.status, 200);
+
+    // Bob completes 1 chapter today -> 1 weekly, 1 monthly, Novice Wanderer tier
+    const bobGoalRes = await fetch(`${baseUrl}/api/account/goal`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Cookie: bobCookie },
+      body: JSON.stringify({
+        readingGoal: {
+          frequency: 'daily',
+          targetChapters: 2,
+          currentProgress: 1,
+          streakDays: 1,
+          bestStreakDays: 1,
+          lastUpdatedDate: todayIso,
+          completedChapterIds: ['lb_b_1'],
+          completedAtByChapter: {
+            lb_b_1: todayIso,
+          },
+          history: [],
+        },
+      }),
+    });
+    assert.equal(bobGoalRes.status, 200);
+
+    // Unauthenticated guest request succeeds and reveals no private email/payment fields
+    const guestLbRes = await fetch(`${baseUrl}/api/leaderboard`);
+    assert.equal(guestLbRes.status, 200);
+    const guestLb = await guestLbRes.json();
+    assert.equal(guestLb.viewerStanding, null);
+    assert.ok(Array.isArray(guestLb.weekly) && guestLb.weekly.length >= 2);
+    assert.ok(Array.isArray(guestLb.monthly) && guestLb.monthly.length >= 2);
+
+    const aliceWeekly = guestLb.weekly.find((e: { displayName: string }) => e.displayName === `AliceChampion_${suffix}`);
+    const bobWeekly = guestLb.weekly.find((e: { displayName: string }) => e.displayName === `BobContender_${suffix}`);
+    assert.ok(aliceWeekly && bobWeekly);
+    assert.equal(aliceWeekly.weeklyChapters, 3);
+    assert.equal(aliceWeekly.monthlyChapters, 5);
+    assert.equal(aliceWeekly.allTimeChapters, 5);
+    assert.equal(aliceWeekly.tierTitle, 'Page Seeker');
+    assert.ok(aliceWeekly.position < bobWeekly.position);
+    assert.equal('email' in aliceWeekly, false);
+    assert.equal('passwordHash' in aliceWeekly, false);
+    assert.equal('subscription' in aliceWeekly, false);
+
+    // Authenticated viewer request returns viewerStanding with weekly & monthly positions
+    const bobLbRes = await fetch(`${baseUrl}/api/leaderboard?period=monthly`, {
+      headers: { Cookie: bobCookie },
+    });
+    assert.equal(bobLbRes.status, 200);
+    const bobLb = await bobLbRes.json();
+    assert.equal(bobLb.period, 'monthly');
+    assert.ok(bobLb.viewerStanding);
+    assert.equal(bobLb.viewerStanding.weeklyChapters, 1);
+    assert.equal(bobLb.viewerStanding.monthlyChapters, 1);
+    assert.equal(bobLb.viewerStanding.tierTitle, 'Novice Wanderer');
+    const bobMonthlyRow = bobLb.monthly.find((e: { isCurrentUser: boolean }) => e.isCurrentUser);
+    assert.ok(bobMonthlyRow);
+    assert.equal(bobMonthlyRow.displayName, `BobContender_${suffix}`);
+  });
+
+  test('Email verification status check, code issuance, 5-attempt lockout, and confirmation work securely', async () => {
+    const prevResend = process.env.RESEND_API_KEY;
+    const prevSbUrl = process.env.VITE_SUPABASE_URL;
+    const prevSbAltUrl = process.env.SUPABASE_URL;
+    delete process.env.RESEND_API_KEY;
+    delete process.env.VITE_SUPABASE_URL;
+    delete process.env.SUPABASE_URL;
+
+    try {
+      const suffix = Date.now();
+      const email = `verify_${suffix}@example.com`;
+      const regRes = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Verify Reader',
+          nickname: `Verify_${suffix}`,
+          email,
+          password: 'Password123!',
+        }),
+      });
+      assert.equal(regRes.status, 201);
+      const cookie = extractSessionCookie(regRes);
+      const regBody = await regRes.json();
+      assert.equal(regBody.user.emailVerified, false);
+      assert.equal('emailVerificationTokenHash' in regBody.user, false);
+
+      // Check initial unverified status via Settings endpoint
+      const statusBeforeRes = await fetch(`${baseUrl}/api/auth/email-verification/status`, {
+        headers: { Cookie: cookie },
+      });
+      assert.equal(statusBeforeRes.status, 200);
+      const statusBefore = await statusBeforeRes.json();
+      assert.equal(statusBefore.emailVerified, false);
+      assert.equal(statusBefore.email, email);
+
+      // Request verification code (preview delivery mode when mailer/Supabase unset)
+      const reqRes1 = await fetch(`${baseUrl}/api/auth/email-verification/request`, {
+        method: 'POST',
+        headers: { Cookie: cookie },
+      });
+      assert.equal(reqRes1.status, 200);
+      const reqJson1 = await reqRes1.json();
+      assert.equal(reqJson1.sent, true);
+      assert.equal(reqJson1.deliveryMode, 'preview');
+      assert.match(String(reqJson1.previewCode || ''), /^\d{6}$/);
+      const validCode = String(reqJson1.previewCode);
+
+      // Public session must never leak verification token hashes or attempts
+      const sessionRes = await fetch(`${baseUrl}/api/auth/session`, {
+        headers: { Cookie: cookie },
+      });
+      assert.equal(sessionRes.status, 200);
+      const sessionJson = await sessionRes.json();
+      assert.equal(sessionJson.user.emailVerified, false);
+      assert.equal('emailVerificationTokenHash' in sessionJson.user, false);
+      assert.equal('emailVerificationAttempts' in sessionJson.user, false);
+
+      // Invalid format code rejected
+      const badFormatRes = await fetch(`${baseUrl}/api/auth/email-verification/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({ code: 'abc' }),
+      });
+      assert.equal(badFormatRes.status, 400);
+
+      // 5 wrong attempts invalidate the issued code
+      const wrongCode = validCode === '000000' ? '111111' : '000000';
+      for (let i = 1; i <= 5; i += 1) {
+        const wrongRes = await fetch(`${baseUrl}/api/auth/email-verification/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: cookie },
+          body: JSON.stringify({ code: wrongCode }),
+        });
+        assert.equal(wrongRes.status, 400);
+        const wrongJson = await wrongRes.json();
+        if (i === 5) {
+          assert.match(String(wrongJson.error || ''), /Too many incorrect attempts/i);
+        }
+      }
+
+      // Old valid code no longer accepted after lockout invalidation
+      const invalidatedRes = await fetch(`${baseUrl}/api/auth/email-verification/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({ code: validCode }),
+      });
+      assert.equal(invalidatedRes.status, 400);
+
+      // Request fresh code and confirm successfully
+      const reqRes2 = await fetch(`${baseUrl}/api/auth/email-verification/request`, {
+        method: 'POST',
+        headers: { Cookie: cookie },
+      });
+      assert.equal(reqRes2.status, 200);
+      const reqJson2 = await reqRes2.json();
+      const freshCode = String(reqJson2.previewCode);
+      assert.match(freshCode, /^\d{6}$/);
+
+      const confirmRes = await fetch(`${baseUrl}/api/auth/email-verification/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({ code: freshCode }),
+      });
+      assert.equal(confirmRes.status, 200);
+      const confirmJson = await confirmRes.json();
+      assert.equal(confirmJson.verified, true);
+      assert.equal(confirmJson.user.emailVerified, true);
+      assert.ok(confirmJson.user.emailVerifiedAt);
+
+      // Status endpoint now reflects verified=true
+      const statusAfterRes = await fetch(`${baseUrl}/api/auth/email-verification/status`, {
+        headers: { Cookie: cookie },
+      });
+      assert.equal(statusAfterRes.status, 200);
+      const statusAfter = await statusAfterRes.json();
+      assert.equal(statusAfter.emailVerified, true);
+      assert.ok(statusAfter.emailVerifiedAt);
+    } finally {
+      if (prevResend !== undefined) process.env.RESEND_API_KEY = prevResend;
+      if (prevSbUrl !== undefined) process.env.VITE_SUPABASE_URL = prevSbUrl;
+      if (prevSbAltUrl !== undefined) process.env.SUPABASE_URL = prevSbAltUrl;
+    }
   });
 });
 
