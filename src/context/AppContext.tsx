@@ -1532,8 +1532,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<{ error?: string; message?: string; requiresEmailVerification?: boolean }> => {
     const cleanName = name.trim();
     const cleanNickname = nickname?.trim() || '';
-    const cleanEmail = email.trim();
+    const cleanEmail = email.trim().toLowerCase();
     try {
+      // Clear any stale cached session token before attempting fresh account creation
+      setStoredSessionToken(null);
+
       const res = await apiFetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1552,9 +1555,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         requiresEmailVerification?: boolean;
       }>(res);
 
-      // Register matching Supabase user defaulting strictly to 'reader' in profiles
+      if (!res.ok) {
+        return { error: data?.error || `Registration failed (${res.status}).` };
+      }
+
+      // Register matching Supabase Auth user defaulting strictly to 'reader' in profiles
       let sbRequiresVerification = false;
-      if (isSupabaseConfigured && supabase && res.ok) {
+      let sbSignupNote: string | null = null;
+      if (isSupabaseConfigured && supabase) {
         try {
           const derivedUsername = cleanNickname || cleanName || cleanEmail.split('@')[0];
           const { data: sbData, error: sbErr } = await supabase.auth.signUp({
@@ -1567,21 +1575,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               },
             },
           });
-          if (!sbErr && sbData.user) {
+          if (sbErr) {
+            sbSignupNote = sbErr.message;
+          } else if (sbData.user) {
             if (sbData.session) {
               await ensureSupabaseReaderProfile(sbData.user.id, derivedUsername, cleanEmail);
             } else {
               sbRequiresVerification = true;
             }
           }
-        } catch {
-          // Non-blocking if Supabase user already exists or offline
+        } catch (sbThrown) {
+          sbSignupNote =
+            sbThrown instanceof Error ? sbThrown.message : 'Unable to reach Supabase Auth during signup.';
         }
       }
 
-      if (!res.ok) {
-        return { error: data?.error || `Registration failed (${res.status}).` };
-      }
       if (data?.requiresEmailVerification) {
         return {
           requiresEmailVerification: true,
@@ -1595,6 +1603,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (data.token) {
         setStoredSessionToken(data.token);
       }
+
+      // Clean up guest-only localStorage caches once a real reader account is created
+      try {
+        window.localStorage.removeItem('lorethos_guest_profile');
+        window.localStorage.removeItem('lorethos_guest_goal');
+      } catch {
+        // Ignore storage removal errors
+      }
+
       const savedGenres =
         Array.isArray(data.user.preferredGenres) && data.user.preferredGenres.length > 0
           ? data.user.preferredGenres
@@ -1619,10 +1636,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         message: sbRequiresVerification
           ? 'Account created. Check your email if your Supabase project requires confirmation.'
+          : sbSignupNote
+          ? `Account created and signed in. (Auth sync note: ${sbSignupNote})`
           : data.message || 'Account created and signed in.'
       };
-    } catch {
-      return { error: 'Network error while creating account.' };
+    } catch (err) {
+      return {
+        error: err instanceof Error && err.message ? err.message : 'Network error while creating account.',
+      };
     }
   };
 

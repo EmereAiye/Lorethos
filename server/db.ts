@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Pool } from 'pg';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type {
   Story,
   Chapter,
@@ -25,6 +26,46 @@ import type {
 } from '../src/types/index.js';
 import { AUTHORITATIVE_STORIES, withOfficialTrailerMetadata } from './catalog.js';
 import { getDisplayName, getTierForCompletedChapters } from '../src/utils/readerProfile.js';
+
+export class DuplicateEmailError extends Error {
+  public readonly code = '23505';
+  constructor(message = 'An account with this email already exists. Please sign in.') {
+    super(message);
+    this.name = 'DuplicateEmailError';
+  }
+}
+
+function getConfiguredSupabaseDbClient(): SupabaseClient | null {
+  const clean = (val: string | undefined) => (val || '').trim().replace(/^["']|["']$/g, '');
+  const rawUrl = clean(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
+  const rawKey = clean(
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_ANON_KEY ||
+      process.env.VITE_SUPABASE_ANON_KEY
+  );
+  if (
+    !rawUrl ||
+    !rawKey ||
+    rawUrl.includes('YOUR_PROJECT_ID') ||
+    rawKey.includes('YOUR_SUPABASE')
+  ) {
+    return null;
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return null;
+    }
+    return createClient(parsed.origin, rawKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+  } catch {
+    return null;
+  }
+}
 
 export interface StoredUserRecord {
   id: string;
@@ -255,22 +296,28 @@ class LorethosRepository {
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        nickname TEXT,
         email TEXT NOT NULL UNIQUE,
-        avatar TEXT,
-        bio TEXT,
         password_hash TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('reader', 'writer', 'admin', 'owner')),
-        reading_goal JSONB,
+        role TEXT NOT NULL DEFAULT 'reader',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    await pool.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS reading_goal JSONB;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
       ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
       ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('reader', 'writer', 'admin', 'owner'));
+    `).catch((err) => {
+      console.warn('Optional users column migration warning:', err instanceof Error ? err.message : err);
+    });
+
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS stories (
         id TEXT PRIMARY KEY,
         slug TEXT NOT NULL UNIQUE,
@@ -634,10 +681,10 @@ class LorethosRepository {
       }
 
       this.state.users = usersRes.rows.map((u) => ({
-        id: u.id,
-        name: u.name,
+        id: String(u.id),
+        name: String(u.name || ''),
         nickname: u.nickname || undefined,
-        email: u.email,
+        email: String(u.email).trim().toLowerCase(),
         emailVerified: Boolean(u.email_verified),
         emailVerifiedAt: u.email_verified_at ? new Date(u.email_verified_at).toISOString() : undefined,
         avatar: u.avatar || undefined,
@@ -649,7 +696,7 @@ class LorethosRepository {
         bookmarkedChapterIds: bookmarksByUser.get(u.id) || [],
         readingProgress: progressByUser.get(u.id) || {},
         readingGoal: u.reading_goal || buildDefaultReadingGoal(),
-        createdAt: new Date(u.created_at).toISOString()
+        createdAt: u.created_at ? new Date(u.created_at).toISOString() : new Date().toISOString()
       }));
 
       this.state.highlights = {};
@@ -817,20 +864,76 @@ class LorethosRepository {
     return this.state.users.find((u) => u.email.toLowerCase() === normalized);
   }
 
-  private async hydrateSingleUserFromPostgres(whereClause: string, param: string): Promise<StoredUserRecord | undefined> {
+  private evictCachedUsersByEmail(normalizedEmail: string): void {
+    const before = this.state.users.length;
+    this.state.users = this.state.users.filter((u) => u.email.trim().toLowerCase() !== normalizedEmail);
+    if (this.state.users.length !== before) {
+      this.persistSnapshot();
+    }
+  }
+
+  private hydrateRawDbUserRow(
+    u: Record<string, unknown>,
+    subscription: UserProfile['subscription'] = { plan: 'free', status: 'none', amountNgn: 0 },
+    unlockedStoryIds: string[] = [],
+    bookmarkedChapterIds: string[] = [],
+    readingProgress: UserProfile['readingProgress'] = {}
+  ): StoredUserRecord {
+    const normalizedEmail = String(u.email || '').trim().toLowerCase();
+    const avatarRaw =
+      typeof u.avatar === 'string'
+        ? u.avatar
+        : typeof u.avatar_url === 'string'
+        ? u.avatar_url
+        : undefined;
+    const hydrated: StoredUserRecord = {
+      id: String(u.id),
+      name: String(u.name || u.username || normalizedEmail.split('@')[0] || 'Reader'),
+      nickname: typeof u.nickname === 'string' && u.nickname ? u.nickname : undefined,
+      email: normalizedEmail,
+      emailVerified: Boolean(u.email_verified),
+      emailVerifiedAt: u.email_verified_at ? new Date(String(u.email_verified_at)).toISOString() : undefined,
+      avatar: normalizeServerAvatarUrl(avatarRaw),
+      bio: typeof u.bio === 'string' && u.bio ? u.bio : undefined,
+      passwordHash: String(u.password_hash || ''),
+      role: normalizeServerRole(u.role, normalizedEmail),
+      subscription,
+      unlockedStoryIds,
+      bookmarkedChapterIds,
+      readingProgress,
+      readingGoal: (u.reading_goal as ReadingGoal) || buildDefaultReadingGoal(),
+      createdAt: u.created_at ? new Date(String(u.created_at)).toISOString() : new Date().toISOString(),
+    };
+    const existingIdx = this.state.users.findIndex(
+      (x) => x.id === hydrated.id || x.email.trim().toLowerCase() === hydrated.email
+    );
+    if (existingIdx >= 0) {
+      this.state.users[existingIdx] = hydrated;
+    } else {
+      this.state.users.push(hydrated);
+    }
+    this.persistSnapshot();
+    return hydrated;
+  }
+
+  private async hydrateSingleUserFromPostgres(
+    whereClause: string,
+    param: string,
+    options: { throwOnError?: boolean } = {}
+  ): Promise<StoredUserRecord | undefined> {
     if (!this.pool) return undefined;
     try {
       const userRes = await this.pool.query(
         `SELECT * FROM users WHERE ${whereClause} LIMIT 1`,
         [param]
       );
-      if (userRes.rows.length === 0) return undefined;
+      if (!userRes.rows || userRes.rows.length === 0) return undefined;
       const u = userRes.rows[0];
       const [subRes, entRes, bmRes, progRes] = await Promise.all([
-        this.pool.query('SELECT * FROM subscriptions WHERE user_id = $1 LIMIT 1', [u.id]),
-        this.pool.query('SELECT story_id FROM entitlements WHERE user_id = $1', [u.id]),
-        this.pool.query('SELECT chapter_id FROM bookmarks WHERE user_id = $1', [u.id]),
-        this.pool.query('SELECT * FROM reading_progress WHERE user_id = $1', [u.id]),
+        this.pool.query('SELECT * FROM subscriptions WHERE user_id = $1 LIMIT 1', [u.id]).catch(() => ({ rows: [] })),
+        this.pool.query('SELECT story_id FROM entitlements WHERE user_id = $1', [u.id]).catch(() => ({ rows: [] })),
+        this.pool.query('SELECT chapter_id FROM bookmarks WHERE user_id = $1', [u.id]).catch(() => ({ rows: [] })),
+        this.pool.query('SELECT * FROM reading_progress WHERE user_id = $1', [u.id]).catch(() => ({ rows: [] })),
       ]);
       const subRow = subRes.rows[0];
       const subscription: UserProfile['subscription'] = subRow
@@ -853,48 +956,123 @@ class LorethosRepository {
           lastReadAt: new Date(p.last_read_at).toISOString(),
         };
       }
-      const hydrated: StoredUserRecord = {
-        id: u.id,
-        name: u.name,
-        nickname: u.nickname || undefined,
-        email: String(u.email).trim().toLowerCase(),
-        emailVerified: Boolean(u.email_verified),
-        emailVerifiedAt: u.email_verified_at ? new Date(u.email_verified_at).toISOString() : undefined,
-        avatar: normalizeServerAvatarUrl(u.avatar),
-        bio: u.bio || undefined,
-        passwordHash: u.password_hash,
-        role: normalizeServerRole(u.role, String(u.email)),
+      return this.hydrateRawDbUserRow(
+        u,
         subscription,
-        unlockedStoryIds: entRes.rows.map((r) => r.story_id),
-        bookmarkedChapterIds: bmRes.rows.map((r) => r.chapter_id),
-        readingProgress,
-        readingGoal: u.reading_goal || buildDefaultReadingGoal(),
-        createdAt: new Date(u.created_at).toISOString(),
-      };
-      const existingIdx = this.state.users.findIndex((x) => x.id === hydrated.id || x.email.toLowerCase() === hydrated.email);
-      if (existingIdx >= 0) {
-        this.state.users[existingIdx] = hydrated;
-      } else {
-        this.state.users.push(hydrated);
+        entRes.rows.map((r) => r.story_id),
+        bmRes.rows.map((r) => r.chapter_id),
+        readingProgress
+      );
+    } catch (err) {
+      if (options.throwOnError) {
+        throw err instanceof Error ? err : new Error(String(err));
       }
-      this.persistSnapshot();
-      return hydrated;
-    } catch {
       return undefined;
     }
   }
 
+  private async hydrateSingleUserFromSupabase(
+    field: 'id' | 'email',
+    value: string,
+    options: { throwOnError?: boolean } = {}
+  ): Promise<StoredUserRecord | undefined> {
+    const sb = getConfiguredSupabaseDbClient();
+    if (!sb) return undefined;
+
+    const query = sb.from('users').select('*');
+    const res =
+      field === 'email'
+        ? await query.ilike('email', value).limit(1)
+        : await query.eq('id', value).limit(1);
+
+    if (res.error) {
+      if (options.throwOnError) {
+        throw new Error(res.error.message || 'Failed to query public.users in Supabase.');
+      }
+      return undefined;
+    }
+
+    if (!Array.isArray(res.data) || res.data.length === 0 || !res.data[0]) {
+      return undefined;
+    }
+
+    const row = res.data[0] as Record<string, unknown>;
+    if (!row.id || !row.email) {
+      return undefined;
+    }
+    return this.hydrateRawDbUserRow(row);
+  }
+
+  /**
+   * Authoritative duplicate-email check for registration.
+   * Only returns `{ exists: true }` when an actual matching user record is returned,
+   * never on `[]` or a failed query, and evicts stale local cache entries if the DB has 0 rows.
+   */
+  public async checkExistingUserByEmail(email: string): Promise<{ exists: boolean; user?: StoredUserRecord }> {
+    const normalized = email.trim().toLowerCase();
+
+    if (this.pool) {
+      const existing = await this.hydrateSingleUserFromPostgres('LOWER(email) = $1', normalized, {
+        throwOnError: true,
+      });
+      if (existing && existing.email === normalized) {
+        return { exists: true, user: existing };
+      }
+      this.evictCachedUsersByEmail(normalized);
+      return { exists: false };
+    }
+
+    const sb = getConfiguredSupabaseDbClient();
+    if (sb) {
+      const { data, error } = await sb
+        .from('users')
+        .select('id, name, email, role')
+        .ilike('email', normalized)
+        .limit(1);
+
+      if (error) {
+        throw new Error(error.message || 'Unable to verify email availability in Supabase.');
+      }
+
+      if (Array.isArray(data) && data.length > 0 && data[0] && typeof data[0].email === 'string') {
+        const hydrated = await this.hydrateSingleUserFromSupabase('email', normalized).catch(() => undefined);
+        return { exists: true, user: hydrated };
+      }
+
+      this.evictCachedUsersByEmail(normalized);
+      return { exists: false };
+    }
+
+    const cached = this.getUserByEmail(normalized);
+    return cached ? { exists: true, user: cached } : { exists: false };
+  }
+
   public async findUserById(userId: string): Promise<StoredUserRecord | undefined> {
+    if (this.pool) {
+      const fromPg = await this.hydrateSingleUserFromPostgres('id = $1', userId);
+      if (fromPg) return fromPg;
+    }
     const cached = this.getUserById(userId);
     if (cached) return cached;
-    return this.hydrateSingleUserFromPostgres('id = $1', userId);
+    return this.hydrateSingleUserFromSupabase('id', userId);
   }
 
   public async findUserByEmail(email: string): Promise<StoredUserRecord | undefined> {
     const normalized = email.trim().toLowerCase();
-    const cached = this.getUserByEmail(normalized);
-    if (cached) return cached;
-    return this.hydrateSingleUserFromPostgres('LOWER(email) = $1', normalized);
+    if (this.pool) {
+      const fromPg = await this.hydrateSingleUserFromPostgres('LOWER(email) = $1', normalized);
+      if (fromPg) return fromPg;
+      this.evictCachedUsersByEmail(normalized);
+      return undefined;
+    }
+    const sb = getConfiguredSupabaseDbClient();
+    if (sb) {
+      const fromSb = await this.hydrateSingleUserFromSupabase('email', normalized);
+      if (fromSb) return fromSb;
+      this.evictCachedUsersByEmail(normalized);
+      return undefined;
+    }
+    return this.getUserByEmail(normalized);
   }
 
   public async createUser(name: string, email: string, password: string, nickname?: string): Promise<StoredUserRecord> {
@@ -902,7 +1080,7 @@ class LorethosRepository {
     const trimmedNickname = nickname?.trim() || undefined;
     const isOwner = normalizedEmail === getOwnerEmail();
     const record: StoredUserRecord = {
-      id: `usr_${crypto.randomUUID()}`,
+      id: crypto.randomUUID(),
       name: name.trim(),
       nickname: trimmedNickname,
       email: normalizedEmail,
@@ -918,22 +1096,78 @@ class LorethosRepository {
     };
 
     if (this.pool) {
+      let inserted = false;
       try {
         await this.pool.query(
           `INSERT INTO users (id, name, nickname, email, password_hash, role, reading_goal, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW()) ON CONFLICT (email) DO NOTHING`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())`,
           [record.id, record.name, record.nickname || null, record.email, record.passwordHash, record.role, JSON.stringify(record.readingGoal)]
         );
-        await this.pool.query(
-          `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
-           VALUES ($1, $2, 'free', 'none', 0) ON CONFLICT (user_id) DO NOTHING`,
-          [`sub_${record.id}`, record.id]
-        );
-      } catch (err) {
-        console.error('Failed to mirror user into PostgreSQL:', err);
+        inserted = true;
+      } catch (err: unknown) {
+        const pgErr = err as { code?: string; message?: string };
+        if (pgErr?.code === '23505') {
+          throw new DuplicateEmailError('An account with this email already exists. Please sign in.');
+        }
+        if (pgErr?.code === '42703') {
+          // Fallback to base public.users schema: (id, name, email, password_hash, role)
+          try {
+            await this.pool.query(
+              `INSERT INTO users (id, name, email, password_hash, role)
+               VALUES ($1, $2, $3, $4, $5)`,
+              [record.id, record.name, record.email, record.passwordHash, record.role]
+            );
+            inserted = true;
+          } catch (coreErr: unknown) {
+            const corePgErr = coreErr as { code?: string; message?: string };
+            if (corePgErr?.code === '23505') {
+              throw new DuplicateEmailError('An account with this email already exists. Please sign in.');
+            }
+            throw new Error(corePgErr?.message || 'Database error while inserting user into public.users.');
+          }
+        } else {
+          throw new Error(pgErr?.message || 'Database error while inserting user into public.users.');
+        }
+      }
+
+      if (inserted) {
+        await this.pool
+          .query(
+            `INSERT INTO subscriptions (id, user_id, plan, status, amount_ngn)
+             VALUES ($1, $2, 'free', 'none', 0) ON CONFLICT (user_id) DO NOTHING`,
+            [`sub_${record.id}`, record.id]
+          )
+          .catch(() => {});
+      }
+    } else {
+      const sb = getConfiguredSupabaseDbClient();
+      if (sb) {
+        const { data: insertedRow, error: insertErr } = await sb
+          .from('users')
+          .insert({
+            id: record.id,
+            name: record.name,
+            email: record.email,
+            password_hash: record.passwordHash,
+            role: record.role,
+          })
+          .select('id, name, email, role')
+          .maybeSingle();
+
+        if (insertErr) {
+          if (insertErr.code === '23505') {
+            throw new DuplicateEmailError('An account with this email already exists. Please sign in.');
+          }
+          throw new Error(insertErr.message || 'Supabase error while creating user account.');
+        }
+
+        if (!insertedRow) {
+          throw new Error('Supabase insert did not return the new public.users row.');
+        }
       }
     }
 
+    this.evictCachedUsersByEmail(normalizedEmail);
     this.state.users.push(record);
     this.persistSnapshot();
 

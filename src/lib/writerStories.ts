@@ -167,6 +167,43 @@ export function formatTrailerSummaryWithLorethosCta(summary: string, title?: str
     : `${cleanBase} Read the full story on Lorethos.`;
 }
 
+/**
+ * Checks whether an email actually exists in Supabase `public.users`.
+ * Only treats the email as existing when a non-empty matching row is returned,
+ * never on `[]` or a failed query.
+ */
+export async function checkSupabasePublicUserByEmail(
+  email: string
+): Promise<{ exists: boolean; row?: Record<string, unknown>; error?: string }> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!isSupabaseConfigured || !supabase || !cleanEmail) {
+    return { exists: false };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, name, email, role')
+      .ilike('email', cleanEmail)
+      .limit(1);
+
+    if (error) {
+      return { exists: false, error: error.message };
+    }
+
+    if (Array.isArray(data) && data.length > 0 && data[0] && typeof data[0].email === 'string') {
+      return { exists: true, row: data[0] as Record<string, unknown> };
+    }
+
+    return { exists: false };
+  } catch (err) {
+    return {
+      exists: false,
+      error: err instanceof Error ? err.message : 'Unable to query public.users.',
+    };
+  }
+}
+
 export async function ensureSupabaseReaderProfile(
   userId: string,
   username: string,
@@ -182,7 +219,7 @@ export async function ensureSupabaseReaderProfile(
       .eq('id', userId)
       .maybeSingle();
 
-    if (!selectErr && existing) {
+    if (!selectErr && existing && existing.id) {
       return {
         id: existing.id,
         username: existing.username || username || 'Lorethos Reader',
@@ -200,26 +237,30 @@ export async function ensureSupabaseReaderProfile(
         role: 'reader',
       })
       .select('id, username, role')
-      .single();
+      .maybeSingle();
 
     if (insertErr) {
-      const { data: fallback } = await supabase
-        .from('profiles')
-        .select('id, username, role')
-        .eq('id', userId)
-        .maybeSingle();
-      if (fallback || liveRole.source !== 'none') {
-        return {
-          id: fallback?.id || userId,
-          username: fallback?.username || cleanUsername,
-          role:
-            liveRole.source !== 'none'
-              ? liveRole.role
-              : normalizeWriterRole(fallback?.role),
-        };
+      if (insertErr.code === '23505') {
+        const { data: fallback } = await supabase
+          .from('profiles')
+          .select('id, username, role')
+          .eq('id', userId)
+          .maybeSingle();
+        if (fallback && fallback.id) {
+          return {
+            id: fallback.id,
+            username: fallback.username || cleanUsername,
+            role:
+              liveRole.source !== 'none'
+                ? liveRole.role
+                : normalizeWriterRole(fallback.role),
+          };
+        }
       }
       return null;
     }
+
+    if (!inserted) return null;
 
     return {
       id: inserted.id,

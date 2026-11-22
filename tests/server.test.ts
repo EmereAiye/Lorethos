@@ -2671,6 +2671,221 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       if (prevSbAltUrl !== undefined) process.env.SUPABASE_URL = prevSbAltUrl;
     }
   });
+
+  test('Reader signup handles empty public.users [], surfaces real RLS/DB errors instead of masking, and inserts role reader', async () => {
+    const prevSbUrl = process.env.SUPABASE_URL;
+    const prevViteSbUrl = process.env.VITE_SUPABASE_URL;
+    const prevSbKey = process.env.SUPABASE_ANON_KEY;
+    const prevViteSbKey = process.env.VITE_SUPABASE_ANON_KEY;
+
+    const insertedPayloads: Array<Record<string, unknown>> = [];
+    const usersStore: Array<Record<string, unknown>> = [];
+    let mockMode: 'normal' | 'rls_select_error' | 'rls_insert_error' | 'unique_23505_insert' = 'normal';
+
+    const mockSupabaseServer = http.createServer(async (req, res) => {
+      const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
+      if (!reqUrl.pathname.startsWith('/rest/v1/users')) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: 'Not found' }));
+        return;
+      }
+
+      if (req.method === 'GET') {
+        if (mockMode === 'rls_select_error') {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ code: '42501', message: 'permission denied for table users' }));
+          return;
+        }
+        const emailFilter = reqUrl.searchParams.get('email') || '';
+        const targetEmail = emailFilter.replace(/^ilike\./i, '').trim().toLowerCase();
+        const matches = usersStore.filter((row) => String(row.email || '').toLowerCase() === targetEmail);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(matches));
+        return;
+      }
+
+      if (req.method === 'POST') {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const rawBody = Buffer.concat(chunks).toString('utf8');
+        const body = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
+
+        if (mockMode === 'rls_insert_error') {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              code: '42501',
+              message: 'new row violates row-level security policy for table "users"',
+            })
+          );
+          return;
+        }
+
+        if (mockMode === 'unique_23505_insert') {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              code: '23505',
+              message: 'duplicate key value violates unique constraint "users_email_key"',
+            })
+          );
+          return;
+        }
+
+        insertedPayloads.push(body);
+        const created = {
+          id: body.id,
+          name: body.name,
+          email: body.email,
+          password_hash: body.password_hash,
+          role: body.role,
+        };
+        usersStore.push(created);
+
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        const acceptHeader = String(req.headers.accept || '');
+        if (acceptHeader.includes('application/vnd.pgrst.object+json')) {
+          res.end(JSON.stringify(created));
+        } else {
+          res.end(JSON.stringify([created]));
+        }
+        return;
+      }
+
+      res.writeHead(405).end();
+    });
+
+    await new Promise<void>((resolve) => {
+      mockSupabaseServer.listen(0, '127.0.0.1', () => resolve());
+    });
+    const addr = mockSupabaseServer.address();
+    assert.ok(addr && typeof addr === 'object');
+    process.env.SUPABASE_URL = `http://127.0.0.1:${addr.port}`;
+    process.env.SUPABASE_ANON_KEY = 'mock-anon-key';
+    delete process.env.VITE_SUPABASE_URL;
+    delete process.env.VITE_SUPABASE_ANON_KEY;
+
+    try {
+      const suffix = Date.now();
+      const brandNewEmail = `brandnew_${suffix}@example.com`;
+
+      // Seed a stale cached entry in memory for brandNewEmail even though public.users is empty []
+      (repoRef as unknown as { state: { users: Array<Record<string, unknown>> } }).state.users.push({
+        id: 'stale_deleted_id',
+        name: 'Stale Deleted User',
+        email: brandNewEmail,
+        passwordHash: 'stale:hash',
+        role: 'reader',
+        subscription: { plan: 'free', status: 'none', amountNgn: 0 },
+        unlockedStoryIds: [],
+        bookmarkedChapterIds: [],
+        readingProgress: {},
+        readingGoal: {
+          frequency: 'daily',
+          targetChapters: 2,
+          currentProgress: 0,
+          streakDays: 0,
+          bestStreakDays: 0,
+          lastUpdatedDate: '2026-01-01',
+          completedChapterIds: [],
+          completedAtByChapter: {},
+          history: [],
+        },
+        createdAt: new Date().toISOString(),
+      });
+
+      // 1. Brand-new email succeeds even with stale local cache because public.users returns []
+      const okReg = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Fresh Reader',
+          email: brandNewEmail,
+          password: 'Password123!',
+        }),
+      });
+      assert.equal(okReg.status, 201);
+      const okJson = await okReg.json();
+      assert.equal(okJson.user.email, brandNewEmail);
+      assert.equal(okJson.user.role, 'reader');
+      assert.equal(insertedPayloads.length, 1);
+      assert.equal(insertedPayloads[0].name, 'Fresh Reader');
+      assert.equal(insertedPayloads[0].email, brandNewEmail);
+      assert.equal(insertedPayloads[0].role, 'reader');
+      assert.ok(typeof insertedPayloads[0].password_hash === 'string' && insertedPayloads[0].password_hash.includes(':'));
+
+      // 2. Actual matching user record in public.users triggers genuine 409 duplicate message
+      const dupReg = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Duplicate Reader',
+          email: brandNewEmail,
+          password: 'Password123!',
+        }),
+      });
+      assert.equal(dupReg.status, 409);
+      const dupJson = await dupReg.json();
+      assert.equal(dupJson.error, 'An account with this email already exists. Please sign in.');
+
+      // 3. RLS SELECT error is surfaced verbatim, NEVER masked as "already exists"
+      mockMode = 'rls_select_error';
+      const rlsSelectReg = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Rls Select Reader',
+          email: `rls_sel_${suffix}@example.com`,
+          password: 'Password123!',
+        }),
+      });
+      assert.equal(rlsSelectReg.status, 500);
+      const rlsSelectJson = await rlsSelectReg.json();
+      assert.match(String(rlsSelectJson.error || ''), /permission denied for table users/i);
+
+      // 4. RLS INSERT error is surfaced verbatim, NEVER masked as "already exists"
+      mockMode = 'rls_insert_error';
+      const rlsInsertReg = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Rls Insert Reader',
+          email: `rls_ins_${suffix}@example.com`,
+          password: 'Password123!',
+        }),
+      });
+      assert.equal(rlsInsertReg.status, 500);
+      const rlsInsertJson = await rlsInsertReg.json();
+      assert.match(String(rlsInsertJson.error || ''), /row-level security policy/i);
+
+      // 5. Unique constraint 23505 on INSERT maps cleanly to 409 duplicate message
+      mockMode = 'unique_23505_insert';
+      const uniqInsertReg = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Race Duplicate Reader',
+          email: `uniq_${suffix}@example.com`,
+          password: 'Password123!',
+        }),
+      });
+      assert.equal(uniqInsertReg.status, 409);
+      const uniqInsertJson = await uniqInsertReg.json();
+      assert.equal(uniqInsertJson.error, 'An account with this email already exists. Please sign in.');
+    } finally {
+      await new Promise<void>((resolve) => mockSupabaseServer.close(() => resolve()));
+      if (prevSbUrl !== undefined) process.env.SUPABASE_URL = prevSbUrl;
+      else delete process.env.SUPABASE_URL;
+      if (prevViteSbUrl !== undefined) process.env.VITE_SUPABASE_URL = prevViteSbUrl;
+      else delete process.env.VITE_SUPABASE_URL;
+      if (prevSbKey !== undefined) process.env.SUPABASE_ANON_KEY = prevSbKey;
+      else delete process.env.SUPABASE_ANON_KEY;
+      if (prevViteSbKey !== undefined) process.env.VITE_SUPABASE_ANON_KEY = prevViteSbKey;
+      else delete process.env.VITE_SUPABASE_ANON_KEY;
+    }
+  });
 });
 
 

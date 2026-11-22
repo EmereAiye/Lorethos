@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import express, { Request, Response, NextFunction } from 'express';
 import JSZip from 'jszip';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
-import { repo, verifyPassword, PLAN_PRICES_NGN } from './server/db.js';
+import { repo, verifyPassword, PLAN_PRICES_NGN, DuplicateEmailError } from './server/db.js';
 import type { StoredUserRecord } from './server/db.js';
 import { sanitizeStoryForPublic } from './server/catalog.js';
 import {
@@ -637,7 +637,8 @@ export async function createApp(options?: {
         return;
       }
 
-      if (await repo.findUserByEmail(trimmedEmail)) {
+      const { exists } = await repo.checkExistingUserByEmail(trimmedEmail);
+      if (exists) {
         res.status(409).json({ error: 'An account with this email already exists. Please sign in.' });
         return;
       }
@@ -646,8 +647,16 @@ export async function createApp(options?: {
       const token = setSessionCookie(req, res, user.id);
       res.status(201).json({ user: repo.toPublicProfile(user), token });
     } catch (err) {
+      if (err instanceof DuplicateEmailError || (err as { code?: string })?.code === '23505') {
+        res.status(409).json({ error: 'An account with this email already exists. Please sign in.' });
+        return;
+      }
       console.error('Register error:', err);
-      res.status(500).json({ error: 'Failed to create account. Please try again.' });
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Failed to create account. Please try again.';
+      res.status(500).json({ error: message });
     }
   });
 
