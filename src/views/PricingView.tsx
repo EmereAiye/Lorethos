@@ -1,12 +1,13 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { Check, ShieldCheck, HelpCircle, ArrowRight } from 'lucide-react';
+import { isOwnerEmail } from '../lib/writerStories';
 
 export const PricingView: React.FC = () => {
   const { openPaystackCheckout, user, isAuthenticated, navigate, buildHref, stories } = useApp();
   const isPatron = isAuthenticated && user.subscription.status === 'active';
-  const isOwner = isAuthenticated && user.role === 'owner';
-  const isWriter = isAuthenticated && (user.role === 'writer' || user.role === 'admin');
+  const isOwner = isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email));
+  const isWriter = isAuthenticated && !isOwner && (user.role === 'writer' || user.role === 'admin');
 
   const handleLink = (e: React.MouseEvent<HTMLAnchorElement>, route: string) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

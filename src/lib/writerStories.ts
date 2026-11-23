@@ -125,14 +125,19 @@ export async function fetchLatestSupabaseUserRole(
   userId?: string | null,
   email?: string | null
 ): Promise<SupabaseRoleLookupResult> {
+  const ownerOverride = isOwnerEmail(email);
   if (!isSupabaseConfigured || !supabase || (!userId && !email?.trim())) {
-    return { role: 'reader', userRow: null, source: 'none' };
+    return {
+      role: ownerOverride ? 'owner' : 'reader',
+      userRow: null,
+      source: ownerOverride ? 'users' : 'none',
+    };
   }
 
   const usersRow = await querySupabaseTableRow('users', userId, email);
   if (usersRow) {
     return {
-      role: normalizeWriterRole(usersRow.role),
+      role: normalizeWriterRole(usersRow.role, email),
       userRow: usersRow,
       source: 'users',
     };
@@ -141,13 +146,17 @@ export async function fetchLatestSupabaseUserRole(
   const profilesRow = await querySupabaseTableRow('profiles', userId, email);
   if (profilesRow) {
     return {
-      role: normalizeWriterRole(profilesRow.role),
+      role: normalizeWriterRole(profilesRow.role, email),
       userRow: profilesRow,
       source: 'profiles',
     };
   }
 
-  return { role: 'reader', userRow: null, source: 'none' };
+  return {
+    role: ownerOverride ? 'owner' : 'reader',
+    userRow: null,
+    source: ownerOverride ? 'users' : 'none',
+  };
 }
 
 /**
@@ -307,12 +316,13 @@ export async function getCurrentSupabaseAuthAndProfile(): Promise<SupabaseAuthPr
       authUser.email?.split('@')[0] ||
       'Writer';
 
-    const resolvedRole =
-      latestRole.source !== 'none'
-        ? latestRole.role
-        : profileRow
-        ? normalizeWriterRole(profileRow.role)
-        : 'reader';
+    const resolvedRole = isOwnerEmail(authUser.email)
+      ? 'owner'
+      : latestRole.source !== 'none'
+      ? latestRole.role
+      : profileRow
+      ? normalizeWriterRole(profileRow.role, authUser.email)
+      : 'reader';
 
     const rawAvatar =
       (profileRow && typeof profileRow.avatar_url === 'string' && profileRow.avatar_url) ||
@@ -558,7 +568,7 @@ export async function fetchAllSupabaseProfilesForOwner(): Promise<{
             undefined
         ) || existing?.avatar;
 
-      const rowRole = normalizeWriterRole(row.role);
+      const rowRole = normalizeWriterRole(row.role, rawEmail || existing?.email);
       const resolvedRole: WriterRole =
         existing?.role === 'owner' || rowRole === 'owner'
           ? 'owner'

@@ -10,6 +10,7 @@ import {
 import {
   canAccessWriterStudio,
   hasVisitedWriterPortal,
+  isOwnerEmail,
 } from '../lib/writerStories';
 import { ReaderAvatar } from '../components/ReaderAvatar';
 import { HighlightColor } from '../types';
@@ -133,7 +134,9 @@ export const ProfileView: React.FC = () => {
     setDraftAvatar(user.avatar);
   }, [user.id, user.name, user.nickname, user.bio, user.avatar]);
 
-  const hasWriterAccess = isAuthenticated && canAccessWriterStudio(user.role);
+  const isOwner = isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email));
+  const hasWriterAccess =
+    isAuthenticated && (canAccessWriterStudio(user.role) || isOwnerEmail(user.email));
   const writerPortalSaved = hasWriterAccess && hasVisitedWriterPortal(user.id);
 
   const previewDisplayName = (draftNickname.trim() || draftName.trim() || 'Reader');
@@ -362,7 +365,7 @@ export const ProfileView: React.FC = () => {
                 <span>Open Writer Studio</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </a>
-              {user.role === 'owner' && (
+              {isOwner && (
                 <a
                   href={buildHref('admin', { tab: 'users' })}
                   onClick={(e) => handleLink(e, 'admin', { tab: 'users' })}

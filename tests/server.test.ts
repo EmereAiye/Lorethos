@@ -2886,7 +2886,487 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       else delete process.env.VITE_SUPABASE_ANON_KEY;
     }
   });
+
+  test('Owner email resolves unrestricted access everywhere (Writer Studio, Admin, paid chapters) even if stored role downgraded', async () => {
+    const ownerRecord = (
+      repoRef as unknown as { state: { users: Array<Record<string, unknown>> } }
+    ).state.users.find(
+      (u) => String(u.email || '').toLowerCase() === OWNER_EMAIL.toLowerCase()
+    );
+    assert.ok(ownerRecord, 'Owner account must exist in repo');
+    const prevRole = ownerRecord.role;
+    ownerRecord.role = 'reader';
+
+    try {
+      const sessionRes = await fetch(`${baseUrl}/api/auth/session`, {
+        headers: { Cookie: ownerCookie },
+      });
+      assert.equal(sessionRes.status, 200);
+      const sessionJson = await sessionRes.json();
+      assert.equal(sessionJson.authenticated, true);
+      assert.equal(sessionJson.user.role, 'owner');
+
+      const writerListRes = await fetch(`${baseUrl}/api/writer/stories`, {
+        headers: { Cookie: ownerCookie },
+      });
+      assert.equal(writerListRes.status, 200);
+
+      const adminRes = await fetch(`${baseUrl}/api/admin/overview`, {
+        headers: { Cookie: ownerCookie },
+      });
+      assert.equal(adminRes.status, 200);
+
+      const paidChapterRes = await fetch(
+        `${baseUrl}/api/stories/the-obsidian-throne/chapters/4`,
+        { headers: { Cookie: ownerCookie } }
+      );
+      assert.equal(paidChapterRes.status, 200);
+      const paidChapterJson = await paidChapterRes.json();
+      assert.equal(paidChapterJson.locked, false);
+      assert.ok(Array.isArray(paidChapterJson.chapter.content) && paidChapterJson.chapter.content.length > 0);
+    } finally {
+      ownerRecord.role = prevRole;
+    }
+  });
+
+  test('Writer Studio multi-chapter publishing enforces 15,000 words/chapter cap, author/genre/cover metadata, and site-wide readability', async () => {
+    const suffix = Date.now();
+    // Reader cannot access /api/writer/stories
+    const forbiddenReaderRes = await fetch(`${baseUrl}/api/writer/stories`, {
+      headers: { Cookie: readerCookie },
+    });
+    assert.equal(forbiddenReaderRes.status, 403);
+
+    // Register writer A and writer B, then promote both via owner
+    const regWriter = async (label: string) => {
+      const res = await fetch(`${baseUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: `${label} ${suffix}`,
+          email: `${label.toLowerCase()}_${suffix}@example.com`,
+          password: 'Password123!',
+        }),
+      });
+      assert.equal(res.status, 201);
+      const cookie = extractSessionCookie(res);
+      const json = await res.json();
+      const promo = await fetch(`${baseUrl}/api/admin/users/${json.user.id}/role`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({ role: 'writer' }),
+      });
+      assert.equal(promo.status, 200);
+      return { cookie, userId: json.user.id as string };
+    };
+
+    const writerA = await regWriter('WriterAlpha');
+    const writerB = await regWriter('WriterBeta');
+
+    // 1. Over-limit single chapter (15,001 words) is rejected with 400
+    const overLimitWords = Array.from({ length: 15001 }, () => 'lore').join(' ');
+    const overRes = await fetch(`${baseUrl}/api/writer/stories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: writerA.cookie },
+      body: JSON.stringify({
+        title: `Oversized Tale ${suffix}`,
+        author: 'Chidi Okonkwo',
+        genre: 'Afrofuturism',
+        coverImage: '/assets/images/book_cover_crimson_dynasty_1794465562273.jpg',
+        synopsis: 'A sweeping saga split across chapters.',
+        chapters: [{ title: 'Chapter 1', body: overLimitWords }],
+      }),
+    });
+    assert.equal(overRes.status, 400);
+    const overJson = await overRes.json();
+    assert.match(String(overJson.error || ''), /15,000/);
+
+    // 2. Multi-chapter story totaling 16,000+ words (8,000 words x 2 chapters) succeeds
+    const eightThousandWords = Array.from({ length: 8000 }, () => 'story').join(' ');
+    const createRes = await fetch(`${baseUrl}/api/writer/stories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: writerA.cookie },
+      body: JSON.stringify({
+        title: `Brass Echoes ${suffix}`,
+        subtitle: 'Book One of the Foundry',
+        author: 'Chidi Okonkwo',
+        genre: 'Afrofuturism',
+        coverImage: '/assets/images/book_cover_crimson_dynasty_1794465562273.jpg',
+        synopsis: 'Two twin smiths awaken an ancient bronze network beneath Enugu.',
+        publicationStatus: 'published',
+        accessTier: 'free',
+        chapters: [
+          { title: 'Chapter 1: First Spark', body: `${eightThousandWords}\n\nClosing bell.` },
+          { title: 'Chapter 2: Iron Echo', body: `${eightThousandWords}\n\nDawn breaks.` },
+        ],
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    const createdJson = await createRes.json();
+    const story = createdJson.story;
+    assert.equal(story.author, 'Chidi Okonkwo');
+    assert.equal(story.genre, 'Afrofuturism');
+    assert.equal(story.coverImage, '/assets/images/book_cover_crimson_dynasty_1794465562273.jpg');
+    assert.equal(story.chapters.length, 2);
+
+    // 3. Immediately visible in public catalog and chapter endpoints for readers
+    const catalogRes = await fetch(`${baseUrl}/api/stories`);
+    assert.equal(catalogRes.status, 200);
+    const catalogJson = await catalogRes.json();
+    const listed = catalogJson.stories.find((s: { id: string }) => s.id === story.id);
+    assert.ok(listed, 'Published writer story must appear immediately in GET /api/stories');
+    assert.equal(listed.chapters.length, 2);
+
+    const ch1Res = await fetch(`${baseUrl}/api/stories/${story.slug}/chapters/1`);
+    assert.equal(ch1Res.status, 200);
+    const ch2Res = await fetch(`${baseUrl}/api/stories/${story.slug}/chapters/2`);
+    assert.equal(ch2Res.status, 200);
+    const ch2Json = await ch2Res.json();
+    assert.equal(ch2Json.chapter.title, 'Chapter 2: Iron Echo');
+
+    // 4. Another writer cannot edit or delete writerA's story (403)
+    const crossEditRes = await fetch(`${baseUrl}/api/writer/stories/${story.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Cookie: writerB.cookie },
+      body: JSON.stringify({
+        title: 'Hijacked',
+        author: 'Hijacker',
+        genre: 'Poetry',
+        synopsis: 'Attempted unauthorized overwrite.',
+        chapters: [{ title: 'Ch 1', body: 'Blocked prose body' }],
+      }),
+    });
+    assert.equal(crossEditRes.status, 403);
+
+    const crossDeleteRes = await fetch(`${baseUrl}/api/writer/stories/${story.id}`, {
+      method: 'DELETE',
+      headers: { Cookie: writerB.cookie },
+    });
+    assert.equal(crossDeleteRes.status, 403);
+
+    // 5. Owner can manage & delete any writer's story cleanly
+    const ownerEditRes = await fetch(`${baseUrl}/api/writer/stories/${story.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+      body: JSON.stringify({
+        title: `Brass Echoes Edited ${suffix}`,
+        author: 'Chidi Okonkwo',
+        genre: 'Afrofuturism',
+        coverImage: '/assets/images/book_cover_crimson_dynasty_1794465562273.jpg',
+        synopsis: 'Updated by unrestricted owner account.',
+        chapters: [
+          { title: 'Chapter 1: First Spark', body: 'Paragraph one.\n\nParagraph two.' },
+          { title: 'Chapter 2: Iron Echo', body: 'Chapter two prose.' },
+          { title: 'Chapter 3: Brass Sky', body: 'Chapter three prose.' },
+        ],
+      }),
+    });
+    assert.equal(ownerEditRes.status, 200);
+    const ownerEditJson = await ownerEditRes.json();
+    assert.equal(ownerEditJson.story.chapters.length, 3);
+
+    const ownerDeleteRes = await fetch(`${baseUrl}/api/writer/stories/${story.id}`, {
+      method: 'DELETE',
+      headers: { Cookie: ownerCookie },
+    });
+    assert.equal(ownerDeleteRes.status, 200);
+
+    const catalogAfterDelete = await (await fetch(`${baseUrl}/api/stories`)).json();
+    assert.equal(
+      catalogAfterDelete.stories.some((s: { id: string }) => s.id === story.id),
+      false
+    );
+  });
+
+  test('Narration supports any language, custom languages, and locale auto-detection', async () => {
+    const {
+      NARRATION_LANGUAGES,
+      POPULAR_NARRATION_LANGUAGES,
+      resolveNarrationLanguage,
+      detectLanguageFromSignals,
+    } = await import('../src/utils/narrationLanguages');
+
+    assert.ok(POPULAR_NARRATION_LANGUAGES.length >= 15);
+    assert.ok(NARRATION_LANGUAGES.length >= 50);
+    assert.equal(NARRATION_LANGUAGES.every((lang) => lang.available === true), true);
+
+    const custom = resolveNarrationLanguage('Quechua');
+    assert.ok(custom);
+    assert.equal(custom.label, 'Quechua');
+    assert.equal(custom.isCustom, true);
+    assert.equal(custom.available, true);
+
+    const yoruba = resolveNarrationLanguage('yoruba');
+    assert.ok(yoruba);
+    assert.equal(yoruba.id, 'yo-NG');
+    assert.equal(yoruba.speechLangTag, 'yo-NG');
+
+    assert.equal(resolveNarrationLanguage('   '), null);
+    assert.equal(resolveNarrationLanguage('!!!'), null);
+
+    const ngLocale = detectLanguageFromSignals({
+      countryCode: 'NG',
+      timeZone: 'Africa/Lagos',
+      languages: ['en-NG', 'en'],
+    });
+    assert.equal(ngLocale.countryCode, 'NG');
+    assert.ok(ngLocale.suggestedLanguageIds.includes('yo-NG'));
+    assert.ok(ngLocale.suggestedLanguageIds.includes('ig-NG'));
+    assert.ok(ngLocale.suggestedLanguageIds.includes('ha-NG'));
+    assert.ok(ngLocale.suggestedLanguageIds.includes('pcm-NG'));
+
+    const localeRes = await fetch(`${baseUrl}/api/locale`, {
+      headers: {
+        'cf-ipcountry': 'FR',
+        'accept-language': 'fr-FR,fr;q=0.9,en;q=0.8',
+      },
+    });
+    assert.equal(localeRes.status, 200);
+    const localeJson = await localeRes.json();
+    assert.equal(localeJson.countryCode, 'FR');
+    assert.equal(localeJson.primaryLanguageId, 'fr-FR');
+    assert.ok(localeJson.suggestedLanguageIds.includes('fr-FR'));
+
+    const emptyLangRes = await fetch(`${baseUrl}/api/ai/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+      body: JSON.stringify({
+        storySlug: 'the-obsidian-throne',
+        chapterNumber: 1,
+        voiceName: 'Kore',
+        language: '!!!',
+      }),
+    });
+    assert.equal(emptyLangRes.status, 400);
+  });
+
+  test('AI TTS uses gemini-2.5-flash, retries 503 spikes, caches translations across voice changes, and falls back to Web Speech', async () => {
+    const { createApp } = await import('../server');
+
+    const translationCalls: Array<{ model: string; hasThinkingConfig: boolean }> = [];
+    const ttsCalls: Array<{ model: string; voice: string }> = [];
+    let failTranslationAttempts = 2;
+    let failFrenchTtsAttempts = 2;
+    let forceUnsupportedTts = false;
+
+    const fakeAudioBase64 = Buffer.from('RIFF\x24\x00\x00\x00WAVEfmt ').toString('base64');
+
+    const mockAi = {
+      models: {
+        generateContent: async (params: {
+          model: string;
+          contents: unknown;
+          config?: {
+            thinkingConfig?: unknown;
+            speechConfig?: { voiceConfig?: { prebuiltVoiceConfig?: { voiceName?: string } } };
+          };
+        }) => {
+          if (params.model === 'gemini-3.8-flash-lite-tts') {
+            const voice =
+              params.config?.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName || 'Kore';
+            ttsCalls.push({ model: params.model, voice });
+
+            if (forceUnsupportedTts) {
+              throw new Error('400 INVALID_ARGUMENT: Language not supported by TTS voice.');
+            }
+            if (failFrenchTtsAttempts > 0) {
+              failFrenchTtsAttempts -= 1;
+              throw new Error(
+                '503 UNAVAILABLE: This model is currently experiencing high demand. Spikes in demand are usually temporary.'
+              );
+            }
+            return {
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        inlineData: {
+                          data: fakeAudioBase64,
+                          mimeType: 'audio/wav',
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            };
+          }
+
+          translationCalls.push({
+            model: params.model,
+            hasThinkingConfig: Boolean(params.config?.thinkingConfig),
+          });
+          if (failTranslationAttempts > 0) {
+            failTranslationAttempts -= 1;
+            throw new Error(
+              '503 UNAVAILABLE: This model is currently experiencing high demand. Spikes in demand are usually temporary.'
+            );
+          }
+          return {
+            text: `Translated passage (${translationCalls.length}): Le trône d’obsidienne s’éveilla sous la lune.`,
+          };
+        },
+      },
+    };
+
+    const aiApp = await createApp({
+      withVite: false,
+      aiRetryDelaysMs: [1, 1, 1],
+      geminiClientFactory: () => mockAi as unknown as import('@google/genai').GoogleGenAI,
+    });
+
+    const aiServer = await new Promise<http.Server>((resolve) => {
+      const s = aiApp.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const addr = aiServer.address();
+      assert.ok(addr && typeof addr === 'object');
+      const aiBaseUrl = `http://127.0.0.1:${addr.port}`;
+
+      // 1. First French call: fails translation twice (503) + fails TTS twice (503) and recovers via retries
+      const frFirstRes = await fetch(`${aiBaseUrl}/api/ai/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: 'the-obsidian-throne',
+          chapterNumber: 1,
+          voiceName: 'Kore',
+          language: 'fr-FR',
+        }),
+      });
+      assert.equal(frFirstRes.status, 200);
+      const frFirstJson = await frFirstRes.json();
+      assert.equal(frFirstJson.ttsFallback, false);
+      assert.equal(frFirstJson.ttsProvider, 'gemini-tts');
+      assert.equal(frFirstJson.translationCached, false);
+      assert.equal(frFirstJson.language, 'fr-FR');
+      assert.match(String(frFirstJson.translatedText || ''), /Le trône/);
+      assert.ok(frFirstJson.audioBase64);
+
+      // Should have attempted gemini-2.5-flash 3 times (2 failures + 1 success) without thinkingConfig
+      assert.equal(translationCalls.length, 3);
+      assert.equal(translationCalls.every((c) => c.model === 'gemini-2.5-flash'), true);
+      assert.equal(translationCalls.every((c) => c.hasThinkingConfig === false), true);
+      assert.equal(ttsCalls.length, 3);
+
+      // 2. Second French call with a different voice (Charon): reuses cached translation!
+      const frSecondRes = await fetch(`${aiBaseUrl}/api/ai/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: 'the-obsidian-throne',
+          chapterNumber: 1,
+          voiceName: 'Charon',
+          language: 'fr-FR',
+        }),
+      });
+      assert.equal(frSecondRes.status, 200);
+      const frSecondJson = await frSecondRes.json();
+      assert.equal(frSecondJson.ttsFallback, false);
+      assert.equal(frSecondJson.translationCached, true);
+      assert.equal(frSecondJson.voiceName, 'Charon');
+      // Translation call count MUST stay at 3 (cached!)
+      assert.equal(translationCalls.length, 3);
+      assert.equal(ttsCalls.length, 4);
+
+      // 3. Yoruba & Custom language when Gemini TTS rejects language: clean Web Speech fallback with translated prose
+      forceUnsupportedTts = true;
+      const yoRes = await fetch(`${aiBaseUrl}/api/ai/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: 'the-obsidian-throne',
+          chapterNumber: 1,
+          voiceName: 'Kore',
+          language: 'yo-NG',
+        }),
+      });
+      assert.equal(yoRes.status, 200);
+      const yoJson = await yoRes.json();
+      assert.equal(yoJson.ttsFallback, true);
+      assert.equal(yoJson.ttsProvider, 'web-speech');
+      assert.equal(yoJson.audioBase64, null);
+      assert.equal(yoJson.language, 'yo-NG');
+      assert.equal(yoJson.speechLangTag, 'yo-NG');
+      assert.ok(String(yoJson.translatedText || '').length > 0);
+      assert.match(String(yoJson.fallbackReason || ''), /Yoruba|device speech/i);
+
+      const customRes = await fetch(`${aiBaseUrl}/api/ai/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: 'the-obsidian-throne',
+          chapterNumber: 1,
+          voiceName: 'Zephyr',
+          language: 'Quechua',
+        }),
+      });
+      assert.equal(customRes.status, 200);
+      const customJson = await customRes.json();
+      assert.equal(customJson.ttsFallback, true);
+      assert.equal(customJson.ttsProvider, 'web-speech');
+      assert.equal(customJson.languageLabel, 'Quechua');
+      assert.ok(String(customJson.translatedText || '').length > 0);
+      assert.ok(Array.isArray(customJson.translatedParagraphs) && customJson.translatedParagraphs.length >= 1);
+
+      // 4. Direct on-page text translation (POST /api/ai/translate):
+      // Locked chapter requires entitlement (403 without session)
+      const lockedTranslateRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storySlug: 'the-obsidian-throne',
+          chapterNumber: 4,
+          language: 'es-ES',
+        }),
+      });
+      assert.equal(lockedTranslateRes.status, 403);
+
+      // Spanish text translation translates title + paragraphs, caches, and TTS reuses it with 0 extra translation calls
+      const callsBeforeSpanish = translationCalls.length;
+      const esTranslateRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: 'the-obsidian-throne',
+          chapterNumber: 1,
+          language: 'es-ES',
+        }),
+      });
+      assert.equal(esTranslateRes.status, 200);
+      const esTranslateJson = await esTranslateRes.json();
+      assert.equal(esTranslateJson.language, 'es-ES');
+      assert.equal(esTranslateJson.cached, false);
+      assert.ok(Array.isArray(esTranslateJson.translatedParagraphs) && esTranslateJson.translatedParagraphs.length >= 1);
+      assert.equal(translationCalls.length, callsBeforeSpanish + 1);
+
+      // Subsequent TTS for Spanish reuses cached text translation (no additional translation call!)
+      forceUnsupportedTts = false;
+      const esTtsRes = await fetch(`${aiBaseUrl}/api/ai/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: 'the-obsidian-throne',
+          chapterNumber: 1,
+          voiceName: 'Puck',
+          language: 'es-ES',
+        }),
+      });
+      assert.equal(esTtsRes.status, 200);
+      const esTtsJson = await esTtsRes.json();
+      assert.equal(esTtsJson.translationCached, true);
+      assert.deepEqual(esTtsJson.translatedParagraphs, esTranslateJson.translatedParagraphs);
+      assert.equal(translationCalls.length, callsBeforeSpanish + 1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        aiServer.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
 });
+
 
 
 

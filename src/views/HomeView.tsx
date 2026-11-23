@@ -8,6 +8,7 @@ import { StoryLikeButton } from '../components/StoryLikeButton';
 import { ReadingLeaderboardSection } from '../components/ReadingLeaderboardSection';
 import { fetchLikesForStories } from '../lib/storyLikes';
 import { supabase } from '../lib/supabase';
+import { isOwnerEmail } from '../lib/writerStories';
 
 export const HomeView: React.FC = () => {
   const {
@@ -713,14 +714,14 @@ export const HomeView: React.FC = () => {
               <div className="relative pt-6 mt-6 border-t border-white/10 space-y-3">
                 <div className="flex items-baseline justify-between">
                   <span className="text-xs text-white/70 font-sans-ui">
-                    {isAuthenticated && user.role === 'owner'
+                    {isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email))
                       ? 'Owner Access'
                       : isAuthenticated && (user.role === 'writer' || user.role === 'admin')
                       ? 'Writer Access'
                       : 'Monthly Plan'}
                   </span>
                   <span className="font-sans-ui text-xl font-bold text-white tabular-nums">
-                    {isAuthenticated && (user.role === 'owner' || user.role === 'writer' || user.role === 'admin') ? (
+                    {isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email) || user.role === 'writer' || user.role === 'admin') ? (
                       <>₦0 <span className="text-xs font-normal text-white/60">/ complimentary</span></>
                     ) : (
                       <>₦3,500 <span className="text-xs font-normal text-white/60">/ month</span></>
@@ -728,14 +729,14 @@ export const HomeView: React.FC = () => {
                   </span>
                 </div>
 
-                {isAuthenticated && (user.role === 'owner' || user.role === 'writer' || user.role === 'admin') ? (
+                {isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email) || user.role === 'writer' || user.role === 'admin') ? (
                   <a
                     href={buildHref('stories')}
                     onClick={(e) => handleNav(e, 'stories')}
                     className="w-full py-3 px-4 bg-[#C85A32] hover:bg-[#b04d28] text-white font-semibold text-xs tracking-wide rounded-lg flex items-center justify-center gap-2 transition-all shadow-md hover:shadow-lg"
                   >
                     <span>
-                      {user.role === 'owner'
+                      {user.role === 'owner' || isOwnerEmail(user.email)
                         ? 'Owner Total Access Active · Browse Library'
                         : 'Writer Access Active · Browse Library'}
                     </span>

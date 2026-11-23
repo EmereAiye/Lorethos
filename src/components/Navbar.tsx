@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { canAccessWriterStudio } from '../lib/writerStories';
+import { canAccessWriterStudio, isOwnerEmail } from '../lib/writerStories';
 import { getDisplayName, computeReaderRank } from '../utils/readerProfile';
 import { ReaderAvatar } from './ReaderAvatar';
 import { BookOpen, Sun, Moon, BookmarkCheck, Menu, X, ShieldCheck, Search, ArrowRight, Film, Award, Flame, Feather, Trophy } from 'lucide-react';
@@ -75,8 +75,9 @@ export const Navbar: React.FC = () => {
   }
 
   const isPatron = isAuthenticated && user.subscription.status === 'active';
-  const isOwner = isAuthenticated && user.role === 'owner';
-  const hasWriterAccess = isAuthenticated && canAccessWriterStudio(user.role);
+  const isOwner = isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email));
+  const hasWriterAccess =
+    isAuthenticated && (canAccessWriterStudio(user.role) || isOwnerEmail(user.email));
   const displayName = getDisplayName(user);
   const trimmedSearch = searchQuery.trim();
   const showDropdown = searchFocused && trimmedSearch.length > 0;

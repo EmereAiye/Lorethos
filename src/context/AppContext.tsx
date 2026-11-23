@@ -272,6 +272,7 @@ interface AppContextType {
   ) => Promise<{ ok: boolean; error?: string }>;
 
   // Helper getters & gated chapter loader
+  refreshStories: () => Promise<void>;
   getStoryBySlug: (slug: string) => Story | undefined;
   getChapter: (storySlug: string, chapterNumber: number) => { story: Story; chapter: Chapter } | null;
   fetchChapterContent: (
@@ -1051,7 +1052,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 ? sessionJson.user.preferredGenres
                 : loadSavedPreferredGenres(sessionJson.user.id);
 
-            let resolvedRole = normalizeWriterRole(sessionJson.user.role);
+            let resolvedRole = normalizeWriterRole(sessionJson.user.role, sessionJson.user.email);
             let resolvedAvatar = normalizePortableAvatarUrl(sessionJson.user.avatar);
             let resolvedNickname = sessionJson.user.nickname;
             let resolvedBio = sessionJson.user.bio;
@@ -1195,7 +1196,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   emailVerifiedAt: sbConfirmedAt,
                   avatar: sbState.profile?.avatar_url || undefined,
                   bio: sbState.profile?.bio || undefined,
-                  role: normalizeWriterRole(sbState.profile?.role),
+                  role: normalizeWriterRole(sbState.profile?.role, sbState.email),
                   preferredGenres: savedGenres,
                 });
                 setPreferredGenresState(savedGenres);
@@ -1220,7 +1221,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
               const sbState = await getCurrentSupabaseAuthAndProfile();
               if (!mounted || !sbState.userId) return;
-              const liveRole = normalizeWriterRole(sbState.profile?.role);
+              const liveRole = normalizeWriterRole(sbState.profile?.role, sbState.email);
               setUser((prev) => {
                 if (prev.id !== 'guest' && prev.email) {
                   return prev.role === liveRole ? prev : { ...prev, role: liveRole };
@@ -1694,7 +1695,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const refreshUserRole = useCallback(async (): Promise<WriterRole> => {
-    let expressRole: WriterRole = normalizeWriterRole(user.role);
+    let expressRole: WriterRole = normalizeWriterRole(user.role, user.email);
     let lookupUserId: string | null = user.id !== 'guest' ? user.id : null;
     let lookupEmail: string | null = user.email || null;
 
@@ -1705,7 +1706,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (sessionJson?.authenticated && sessionJson.user) {
           lookupUserId = sessionJson.user.id;
           lookupEmail = sessionJson.user.email || lookupEmail;
-          expressRole = normalizeWriterRole(sessionJson.user.role);
+          expressRole = normalizeWriterRole(sessionJson.user.role, lookupEmail);
         }
       }
     } catch {
@@ -3289,6 +3290,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addChapterToStory,
         updateStoryPricing,
         updateStoryWorkflow,
+        refreshStories,
         getStoryBySlug,
         getChapter,
         fetchChapterContent,

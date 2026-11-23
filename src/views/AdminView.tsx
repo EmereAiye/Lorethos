@@ -28,6 +28,7 @@ import { VoiceDictationButton } from '../components/VoiceDictationButton';
 import { VideoTrailerStudio } from '../components/VideoTrailerStudio';
 import { ReaderAvatar } from '../components/ReaderAvatar';
 import { apiFetch, parseJsonSafe } from '../lib/apiClient';
+import { isOwnerEmail } from '../lib/writerStories';
 
 export const AdminView: React.FC = () => {
   const {
@@ -86,7 +87,7 @@ export const AdminView: React.FC = () => {
   const [aiCraftingSynopsis, setAiCraftingSynopsis] = useState(false);
   const [aiAdminError, setAiAdminError] = useState<string | null>(null);
 
-  const isOwner = isAuthenticated && user.role === 'owner';
+  const isOwner = isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email));
 
   useEffect(() => {
     const valid = new Set(['studio', 'users', 'pricing', 'ledger', 'inquiries']);
@@ -183,7 +184,7 @@ export const AdminView: React.FC = () => {
   };
 
   const handleRoleToggle = async (target: AdminUserDirectoryEntry, nextRole: WriterRole) => {
-    if (target.role === 'owner') return;
+    if (target.role === 'owner' || isOwnerEmail(target.email)) return;
     setUpdatingRoleId(target.id);
     try {
       const res = await updateUserRole(target.id, nextRole, target.email);
@@ -205,7 +206,7 @@ export const AdminView: React.FC = () => {
   };
 
   const approvedWritersList = adminUsers.filter(
-    (u) => u.role === 'writer' || u.role === 'admin' || u.role === 'owner'
+    (u) => u.role === 'writer' || u.role === 'admin' || u.role === 'owner' || isOwnerEmail(u.email)
   );
   const filteredUsers = adminUsers.filter((entry) => {
     if (userRoleFilter === 'writers' && entry.role === 'reader') return false;
@@ -1329,7 +1330,7 @@ export const AdminView: React.FC = () => {
                           {writer.email}
                         </div>
                         <div className="text-[10px] font-sans-ui uppercase tracking-wider text-[#C85A32] font-semibold mt-0.5">
-                          {writer.role === 'owner' ? 'Owner · Writer & Reader' : writer.role}
+                          {writer.role === 'owner' || isOwnerEmail(writer.email) ? 'Owner · Writer & Reader' : writer.role}
                         </div>
                       </div>
                     </div>
@@ -1409,8 +1410,8 @@ export const AdminView: React.FC = () => {
               ) : (
                 <div className="divide-y divide-[#2D142C]/10 dark:divide-white/10 border border-[#2D142C]/10 dark:border-white/10 rounded-xl overflow-hidden">
                   {filteredUsers.map((entry) => {
-                    const isEntryOwner = entry.role === 'owner';
-                    const isWriter = entry.role === 'writer' || entry.role === 'admin';
+                    const isEntryOwner = entry.role === 'owner' || isOwnerEmail(entry.email);
+                    const isWriter = !isEntryOwner && (entry.role === 'writer' || entry.role === 'admin');
                     const entryDisplay = entry.nickname || entry.name;
                     const busy = updatingRoleId === entry.id;
                     return (
@@ -1575,7 +1576,7 @@ export const AdminView: React.FC = () => {
                 <div className="p-3 rounded-xl bg-[#F9F6F0] dark:bg-[#160C16] border border-current/10">
                   <div className="opacity-65 text-[11px]">Account Role</div>
                   <div className="font-bold uppercase tracking-wider text-[#C85A32] mt-0.5">
-                    {inspectedProfile.role === 'owner'
+                    {inspectedProfile.role === 'owner' || isOwnerEmail(inspectedProfile.email)
                       ? 'Owner (Writer & Reader)'
                       : inspectedProfile.role}
                   </div>
@@ -1621,7 +1622,7 @@ export const AdminView: React.FC = () => {
                   })}
                 </span>
                 <div className="flex items-center gap-2">
-                  {inspectedProfile.role !== 'owner' && (
+                  {inspectedProfile.role !== 'owner' && !isOwnerEmail(inspectedProfile.email) && (
                     <button
                       type="button"
                       disabled={updatingRoleId === inspectedProfile.id}

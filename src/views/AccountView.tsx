@@ -39,7 +39,7 @@ import { ReadingGoal } from '../components/ReadingGoal';
 import { ReadingLeaderboardSection } from '../components/ReadingLeaderboardSection';
 import { getDisplayName, computeReaderRank, READER_RANK_TIERS } from '../utils/readerProfile';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
-import { canAccessWriterStudio } from '../lib/writerStories';
+import { canAccessWriterStudio, isOwnerEmail } from '../lib/writerStories';
 
 export const AccountView: React.FC = () => {
   const {
@@ -213,8 +213,9 @@ export const AccountView: React.FC = () => {
   }, [isAuthenticated, refreshUserRole]);
 
   const isPatron = isAuthenticated && user.subscription.status === 'active';
-  const hasWriterAccess = isAuthenticated && canAccessWriterStudio(user.role);
-  const isOwner = isAuthenticated && user.role === 'owner';
+  const isOwner = isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email));
+  const hasWriterAccess =
+    isAuthenticated && (canAccessWriterStudio(user.role) || isOwnerEmail(user.email));
   const isWriterOrAdmin = isAuthenticated && (user.role === 'writer' || user.role === 'admin');
   const displayName = getDisplayName(user);
   const rank = computeReaderRank(user, stories);

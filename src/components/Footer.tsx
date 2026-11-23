@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { ShieldCheck, Heart } from 'lucide-react';
+import { isOwnerEmail } from '../lib/writerStories';
 
 export const Footer: React.FC = () => {
   const { currentRoute, navigate, buildHref, user, isAuthenticated } = useApp();
@@ -9,7 +10,7 @@ export const Footer: React.FC = () => {
     return null;
   }
 
-  const isOwner = isAuthenticated && user.role === 'owner';
+  const isOwner = isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email));
 
   const handleLink = (e: React.MouseEvent<HTMLAnchorElement>, route: string) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

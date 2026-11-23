@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import express, { Request, Response, NextFunction } from 'express';
 import JSZip from 'jszip';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
-import { repo, verifyPassword, PLAN_PRICES_NGN, DuplicateEmailError } from './server/db.js';
+import { repo, isOwnerUser, verifyPassword, PLAN_PRICES_NGN, DuplicateEmailError } from './server/db.js';
 import type { StoredUserRecord } from './server/db.js';
 import { sanitizeStoryForPublic } from './server/catalog.js';
 import {
@@ -23,7 +23,11 @@ import {
   type VideoMoodPreference,
   type VideoSceneMood,
 } from './server/wavespeed.js';
-import type { AccessTier, BookshelfVisibility, CommentTag, HighlightColor, PublicationStatus, WriterRole } from './src/types/index.js';
+import type { AccessTier, BookshelfVisibility, CommentTag, HighlightColor, PublicationStatus, Story, WriterRole } from './src/types/index.js';
+import {
+  detectLanguageFromSignals,
+  resolveNarrationLanguage,
+} from './src/utils/narrationLanguages.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,6 +62,8 @@ const PORT =
     : resolvedEnvPort;
 const HOST = (cliHostRaw || process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
 const MODEL_NAME = 'gemini-4-hydrogen';
+const TRANSLATION_MODEL_NAME = 'gemini-2.5-flash';
+const DEFAULT_GEMINI_RETRY_DELAYS_MS = [1500, 3000, 5000];
 const SESSION_COOKIE_NAME = 'lorethos_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -402,8 +408,23 @@ async function requireOwner(req: AuthedRequest, res: Response, next: NextFunctio
     res.status(401).json({ error: 'Authentication required.' });
     return;
   }
-  if (user.role !== 'owner') {
+  if (!isOwnerUser(user)) {
     res.status(403).json({ error: 'Owner authorization required for Publishing Desk access.' });
+    return;
+  }
+  req.currentUser = user;
+  next();
+}
+
+async function requireWriterOrOwner(req: AuthedRequest, res: Response, next: NextFunction) {
+  const user = req.currentUser || (await getAuthenticatedUserAsync(req));
+  if (!user) {
+    res.status(401).json({ error: 'Authentication required. Please sign in to access Writer Studio.' });
+    return;
+  }
+  const allowed = isOwnerUser(user) || user.role === 'writer' || user.role === 'admin';
+  if (!allowed) {
+    res.status(403).json({ error: 'Access denied: Writer Studio is restricted to approved writers and the owner.' });
     return;
   }
   req.currentUser = user;
@@ -434,6 +455,53 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs = 25000): Promise<T
       setTimeout(() => reject(new Error(`Request timed out after ${seconds} seconds.`)), timeoutMs)
     )
   ]);
+}
+
+function isTransientGeminiError(err: unknown): boolean {
+  const rawMessage = err instanceof Error ? err.message : String(err || '');
+  const lower = rawMessage.toLowerCase();
+  const status = typeof (err as { status?: unknown })?.status === 'number'
+    ? (err as { status: number }).status
+    : typeof (err as { code?: unknown })?.code === 'number'
+    ? (err as { code: number }).code
+    : undefined;
+  if (status === 503 || status === 502 || status === 504 || status === 429) {
+    return true;
+  }
+  return (
+    lower.includes('503') ||
+    lower.includes('unavailable') ||
+    lower.includes('high demand') ||
+    lower.includes('spikes in demand') ||
+    lower.includes('overloaded') ||
+    lower.includes('temporarily unavailable') ||
+    lower.includes('timed out') ||
+    lower.includes('econnreset') ||
+    lower.includes('etimedout') ||
+    lower.includes('fetch failed')
+  );
+}
+
+async function withGeminiRetry<T>(
+  operation: () => Promise<T>,
+  retryDelaysMs: readonly number[] = DEFAULT_GEMINI_RETRY_DELAYS_MS
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
+      return await operation();
+    } catch (err) {
+      lastError = err;
+      if (!isTransientGeminiError(err) || attempt >= retryDelaysMs.length) {
+        throw err;
+      }
+      const waitMs = Math.max(0, retryDelaysMs[attempt] ?? 1500);
+      if (waitMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+    }
+  }
+  throw lastError;
 }
 
 function formatGeminiError(err: unknown): { status: number; message: string } {
@@ -475,6 +543,16 @@ function formatGeminiError(err: unknown): { status: number; message: string } {
       message: 'AI quota reached or paid billing tier required for this model. Check Settings > Secrets for a billing-enabled key.',
     };
   }
+  if (
+    rawMessage.includes('503') ||
+    rawMessage.includes('UNAVAILABLE') ||
+    /high demand|spikes in demand|overloaded|temporarily unavailable/i.test(rawMessage)
+  ) {
+    return {
+      status: 503,
+      message: extractedReason || 'The AI narration service is temporarily busy. Please try again in a few moments.',
+    };
+  }
   if (rawMessage.includes('timed out')) {
     return {
       status: 504,
@@ -498,8 +576,13 @@ export async function createApp(options?: {
   withVite?: boolean;
   httpServer?: http.Server;
   waveSpeedConfig?: WaveSpeedConfig;
+  geminiClientFactory?: () => GoogleGenAI;
+  aiRetryDelaysMs?: readonly number[];
 }) {
   await repo.initDatabase();
+  const resolveGeminiClient = () =>
+    options?.geminiClientFactory ? options.geminiClientFactory() : getGeminiClient();
+  const geminiRetryDelays = options?.aiRetryDelaysMs ?? DEFAULT_GEMINI_RETRY_DELAYS_MS;
   const app = express();
   app.set('trust proxy', 1);
 
@@ -576,7 +659,7 @@ export async function createApp(options?: {
     }
   );
 
-  app.use(express.json({ limit: '12mb' }));
+  app.use(express.json({ limit: '25mb' }));
 
   // =========================================================================
   // HEALTH & READINESS
@@ -592,6 +675,32 @@ export async function createApp(options?: {
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
       timestamp: new Date().toISOString(),
     });
+  });
+
+  app.get('/api/locale', (req, res) => {
+    const rawCountry =
+      req.headers['cf-ipcountry'] ||
+      req.headers['x-vercel-ip-country'] ||
+      req.headers['x-appengine-country'] ||
+      req.headers['x-country-code'] ||
+      req.headers['x-geo-country'];
+    const countryCode =
+      typeof rawCountry === 'string' && rawCountry !== 'XX' && rawCountry.trim().length === 2
+        ? rawCountry.trim().toUpperCase()
+        : null;
+
+    const acceptLangHeader = String(req.headers['accept-language'] || '');
+    const languages = acceptLangHeader
+      .split(',')
+      .map((part) => part.split(';')[0].trim())
+      .filter(Boolean);
+
+    res.json(
+      detectLanguageFromSignals({
+        languages,
+        countryCode,
+      })
+    );
   });
 
   // =========================================================================
@@ -919,7 +1028,7 @@ export async function createApp(options?: {
     const sort = String(req.query.sort || 'popular').trim();
 
     const user = await getAuthenticatedUserAsync(req);
-    const isOwner = user?.role === 'owner';
+    const isOwner = isOwnerUser(user);
     let stories = repo.getStories({ includeUnpublished: isOwner }).map(sanitizeStoryForPublic);
 
     stories = stories.filter((story) => {
@@ -980,7 +1089,7 @@ export async function createApp(options?: {
   app.get('/api/stories/:slug', async (req, res) => {
     const user = await getAuthenticatedUserAsync(req);
     const story = repo.getStoryBySlug(req.params.slug, {
-      includeUnpublished: user?.role === 'owner'
+      includeUnpublished: isOwnerUser(user)
     });
     if (!story) {
       res.status(404).json({ error: 'Story not found.' });
@@ -992,7 +1101,7 @@ export async function createApp(options?: {
   app.get('/api/stories/:slug/chapters/:chapterNumber', async (req, res) => {
     const user = await getAuthenticatedUserAsync(req);
     const story = repo.getStoryBySlug(req.params.slug, {
-      includeUnpublished: user?.role === 'owner'
+      includeUnpublished: isOwnerUser(user)
     });
     if (!story) {
       res.status(404).json({ error: 'Story not found.' });
@@ -1637,10 +1746,144 @@ export async function createApp(options?: {
     const ok = repo.deleteComment(
       req.params.id,
       authorAliases,
-      req.currentUser!.role === 'owner'
+      isOwnerUser(req.currentUser)
     );
     if (!ok) {
       res.status(403).json({ error: 'Unable to delete comment.' });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  // =========================================================================
+  // WRITER STUDIO CATALOG PUBLISHING (WRITERS & UNRESTRICTED OWNER)
+  // =========================================================================
+  app.get('/api/writer/stories', requireAuth, requireWriterOrOwner, (req: AuthedRequest, res) => {
+    const stories = repo.getManageableWriterStories(req.currentUser!);
+    res.json({ stories });
+  });
+
+  app.post('/api/writer/stories', requireAuth, requireWriterOrOwner, (req: AuthedRequest, res) => {
+    const body = req.body as {
+      title?: unknown;
+      subtitle?: unknown;
+      author?: unknown;
+      genre?: unknown;
+      coverImage?: unknown;
+      synopsis?: unknown;
+      prologueLore?: unknown;
+      status?: unknown;
+      publicationStatus?: unknown;
+      accessTier?: unknown;
+      priceNgn?: unknown;
+      freeChaptersCount?: unknown;
+      audioUrl?: unknown;
+      chapters?: unknown;
+    };
+
+    const chaptersInput = Array.isArray(body.chapters) ? body.chapters : [];
+    const result = repo.publishWriterStory(req.currentUser!, {
+      title: String(body.title || ''),
+      subtitle: typeof body.subtitle === 'string' ? body.subtitle : undefined,
+      author: String(body.author || req.currentUser!.nickname || req.currentUser!.name || ''),
+      genre: String(body.genre || ''),
+      coverImage: typeof body.coverImage === 'string' ? body.coverImage : undefined,
+      synopsis: String(body.synopsis || ''),
+      prologueLore: typeof body.prologueLore === 'string' ? body.prologueLore : undefined,
+      status:
+        body.status === 'Ongoing' || body.status === 'Completed' || body.status === 'Hiatus'
+          ? (body.status as Story['status'])
+          : 'Ongoing',
+      publicationStatus:
+        body.publicationStatus === 'draft' ||
+        body.publicationStatus === 'review' ||
+        body.publicationStatus === 'published'
+          ? (body.publicationStatus as PublicationStatus)
+          : 'published',
+      accessTier:
+        body.accessTier === 'free' ||
+        body.accessTier === 'subscription' ||
+        body.accessTier === 'purchase'
+          ? (body.accessTier as AccessTier)
+          : 'free',
+      priceNgn: Number(body.priceNgn ?? 0),
+      freeChaptersCount: Number(body.freeChaptersCount ?? 1),
+      audioUrl: typeof body.audioUrl === 'string' ? body.audioUrl : null,
+      chapters: chaptersInput,
+    });
+
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+
+    res.status(201).json({ story: result.story });
+  });
+
+  app.put('/api/writer/stories/:storyId', requireAuth, requireWriterOrOwner, (req: AuthedRequest, res) => {
+    const body = req.body as {
+      title?: unknown;
+      subtitle?: unknown;
+      author?: unknown;
+      genre?: unknown;
+      coverImage?: unknown;
+      synopsis?: unknown;
+      prologueLore?: unknown;
+      status?: unknown;
+      publicationStatus?: unknown;
+      accessTier?: unknown;
+      priceNgn?: unknown;
+      freeChaptersCount?: unknown;
+      audioUrl?: unknown;
+      chapters?: unknown;
+    };
+
+    const chaptersInput = Array.isArray(body.chapters) ? body.chapters : [];
+    const result = repo.updateWriterStoryCatalog(req.currentUser!, String(req.params.storyId || '').trim(), {
+      title: String(body.title || ''),
+      subtitle: typeof body.subtitle === 'string' ? body.subtitle : undefined,
+      author: String(body.author || req.currentUser!.nickname || req.currentUser!.name || ''),
+      genre: String(body.genre || ''),
+      coverImage: typeof body.coverImage === 'string' ? body.coverImage : undefined,
+      synopsis: String(body.synopsis || ''),
+      prologueLore: typeof body.prologueLore === 'string' ? body.prologueLore : undefined,
+      status:
+        body.status === 'Ongoing' || body.status === 'Completed' || body.status === 'Hiatus'
+          ? (body.status as Story['status'])
+          : undefined,
+      publicationStatus:
+        body.publicationStatus === 'draft' ||
+        body.publicationStatus === 'review' ||
+        body.publicationStatus === 'published'
+          ? (body.publicationStatus as PublicationStatus)
+          : undefined,
+      accessTier:
+        body.accessTier === 'free' ||
+        body.accessTier === 'subscription' ||
+        body.accessTier === 'purchase'
+          ? (body.accessTier as AccessTier)
+          : undefined,
+      priceNgn: body.priceNgn !== undefined ? Number(body.priceNgn) : undefined,
+      freeChaptersCount: body.freeChaptersCount !== undefined ? Number(body.freeChaptersCount) : undefined,
+      audioUrl: body.audioUrl === null ? null : typeof body.audioUrl === 'string' ? body.audioUrl : undefined,
+      chapters: chaptersInput,
+    });
+
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+
+    res.json({ story: result.story });
+  });
+
+  app.delete('/api/writer/stories/:storyId', requireAuth, requireWriterOrOwner, (req: AuthedRequest, res) => {
+    const result = repo.deleteWriterStoryCatalog(
+      req.currentUser!,
+      String(req.params.storyId || '').trim()
+    );
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
       return;
     }
     res.json({ ok: true });
@@ -1657,7 +1900,7 @@ export async function createApp(options?: {
     };
 
     const user = req.currentUser!;
-    if (user.role === 'owner') {
+    if (isOwnerUser(user)) {
       res.status(400).json({
         error: 'Owner accounts include complimentary total access to all Lorethos stories and features.',
       });
@@ -1793,7 +2036,7 @@ export async function createApp(options?: {
 
     const user = req.currentUser!;
     const order = repo.getOrderByReference(reference);
-    if (!order || (order.userId !== user.id && user.role !== 'owner')) {
+    if (!order || (order.userId !== user.id && !isOwnerUser(user))) {
       res.status(404).json({ error: 'Order reference not found for your account.' });
       return;
     }
@@ -2057,7 +2300,7 @@ export async function createApp(options?: {
 
       const user = await getAuthenticatedUserAsync(req);
       const story = storySlug
-        ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === 'owner' })
+        ? repo.getStoryBySlug(storySlug, { includeUnpublished: isOwnerUser(user) })
         : undefined;
       const chNum = Number(chapterNumber);
       const chapter = story?.chapters.find((c) => c.chapterNumber === chNum);
@@ -2250,18 +2493,306 @@ export async function createApp(options?: {
     }
   });
 
-  // 4. Text-to-Speech Chapter Narration (Server Prose & Entitlement Enforced)
-  app.post('/api/ai/tts', aiLimiter, async (req, res) => {
+  const splitTranslatedParagraphs = (raw: string): string[] => {
+    const cleaned = raw.replace(/\r\n/g, '\n').trim();
+    if (!cleaned) return [];
+    const blocks = cleaned
+      .split(/\n{2,}/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (blocks.length > 1) return blocks;
+    const lineSplit = cleaned
+      .split(/\n+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return lineSplit.length > 0 ? lineSplit : [cleaned];
+  };
+
+  const parseTranslatedChunkOutput = (
+    rawText: string,
+    expectTitle: boolean,
+    fallbackTitle: string
+  ): { translatedTitle: string; paragraphs: string[] } => {
+    const normalized = rawText.replace(/\r\n/g, '\n').trim();
+    if (!normalized) {
+      return { translatedTitle: fallbackTitle, paragraphs: [] };
+    }
+
+    if (expectTitle) {
+      const firstNewline = normalized.indexOf('\n');
+      const firstLine = (firstNewline === -1 ? normalized : normalized.slice(0, firstNewline)).trim();
+      const titleMatch = firstLine.match(/^TITLE:\s*(.+)$/i);
+      if (titleMatch && titleMatch[1].trim()) {
+        const rest = firstNewline === -1 ? '' : normalized.slice(firstNewline + 1).trim();
+        return {
+          translatedTitle: titleMatch[1].trim(),
+          paragraphs: rest ? splitTranslatedParagraphs(rest) : [],
+        };
+      }
+    }
+
+    return {
+      translatedTitle: fallbackTitle,
+      paragraphs: splitTranslatedParagraphs(normalized),
+    };
+  };
+
+  const chunkParagraphsForTranslation = (paragraphs: string[], maxChars = 4500): string[][] => {
+    const chunks: string[][] = [];
+    let current: string[] = [];
+    let currentLen = 0;
+    for (const para of paragraphs) {
+      const trimmed = para.trim();
+      if (!trimmed) continue;
+      if (current.length > 0 && currentLen + trimmed.length + 2 > maxChars) {
+        chunks.push(current);
+        current = [trimmed];
+        currentLen = trimmed.length;
+      } else {
+        current.push(trimmed);
+        currentLen += trimmed.length + 2;
+      }
+    }
+    if (current.length > 0) chunks.push(current);
+    return chunks;
+  };
+
+  const translateAndCacheChapter = async (params: {
+    ai: GoogleGenAI;
+    story: Story;
+    chapter: Story['chapters'][number];
+    langMeta: NonNullable<ReturnType<typeof resolveNarrationLanguage>>;
+  }): Promise<{
+    translatedTitle: string;
+    translatedParagraphs: string[];
+    translatedText: string;
+    translationCached: boolean;
+  }> => {
+    const { ai, story, chapter, langMeta } = params;
+    const fullEnglishText = chapter.content.join('\n\n').trim();
+    const hashSeed = `${story.title}::${chapter.title}::${fullEnglishText}`;
+    const contentHash = crypto.createHash('sha256').update(hashSeed).digest('hex').slice(0, 16);
+
+    const cachedEntry = repo.getCachedChapterTranslation(
+      story.id,
+      chapter.chapterNumber,
+      langMeta.id,
+      contentHash
+    );
+    if (cachedEntry) {
+      const paragraphs =
+        Array.isArray(cachedEntry.translatedParagraphs) && cachedEntry.translatedParagraphs.length > 0
+          ? cachedEntry.translatedParagraphs
+          : splitTranslatedParagraphs(cachedEntry.translatedText);
+      return {
+        translatedTitle: cachedEntry.translatedTitle || chapter.title,
+        translatedParagraphs: paragraphs,
+        translatedText: cachedEntry.translatedText,
+        translationCached: true,
+      };
+    }
+
+    const chunks = chunkParagraphsForTranslation(chapter.content);
+    let resolvedTitle = chapter.title;
+    const allTranslatedParagraphs: string[] = [];
+    let modelUsed = TRANSLATION_MODEL_NAME;
+
+    for (let idx = 0; idx < chunks.length; idx += 1) {
+      const chunk = chunks[idx];
+      const includeTitle = idx === 0;
+      const sourceBlock = includeTitle
+        ? `TITLE: ${chapter.title}\n\n${chunk.join('\n\n')}`
+        : chunk.join('\n\n');
+
+      const prompt = includeTitle
+        ? `Translate the following literary chapter title and paragraphs faithfully into natural, expressive written and spoken ${langMeta.label} (${langMeta.nativeLabel}). Preserve character names and proper nouns accurately, keep tonal marks or diacritics where natural for ${langMeta.label}, and maintain the literary storytelling rhythm. Start the very first line with "TITLE: " followed by the translated chapter title, leave a blank line, and output every translated paragraph separated by a blank line (\\n\\n) in exact order with no commentary or markdown.\n\n${sourceBlock}`
+        : `Translate the following continuation paragraphs faithfully into natural, expressive written and spoken ${langMeta.label} (${langMeta.nativeLabel}). Preserve character names, tonal marks/diacritics, and literary rhythm. Output ONLY the translated paragraphs separated by a blank line (\\n\\n) in exact order with no commentary or markdown.\n\n${sourceBlock}`;
+
+      const translateWithModel = async (modelId: string, withLowThinking = false) =>
+        withGeminiRetry(
+          () =>
+            withTimeout(
+              ai.models.generateContent({
+                model: modelId,
+                contents: prompt,
+                config: withLowThinking
+                  ? {
+                      systemInstruction: `You are a master literary translator translating story prose fluently into ${langMeta.label} (${langMeta.nativeLabel}) for reading and audiobook narration.`,
+                      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                    }
+                  : {
+                      systemInstruction: `You are a master literary translator translating story prose fluently into ${langMeta.label} (${langMeta.nativeLabel}) for reading and audiobook narration.`,
+                    },
+              }),
+              28000
+            ),
+          geminiRetryDelays
+        );
+
+      let chunkRes;
+      try {
+        chunkRes = await translateWithModel(TRANSLATION_MODEL_NAME, false);
+      } catch (primaryErr) {
+        const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+        if (/404|NOT_FOUND/i.test(msg)) {
+          modelUsed = MODEL_NAME;
+          chunkRes = await translateWithModel(MODEL_NAME, true);
+        } else {
+          throw primaryErr;
+        }
+      }
+
+      const rawOutput = (chunkRes.text ?? '').trim();
+      if (!rawOutput) {
+        throw new Error(`EMPTY_TRANSLATION:${langMeta.label}`);
+      }
+
+      const parsed = parseTranslatedChunkOutput(rawOutput, includeTitle, resolvedTitle);
+      if (includeTitle) {
+        resolvedTitle = parsed.translatedTitle;
+      }
+      if (parsed.paragraphs.length > 0) {
+        allTranslatedParagraphs.push(...parsed.paragraphs);
+      } else {
+        allTranslatedParagraphs.push(rawOutput);
+      }
+    }
+
+    const translatedText = allTranslatedParagraphs.join('\n\n').trim();
+    if (!translatedText) {
+      throw new Error(`EMPTY_TRANSLATION:${langMeta.label}`);
+    }
+
+    repo.saveCachedChapterTranslation({
+      key: `${story.id}::${chapter.chapterNumber}::${langMeta.id.toLowerCase()}`,
+      storyId: story.id,
+      storySlug: story.slug,
+      chapterNumber: chapter.chapterNumber,
+      languageKey: langMeta.id.toLowerCase(),
+      languageLabel: langMeta.label,
+      translatedTitle: resolvedTitle,
+      translatedParagraphs: allTranslatedParagraphs,
+      translatedText,
+      contentHash,
+      model: modelUsed,
+      createdAt: new Date().toISOString(),
+    });
+
+    return {
+      translatedTitle: resolvedTitle,
+      translatedParagraphs: allTranslatedParagraphs,
+      translatedText,
+      translationCached: false,
+    };
+  };
+
+  // 3b. Full-Chapter Written Text Translation (Server Prose, Entitlement, Any Language + Cache + Retry)
+  app.post('/api/ai/translate', aiLimiter, async (req, res) => {
     try {
-      const { storySlug, chapterNumber, voiceName } = req.body as {
+      const { storySlug, chapterNumber, language } = req.body as {
         storySlug?: string;
         chapterNumber?: number;
-        voiceName?: string;
+        language?: string;
       };
+
+      const requestedLangRaw =
+        language !== undefined && String(language).trim() !== '' ? String(language).trim() : 'en-US';
+      const langMeta = resolveNarrationLanguage(requestedLangRaw);
+      if (!langMeta) {
+        res.status(400).json({ error: 'Please specify a valid target language.' });
+        return;
+      }
 
       const user = await getAuthenticatedUserAsync(req);
       const story = storySlug
-        ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === 'owner' })
+        ? repo.getStoryBySlug(storySlug, { includeUnpublished: isOwnerUser(user) })
+        : undefined;
+      const chNum = Number(chapterNumber);
+      const chapter = story?.chapters.find((c) => c.chapterNumber === chNum);
+
+      if (!story || !chapter) {
+        res.status(404).json({ error: 'Story or chapter could not be found.' });
+        return;
+      }
+
+      if (!repo.hasAccessToChapter(user, story, chapter)) {
+        res.status(403).json({
+          error: 'Unlock this chapter before translating chapter prose.',
+        });
+        return;
+      }
+
+      const cleaned = chapter.content.join('\n\n').trim();
+      if (!cleaned) {
+        res.status(400).json({ error: 'Chapter text is empty.' });
+        return;
+      }
+
+      if (langMeta.id === 'en-US') {
+        res.json({
+          storySlug: story.slug,
+          chapterNumber: chapter.chapterNumber,
+          language: 'en-US',
+          languageLabel: 'English',
+          nativeLabel: 'English',
+          speechLangTag: 'en-US',
+          translatedTitle: chapter.title,
+          translatedParagraphs: chapter.content,
+          translatedText: cleaned,
+          cached: true,
+        });
+        return;
+      }
+
+      const ai = resolveGeminiClient();
+      const result = await translateAndCacheChapter({ ai, story, chapter, langMeta });
+
+      res.json({
+        storySlug: story.slug,
+        chapterNumber: chapter.chapterNumber,
+        language: langMeta.id,
+        languageLabel: langMeta.label,
+        nativeLabel: langMeta.nativeLabel,
+        speechLangTag: langMeta.speechLangTag,
+        translatedTitle: result.translatedTitle,
+        translatedParagraphs: result.translatedParagraphs,
+        translatedText: result.translatedText,
+        cached: result.translationCached,
+      });
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('EMPTY_TRANSLATION:')) {
+        const label = err.message.split(':')[1] || 'target language';
+        res.status(502).json({
+          error: `Could not prepare ${label} translation text right now. Please try again.`,
+        });
+        return;
+      }
+      const formatted = formatGeminiError(err);
+      res.status(formatted.status).json({ error: formatted.message });
+    }
+  });
+
+  // 4. Text-to-Speech Chapter Narration (Server Prose, Entitlement, Any Language + Cache + Retry + Fallback)
+  app.post('/api/ai/tts', aiLimiter, async (req, res) => {
+    try {
+      const { storySlug, chapterNumber, voiceName, language } = req.body as {
+        storySlug?: string;
+        chapterNumber?: number;
+        voiceName?: string;
+        language?: string;
+      };
+
+      const requestedLangRaw =
+        language !== undefined && String(language).trim() !== '' ? String(language).trim() : 'en-US';
+      const langMeta = resolveNarrationLanguage(requestedLangRaw);
+      if (!langMeta) {
+        res.status(400).json({ error: 'Please specify a valid narration language.' });
+        return;
+      }
+
+      const user = await getAuthenticatedUserAsync(req);
+      const story = storySlug
+        ? repo.getStoryBySlug(storySlug, { includeUnpublished: isOwnerUser(user) })
         : undefined;
       const chNum = Number(chapterNumber);
       const chapter = story?.chapters.find((c) => c.chapterNumber === chNum);
@@ -2286,51 +2817,143 @@ export async function createApp(options?: {
 
       const allowedVoices = new Set(['Kore', 'Charon', 'Puck', 'Zephyr', 'Fenrir']);
       const selectedVoice = voiceName && allowedVoices.has(voiceName) ? voiceName : 'Kore';
-      const cappedText = cleaned.slice(0, 2400);
-      const intro = `${story.title}. Chapter ${chapter.chapterNumber}: ${chapter.title}.\n\n`;
 
-      const ai = getGeminiClient();
-      const interaction = await withTimeout(
-        ai.interactions.create({
-          model: 'gemini-3.8-flash-lite-tts',
-          input: [
-            {
-              type: 'text',
-              text: `${intro}${cappedText}`,
-              annotations: [
-                {
-                  type: 'speech_metadata',
-                  style: 'Warm, clear, expressive literary audiobook narrator',
-                },
-              ],
-            },
-          ],
-          response_format: { type: 'audio' },
-          generation_config: {
-            speech_config: [
-              {
-                language: 'en-US',
-                voice: selectedVoice,
-              },
-            ],
-          },
-        }),
-        45000
-      );
+      const ai = resolveGeminiClient();
 
-      const audioPart = interaction.output_audio;
-      if (!audioPart?.data) {
-        res.status(502).json({ error: 'Audio narration was not returned by the model.' });
-        return;
+      let translatedTitle = chapter.title;
+      let translatedParagraphs = chapter.content;
+      let fullTranslatedText = cleaned;
+      let translationCached = false;
+
+      if (langMeta.id !== 'en-US') {
+        const translatedResult = await translateAndCacheChapter({ ai, story, chapter, langMeta });
+        translatedTitle = translatedResult.translatedTitle;
+        translatedParagraphs = translatedResult.translatedParagraphs;
+        fullTranslatedText = translatedResult.translatedText;
+        translationCached = translatedResult.translationCached;
       }
 
-      const normalizedAudio = normalizeTtsWavAudio(audioPart.data, audioPart.mime_type);
-      res.json({
-        audioBase64: normalizedAudio.audioBase64,
-        mimeType: normalizedAudio.mimeType,
-        voiceName: selectedVoice,
-      });
+      const spokenIntro =
+        langMeta.id === 'en-US'
+          ? `${story.title}. Chapter ${chapter.chapterNumber}: ${chapter.title}.\n\n`
+          : `${story.title}. ${translatedTitle}.\n\n`;
+      const spokenText = `${spokenIntro}${fullTranslatedText}`.slice(0, 3200);
+
+      const speechGuidance =
+        langMeta.id === 'en-US'
+          ? 'Warm, clear, expressive literary audiobook narrator speaking naturally in English.'
+          : `Speak strictly and fluently in ${langMeta.label} (${langMeta.nativeLabel}, locale ${langMeta.speechLangTag}) with authentic native pronunciation, proper tonal inflection, and warm literary audiobook pacing.`;
+
+      try {
+        const ttsResponse = await withGeminiRetry(
+          () =>
+            withTimeout(
+              ai.models.generateContent({
+                model: 'gemini-3.8-flash-lite-tts',
+                contents: [
+                  {
+                    role: 'user',
+                    parts: [
+                      {
+                        text: spokenText,
+                        speechMetadata: {
+                          style: speechGuidance,
+                        },
+                      },
+                    ],
+                  },
+                ],
+                config: {
+                  responseModalities: ['AUDIO'],
+                  speechConfig: {
+                    voiceConfig: {
+                      prebuiltVoiceConfig: {
+                        voiceName: selectedVoice,
+                      },
+                    },
+                  },
+                },
+              }),
+              40000
+            ),
+          geminiRetryDelays
+        );
+
+        const audioPart = ttsResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+        if (audioPart?.data) {
+          const normalizedAudio = normalizeTtsWavAudio(audioPart.data, audioPart.mimeType);
+          res.json({
+            audioBase64: normalizedAudio.audioBase64,
+            mimeType: normalizedAudio.mimeType,
+            voiceName: selectedVoice,
+            language: langMeta.id,
+            languageLabel: langMeta.label,
+            speechLangTag: langMeta.speechLangTag,
+            translatedTitle: langMeta.id !== 'en-US' ? translatedTitle : undefined,
+            translatedParagraphs: langMeta.id !== 'en-US' ? translatedParagraphs : undefined,
+            translatedText: langMeta.id !== 'en-US' ? fullTranslatedText : undefined,
+            translationCached,
+            ttsProvider: 'gemini-tts',
+            ttsFallback: false,
+          });
+          return;
+        }
+
+        // Empty audio payload -> clean browser Web Speech fallback with translated prose
+        res.json({
+          audioBase64: null,
+          mimeType: null,
+          ttsFallback: true,
+          ttsProvider: 'web-speech',
+          fallbackReason: `Cloud voice audio was unavailable for ${langMeta.label}. Using device speech synthesis / phonetic narration.`,
+          voiceName: selectedVoice,
+          language: langMeta.id,
+          languageLabel: langMeta.label,
+          speechLangTag: langMeta.speechLangTag,
+          translatedTitle: langMeta.id !== 'en-US' ? translatedTitle : chapter.title,
+          translatedParagraphs: langMeta.id !== 'en-US' ? translatedParagraphs : chapter.content,
+          translatedText: langMeta.id !== 'en-US' ? fullTranslatedText : spokenText,
+          translationCached,
+        });
+      } catch (ttsErr) {
+        const rawTtsErr = ttsErr instanceof Error ? ttsErr.message : String(ttsErr);
+        // Never mask missing/invalid API keys or permission denials
+        if (
+          rawTtsErr.includes('GEMINI_API_KEY is not configured') ||
+          rawTtsErr.includes('API_KEY_INVALID') ||
+          rawTtsErr.includes('PERMISSION_DENIED') ||
+          rawTtsErr.includes('403')
+        ) {
+          throw ttsErr;
+        }
+        const formattedTts = formatGeminiError(ttsErr);
+        res.json({
+          audioBase64: null,
+          mimeType: null,
+          ttsFallback: true,
+          ttsProvider: 'web-speech',
+          fallbackReason:
+            langMeta.id !== 'en-US' && !langMeta.geminiTtsPreferred
+              ? `Studio voice synthesis is not yet supported directly for ${langMeta.label}. Playing via device speech synthesis with your cached ${langMeta.label} translation.`
+              : `${formattedTts.message} Playing via device speech synthesis.`,
+          voiceName: selectedVoice,
+          language: langMeta.id,
+          languageLabel: langMeta.label,
+          speechLangTag: langMeta.speechLangTag,
+          translatedTitle: langMeta.id !== 'en-US' ? translatedTitle : chapter.title,
+          translatedParagraphs: langMeta.id !== 'en-US' ? translatedParagraphs : chapter.content,
+          translatedText: langMeta.id !== 'en-US' ? fullTranslatedText : spokenText,
+          translationCached,
+        });
+      }
     } catch (err) {
+      if (err instanceof Error && err.message.startsWith('EMPTY_TRANSLATION:')) {
+        const label = err.message.split(':')[1] || 'target language';
+        res.status(502).json({
+          error: `Could not prepare ${label} translation text right now. Please try again.`,
+        });
+        return;
+      }
       const formatted = formatGeminiError(err);
       res.status(formatted.status).json({ error: formatted.message });
     }
@@ -2443,7 +3066,7 @@ export async function createApp(options?: {
 
       const user = await getAuthenticatedUserAsync(req);
       const story = storySlug
-        ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === 'owner' })
+        ? repo.getStoryBySlug(storySlug, { includeUnpublished: isOwnerUser(user) })
         : undefined;
       if (storySlug && !story) {
         res.status(404).json({ error: 'Referenced story was not found.' });
@@ -2530,7 +3153,7 @@ export async function createApp(options?: {
 
       const user = await getAuthenticatedUserAsync(req);
       const story = storySlug
-        ? repo.getStoryBySlug(storySlug, { includeUnpublished: user?.role === 'owner' })
+        ? repo.getStoryBySlug(storySlug, { includeUnpublished: isOwnerUser(user) })
         : undefined;
       if (storySlug && !story) {
         res.status(404).json({ error: 'Referenced story was not found.' });

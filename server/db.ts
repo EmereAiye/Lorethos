@@ -22,10 +22,18 @@ import type {
   LeaderboardPeriod,
   LeaderboardEntry,
   LeaderboardViewerStanding,
-  LeaderboardResponse
+  LeaderboardResponse,
+  CachedChapterTranslation
 } from '../src/types/index.js';
 import { AUTHORITATIVE_STORIES, withOfficialTrailerMetadata } from './catalog.js';
 import { getDisplayName, getTierForCompletedChapters } from '../src/utils/readerProfile.js';
+import {
+  DEFAULT_WRITER_COVER_IMAGE,
+  MAX_WORDS_PER_CHAPTER,
+  countWords,
+  normalizePortableCoverUrl,
+  splitProseIntoParagraphs,
+} from '../src/utils/coverImage.js';
 
 export class DuplicateEmailError extends Error {
   public readonly code = '23505';
@@ -117,6 +125,7 @@ interface PersistedSnapshot {
   inquiries: CommunityInquiry[];
   storyLikes?: Record<string, string[]>;
   bookshelves?: StoryBookshelf[];
+  chapterTranslations?: Record<string, CachedChapterTranslation>;
 }
 
 export const PLAN_PRICES_NGN: Record<'monthly' | 'annual', { amountNgn: number; label: string }> = {
@@ -126,6 +135,11 @@ export const PLAN_PRICES_NGN: Record<'monthly' | 'annual', { amountNgn: number; 
 
 function getOwnerEmail(): string {
   return (process.env.OWNER_EMAIL || 'Emmymasterwise@gmail.com').trim().toLowerCase();
+}
+
+export function isOwnerUser(user: Pick<StoredUserRecord, 'role' | 'email'> | undefined | null): boolean {
+  if (!user) return false;
+  return user.role === 'owner' || user.email.trim().toLowerCase() === getOwnerEmail();
 }
 
 function normalizeServerRole(rawRole: unknown, email: string): WriterRole {
@@ -228,7 +242,10 @@ class LorethosRepository {
         const parsed = JSON.parse(fs.readFileSync(stateFile, 'utf8')) as PersistedSnapshot;
         if (Array.isArray(parsed.stories) && parsed.stories.length > 0) {
           return {
-            users: parsed.users || [],
+            users: (parsed.users || []).map((u) => ({
+              ...u,
+              role: normalizeServerRole(u.role, String(u.email || '')),
+            })),
             stories: parsed.stories.map((s) =>
               withOfficialTrailerMetadata({
                 ...s,
@@ -243,7 +260,11 @@ class LorethosRepository {
             comments: parsed.comments || [],
             inquiries: parsed.inquiries || [],
             storyLikes: parsed.storyLikes || {},
-            bookshelves: Array.isArray(parsed.bookshelves) ? parsed.bookshelves : []
+            bookshelves: Array.isArray(parsed.bookshelves) ? parsed.bookshelves : [],
+            chapterTranslations:
+              parsed.chapterTranslations && typeof parsed.chapterTranslations === 'object'
+                ? parsed.chapterTranslations
+                : {},
           };
         }
       }
@@ -265,7 +286,8 @@ class LorethosRepository {
       comments: [],
       inquiries: [],
       storyLikes: {},
-      bookshelves: []
+      bookshelves: [],
+      chapterTranslations: {},
     };
   }
 
@@ -344,6 +366,8 @@ class LorethosRepository {
       );
       ALTER TABLE stories ADD COLUMN IF NOT EXISTS publication_status TEXT NOT NULL DEFAULT 'published';
       ALTER TABLE stories ADD COLUMN IF NOT EXISTS writer_requires_purchase BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE stories ADD COLUMN IF NOT EXISTS author_id TEXT;
+      ALTER TABLE stories ADD COLUMN IF NOT EXISTS audio_url TEXT;
       CREATE TABLE IF NOT EXISTS chapters (
         id TEXT PRIMARY KEY,
         story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
@@ -487,6 +511,22 @@ class LorethosRepository {
       );
       CREATE INDEX IF NOT EXISTS idx_story_bookshelves_owner ON story_bookshelves(owner_id);
       CREATE INDEX IF NOT EXISTS idx_story_bookshelves_visibility ON story_bookshelves(visibility);
+      CREATE TABLE IF NOT EXISTS chapter_translations (
+        cache_key TEXT PRIMARY KEY,
+        story_id TEXT NOT NULL,
+        story_slug TEXT NOT NULL,
+        chapter_number INTEGER NOT NULL,
+        language_key TEXT NOT NULL,
+        language_label TEXT NOT NULL,
+        translated_title TEXT,
+        translated_paragraphs JSONB,
+        translated_text TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        model TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      ALTER TABLE chapter_translations ADD COLUMN IF NOT EXISTS translated_title TEXT;
+      ALTER TABLE chapter_translations ADD COLUMN IF NOT EXISTS translated_paragraphs JSONB;
     `);
 
     for (const story of AUTHORITATIVE_STORIES) {
@@ -569,7 +609,8 @@ class LorethosRepository {
         evRes,
         inqRes,
         likesRes,
-        shelvesRes
+        shelvesRes,
+        translationsRes
       ] = await Promise.all([
         this.pool.query('SELECT * FROM stories ORDER BY spotlight_order ASC NULLS LAST, created_at DESC'),
         this.pool.query('SELECT * FROM chapters ORDER BY chapter_number ASC'),
@@ -585,7 +626,8 @@ class LorethosRepository {
         this.pool.query('SELECT event_id FROM payment_events'),
         this.pool.query('SELECT * FROM contacts ORDER BY submitted_at DESC'),
         this.pool.query('SELECT story_id, user_id FROM story_likes'),
-        this.pool.query('SELECT * FROM story_bookshelves ORDER BY updated_at DESC')
+        this.pool.query('SELECT * FROM story_bookshelves ORDER BY updated_at DESC'),
+        this.pool.query('SELECT * FROM chapter_translations')
       ]);
 
       if (storiesRes.rows.length > 0) {
@@ -616,6 +658,7 @@ class LorethosRepository {
             slug: row.slug,
             title: row.title,
             subtitle: row.subtitle,
+            authorId: row.author_id || undefined,
             author: row.author,
             authorBio: row.author_bio,
             genre: row.genre,
@@ -636,6 +679,7 @@ class LorethosRepository {
             featured: Boolean(row.featured),
             spotlightOrder: row.spotlight_order !== null ? Number(row.spotlight_order) : undefined,
             updatedAt: row.updated_at_label,
+            audioUrl: row.audio_url || undefined,
             chapters: chs
           });
         });
@@ -812,6 +856,29 @@ class LorethosRepository {
         createdAt: new Date(row.created_at).toISOString(),
         updatedAt: new Date(row.updated_at).toISOString()
       }));
+
+      this.state.chapterTranslations = {};
+      for (const row of translationsRes.rows) {
+        const key = String(row.cache_key || '');
+        if (!key) continue;
+        const parsedParagraphs = Array.isArray(row.translated_paragraphs)
+          ? row.translated_paragraphs.filter((p: unknown): p is string => typeof p === 'string' && p.trim().length > 0)
+          : undefined;
+        this.state.chapterTranslations[key] = {
+          key,
+          storyId: String(row.story_id || ''),
+          storySlug: String(row.story_slug || ''),
+          chapterNumber: Number(row.chapter_number || 1),
+          languageKey: String(row.language_key || ''),
+          languageLabel: String(row.language_label || ''),
+          translatedTitle: typeof row.translated_title === 'string' ? row.translated_title : undefined,
+          translatedParagraphs: parsedParagraphs,
+          translatedText: String(row.translated_text || ''),
+          contentHash: String(row.content_hash || ''),
+          model: String(row.model || 'gemini-2.5-flash'),
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+        };
+      }
       } catch (err) {
         console.warn(
           'PostgreSQL hydration skipped (schema may not be migrated yet); running with local snapshot:',
@@ -846,7 +913,7 @@ class LorethosRepository {
       emailVerifiedAt: user.emailVerifiedAt || undefined,
       avatar: normalizeServerAvatarUrl(user.avatar),
       bio: user.bio || undefined,
-      role: user.role,
+      role: normalizeServerRole(user.role, user.email),
       subscription: user.subscription,
       unlockedStoryIds: user.unlockedStoryIds,
       bookmarkedChapterIds: user.bookmarkedChapterIds,
@@ -856,12 +923,20 @@ class LorethosRepository {
   }
 
   public getUserById(userId: string): StoredUserRecord | undefined {
-    return this.state.users.find((u) => u.id === userId);
+    const found = this.state.users.find((u) => u.id === userId);
+    if (found) {
+      found.role = normalizeServerRole(found.role, found.email);
+    }
+    return found;
   }
 
   public getUserByEmail(email: string): StoredUserRecord | undefined {
     const normalized = email.trim().toLowerCase();
-    return this.state.users.find((u) => u.email.toLowerCase() === normalized);
+    const found = this.state.users.find((u) => u.email.toLowerCase() === normalized);
+    if (found) {
+      found.role = normalizeServerRole(found.role, found.email);
+    }
+    return found;
   }
 
   private evictCachedUsersByEmail(normalizedEmail: string): void {
@@ -1517,6 +1592,498 @@ class LorethosRepository {
     });
 
     return story;
+  }
+
+  private userCanManageStory(user: StoredUserRecord, story: Story): boolean {
+    if (isOwnerUser(user) || user.role === 'admin') return true;
+    if (story.authorId && story.authorId === user.id) return true;
+    const aliases = new Set(
+      [user.name, user.nickname, user.email.split('@')[0]]
+        .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        .map((v) => v.trim().toLowerCase())
+    );
+    return aliases.has(story.author.trim().toLowerCase());
+  }
+
+  private buildValidatedChapters(
+    storyId: string,
+    rawChapters: Array<{ title?: unknown; body?: unknown }>,
+    accessTier: AccessTier,
+    freeChaptersCount: number
+  ): { ok: true; chapters: Chapter[] } | { ok: false; status: 400; error: string } {
+    if (!Array.isArray(rawChapters) || rawChapters.length === 0) {
+      return { ok: false, status: 400, error: 'Please include at least one chapter.' };
+    }
+
+    const releaseDate = new Date().toLocaleDateString('en-US', {
+      month: 'short',
+      day: '2-digit',
+      year: 'numeric',
+    });
+
+    const chapters: Chapter[] = [];
+    for (let idx = 0; idx < rawChapters.length; idx += 1) {
+      const chNum = idx + 1;
+      const item = rawChapters[idx] || {};
+      const chTitle =
+        typeof item.title === 'string' && item.title.trim()
+          ? item.title.trim().slice(0, 160)
+          : `Chapter ${chNum}`;
+      const bodyStr = typeof item.body === 'string' ? item.body : '';
+      const words = countWords(bodyStr);
+
+      if (words === 0) {
+        return {
+          ok: false,
+          status: 400,
+          error: `Chapter ${chNum} ("${chTitle}") cannot be empty. Write or paste prose for every chapter.`,
+        };
+      }
+      if (words > MAX_WORDS_PER_CHAPTER) {
+        return {
+          ok: false,
+          status: 400,
+          error: `Chapter ${chNum} ("${chTitle}") has ${words.toLocaleString()} words, exceeding the ${MAX_WORDS_PER_CHAPTER.toLocaleString()}-word limit per chapter. Split the continuation into the next chapter.`,
+        };
+      }
+
+      const paragraphs = splitProseIntoParagraphs(bodyStr);
+      const excerptSource = paragraphs[0] || bodyStr.trim();
+      const excerpt =
+        excerptSource.length > 220
+          ? `${excerptSource.slice(0, 217).replace(/\s+\S*$/, '')}...`
+          : excerptSource;
+      const baseSlug =
+        chTitle
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '') || `chapter-${chNum}`;
+
+      chapters.push({
+        id: `ch-${storyId}-${chNum}-${crypto.randomBytes(3).toString('hex')}`,
+        storyId,
+        chapterNumber: chNum,
+        title: chTitle,
+        slug: `${baseSlug}-${chNum}`,
+        releaseDate,
+        wordCount: words,
+        readTimeMinutes: Math.max(1, Math.round(words / 250)),
+        isFree: accessTier === 'free' ? true : idx < freeChaptersCount,
+        excerpt,
+        content: paragraphs,
+      });
+    }
+
+    return { ok: true, chapters };
+  }
+
+  public getManageableWriterStories(user: StoredUserRecord): Story[] {
+    if (isOwnerUser(user) || user.role === 'admin') {
+      return this.state.stories.map((s) => ({
+        ...s,
+        publicationStatus: s.publicationStatus || 'published',
+        totalChapters: s.chapters.length,
+      }));
+    }
+    return this.state.stories
+      .filter((s) => this.userCanManageStory(user, s))
+      .map((s) => ({
+        ...s,
+        publicationStatus: s.publicationStatus || 'published',
+        totalChapters: s.chapters.length,
+      }));
+  }
+
+  public publishWriterStory(
+    user: StoredUserRecord,
+    input: {
+      title: string;
+      subtitle?: string;
+      author: string;
+      genre: string;
+      coverImage?: string;
+      synopsis: string;
+      prologueLore?: string;
+      status?: Story['status'];
+      publicationStatus?: PublicationStatus;
+      accessTier?: AccessTier;
+      priceNgn?: number;
+      freeChaptersCount?: number;
+      audioUrl?: string | null;
+      chapters: Array<{ title?: unknown; body?: unknown }>;
+    }
+  ): { ok: true; story: Story } | { ok: false; status: 400; error: string } {
+    const cleanTitle = input.title.trim().slice(0, 160);
+    const cleanAuthor = (input.author || user.nickname || user.name || 'Lorethos Writer')
+      .trim()
+      .slice(0, 120);
+    const cleanGenre = (input.genre || 'Epic Fantasy').trim().slice(0, 80);
+    const cleanSynopsis = input.synopsis.trim().slice(0, 1800);
+
+    if (cleanTitle.length < 2) {
+      return { ok: false, status: 400, error: 'Story title must be at least 2 characters.' };
+    }
+    if (cleanAuthor.length < 2) {
+      return { ok: false, status: 400, error: 'Please enter the author name.' };
+    }
+    if (cleanGenre.length < 2) {
+      return { ok: false, status: 400, error: 'Please select or enter a story genre.' };
+    }
+    if (cleanSynopsis.length < 10) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'Please enter a synopsis / trailer blurb of at least 10 characters.',
+      };
+    }
+
+    const accessTier: AccessTier =
+      input.accessTier === 'free' || input.accessTier === 'purchase' || input.accessTier === 'subscription'
+        ? input.accessTier
+        : 'free';
+    const freeChaptersCount =
+      accessTier === 'free'
+        ? input.chapters.length
+        : Math.max(1, Math.round(Number(input.freeChaptersCount ?? 1)));
+    const priceNgn = accessTier === 'free' ? 0 : Math.max(0, Math.round(Number(input.priceNgn ?? 1500)));
+
+    const id = `story-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
+    const validatedChapters = this.buildValidatedChapters(
+      id,
+      input.chapters,
+      accessTier,
+      freeChaptersCount
+    );
+    if (!validatedChapters.ok) {
+      return validatedChapters;
+    }
+
+    const baseSlug =
+      cleanTitle
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '') || 'lorethos-story';
+    const slug = this.state.stories.some((s) => s.slug === baseSlug)
+      ? `${baseSlug}-${Date.now().toString(36)}`
+      : baseSlug;
+
+    const resolvedCover =
+      normalizePortableCoverUrl(input.coverImage) || DEFAULT_WRITER_COVER_IMAGE;
+    const pubStatus: PublicationStatus =
+      input.publicationStatus === 'draft' || input.publicationStatus === 'review'
+        ? input.publicationStatus
+        : 'published';
+    const storyStatus: Story['status'] =
+      input.status === 'Completed' || input.status === 'Hiatus' ? input.status : 'Ongoing';
+    const safeAudioUrl =
+      typeof input.audioUrl === 'string' && /^https?:\/\//i.test(input.audioUrl.trim())
+        ? input.audioUrl.trim()
+        : undefined;
+
+    const newStory: Story = {
+      id,
+      slug,
+      title: cleanTitle,
+      subtitle:
+        (input.subtitle || '').trim().slice(0, 220) ||
+        `An original ${cleanGenre} serial by ${cleanAuthor}`,
+      authorId: user.id,
+      author: cleanAuthor,
+      authorBio: user.bio?.trim() || `${cleanAuthor} publishes original fiction on Lorethos.`,
+      genre: cleanGenre,
+      tags: Array.from(new Set([cleanGenre, 'Writer Original', storyStatus])),
+      coverImage: resolvedCover,
+      synopsis: cleanSynopsis,
+      prologueLore:
+        (input.prologueLore || '').trim().slice(0, 600) ||
+        `Published from the Lorethos Writer Studio by ${cleanAuthor}.`,
+      status: storyStatus,
+      publicationStatus: pubStatus,
+      accessTier,
+      priceNgn,
+      writerRequiresPurchase: false,
+      rating: 0,
+      ratingsCount: 0,
+      totalChapters: validatedChapters.chapters.length,
+      totalReads: 0,
+      freeChaptersCount,
+      featured: false,
+      updatedAt: new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      audioUrl: safeAudioUrl,
+      chapters: validatedChapters.chapters,
+    };
+
+    this.state.stories.unshift(newStory);
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO stories (
+          id, slug, title, subtitle, author_id, author, author_bio, genre, tags, cover_image,
+          synopsis, prologue_lore, status, publication_status, access_tier, price_ngn,
+          writer_requires_purchase, free_chapters_count, featured, updated_at_label, audio_url
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+        [
+          newStory.id,
+          newStory.slug,
+          newStory.title,
+          newStory.subtitle,
+          newStory.authorId ?? null,
+          newStory.author,
+          newStory.authorBio,
+          newStory.genre,
+          JSON.stringify(newStory.tags),
+          newStory.coverImage,
+          newStory.synopsis,
+          newStory.prologueLore,
+          newStory.status,
+          newStory.publicationStatus,
+          newStory.accessTier,
+          newStory.priceNgn,
+          Boolean(newStory.writerRequiresPurchase),
+          newStory.freeChaptersCount,
+          newStory.featured,
+          newStory.updatedAt,
+          newStory.audioUrl ?? null,
+        ]
+      );
+      for (const ch of newStory.chapters) {
+        await pool.query(
+          `INSERT INTO chapters (
+            id, story_id, chapter_number, title, slug, release_date_label,
+            word_count, read_time_minutes, is_free, excerpt, content
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
+          [
+            ch.id,
+            newStory.id,
+            ch.chapterNumber,
+            ch.title,
+            ch.slug,
+            ch.releaseDate,
+            ch.wordCount,
+            ch.readTimeMinutes,
+            ch.isFree,
+            ch.excerpt,
+            JSON.stringify(ch.content),
+          ]
+        );
+      }
+    });
+
+    return { ok: true, story: newStory };
+  }
+
+  public updateWriterStoryCatalog(
+    user: StoredUserRecord,
+    storyId: string,
+    input: {
+      title: string;
+      subtitle?: string;
+      author: string;
+      genre: string;
+      coverImage?: string;
+      synopsis: string;
+      prologueLore?: string;
+      status?: Story['status'];
+      publicationStatus?: PublicationStatus;
+      accessTier?: AccessTier;
+      priceNgn?: number;
+      freeChaptersCount?: number;
+      audioUrl?: string | null;
+      chapters: Array<{ title?: unknown; body?: unknown }>;
+    }
+  ): { ok: true; story: Story } | { ok: false; status: 400 | 403 | 404; error: string } {
+    const idx = this.state.stories.findIndex((s) => s.id === storyId);
+    if (idx < 0) {
+      return { ok: false, status: 404, error: 'Story not found.' };
+    }
+    const existing = this.state.stories[idx];
+    if (!this.userCanManageStory(user, existing)) {
+      return { ok: false, status: 403, error: 'You do not have permission to edit this story.' };
+    }
+
+    const cleanTitle = input.title.trim().slice(0, 160);
+    const cleanAuthor = (input.author || existing.author).trim().slice(0, 120);
+    const cleanGenre = (input.genre || existing.genre).trim().slice(0, 80);
+    const cleanSynopsis = input.synopsis.trim().slice(0, 1800);
+
+    if (cleanTitle.length < 2) {
+      return { ok: false, status: 400, error: 'Story title must be at least 2 characters.' };
+    }
+    if (cleanAuthor.length < 2) {
+      return { ok: false, status: 400, error: 'Please enter the author name.' };
+    }
+    if (cleanGenre.length < 2) {
+      return { ok: false, status: 400, error: 'Please select or enter a story genre.' };
+    }
+    if (cleanSynopsis.length < 10) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'Please enter a synopsis / trailer blurb of at least 10 characters.',
+      };
+    }
+
+    const accessTier: AccessTier =
+      input.accessTier === 'free' || input.accessTier === 'purchase' || input.accessTier === 'subscription'
+        ? input.accessTier
+        : existing.accessTier;
+    const freeChaptersCount =
+      accessTier === 'free'
+        ? input.chapters.length
+        : Math.max(1, Math.round(Number(input.freeChaptersCount ?? existing.freeChaptersCount ?? 1)));
+    const priceNgn =
+      accessTier === 'free' ? 0 : Math.max(0, Math.round(Number(input.priceNgn ?? existing.priceNgn ?? 1500)));
+
+    const validatedChapters = this.buildValidatedChapters(
+      existing.id,
+      input.chapters,
+      accessTier,
+      freeChaptersCount
+    );
+    if (!validatedChapters.ok) {
+      return validatedChapters;
+    }
+
+    const pubStatus: PublicationStatus =
+      input.publicationStatus === 'draft' ||
+      input.publicationStatus === 'review' ||
+      input.publicationStatus === 'published'
+        ? input.publicationStatus
+        : existing.publicationStatus || 'published';
+    const storyStatus: Story['status'] =
+      input.status === 'Completed' || input.status === 'Hiatus' || input.status === 'Ongoing'
+        ? input.status
+        : existing.status;
+
+    const resolvedCover =
+      normalizePortableCoverUrl(input.coverImage) || existing.coverImage || DEFAULT_WRITER_COVER_IMAGE;
+    const safeAudioUrl =
+      input.audioUrl === null
+        ? undefined
+        : typeof input.audioUrl === 'string' && /^https?:\/\//i.test(input.audioUrl.trim())
+        ? input.audioUrl.trim()
+        : existing.audioUrl;
+
+    const updatedStory: Story = {
+      ...existing,
+      title: cleanTitle,
+      subtitle:
+        input.subtitle !== undefined
+          ? input.subtitle.trim().slice(0, 220) || `An original ${cleanGenre} serial by ${cleanAuthor}`
+          : existing.subtitle,
+      authorId: existing.authorId || user.id,
+      author: cleanAuthor,
+      genre: cleanGenre,
+      tags: Array.from(new Set([cleanGenre, 'Writer Original', storyStatus])),
+      coverImage: resolvedCover,
+      synopsis: cleanSynopsis,
+      prologueLore:
+        input.prologueLore !== undefined && input.prologueLore.trim()
+          ? input.prologueLore.trim().slice(0, 600)
+          : existing.prologueLore,
+      status: storyStatus,
+      publicationStatus: pubStatus,
+      accessTier,
+      priceNgn,
+      freeChaptersCount,
+      totalChapters: validatedChapters.chapters.length,
+      updatedAt: new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      audioUrl: safeAudioUrl,
+      chapters: validatedChapters.chapters,
+    };
+
+    this.state.stories[idx] = updatedStory;
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `UPDATE stories
+         SET title = $2,
+             subtitle = $3,
+             author_id = $4,
+             author = $5,
+             genre = $6,
+             tags = $7::jsonb,
+             cover_image = $8,
+             synopsis = $9,
+             prologue_lore = $10,
+             status = $11,
+             publication_status = $12,
+             access_tier = $13,
+             price_ngn = $14,
+             free_chapters_count = $15,
+             updated_at_label = $16,
+             audio_url = $17,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [
+          updatedStory.id,
+          updatedStory.title,
+          updatedStory.subtitle,
+          updatedStory.authorId ?? null,
+          updatedStory.author,
+          updatedStory.genre,
+          JSON.stringify(updatedStory.tags),
+          updatedStory.coverImage,
+          updatedStory.synopsis,
+          updatedStory.prologueLore,
+          updatedStory.status,
+          updatedStory.publicationStatus,
+          updatedStory.accessTier,
+          updatedStory.priceNgn,
+          updatedStory.freeChaptersCount,
+          updatedStory.updatedAt,
+          updatedStory.audioUrl ?? null,
+        ]
+      );
+      await pool.query('DELETE FROM chapters WHERE story_id = $1', [updatedStory.id]);
+      for (const ch of updatedStory.chapters) {
+        await pool.query(
+          `INSERT INTO chapters (
+            id, story_id, chapter_number, title, slug, release_date_label,
+            word_count, read_time_minutes, is_free, excerpt, content
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
+          [
+            ch.id,
+            updatedStory.id,
+            ch.chapterNumber,
+            ch.title,
+            ch.slug,
+            ch.releaseDate,
+            ch.wordCount,
+            ch.readTimeMinutes,
+            ch.isFree,
+            ch.excerpt,
+            JSON.stringify(ch.content),
+          ]
+        );
+      }
+    });
+
+    return { ok: true, story: updatedStory };
+  }
+
+  public deleteWriterStoryCatalog(
+    user: StoredUserRecord,
+    storyId: string
+  ): { ok: true } | { ok: false; status: 403 | 404; error: string } {
+    const existing = this.state.stories.find((s) => s.id === storyId);
+    if (!existing) {
+      return { ok: false, status: 404, error: 'Story not found.' };
+    }
+    if (!this.userCanManageStory(user, existing)) {
+      return { ok: false, status: 403, error: 'You do not have permission to delete this story.' };
+    }
+
+    this.state.stories = this.state.stories.filter((s) => s.id !== storyId);
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query('DELETE FROM stories WHERE id = $1', [storyId]);
+    });
+
+    return { ok: true };
   }
 
   public toggleBookmark(userId: string, chapterId: string): string[] | null {
@@ -2479,7 +3046,7 @@ class LorethosRepository {
         (input.storyIds || []).filter((id) => {
           const st = this.getStoryById(id);
           if (!st) return false;
-          if ((st.publicationStatus || 'published') !== 'published' && owner.role !== 'owner') {
+          if ((st.publicationStatus || 'published') !== 'published' && !isOwnerUser(owner)) {
             return false;
           }
           return true;
@@ -2591,7 +3158,7 @@ class LorethosRepository {
     }
 
     const story = this.getStoryById(storyId);
-    if (!story || ((story.publicationStatus || 'published') !== 'published' && user.role !== 'owner')) {
+    if (!story || ((story.publicationStatus || 'published') !== 'published' && !isOwnerUser(user))) {
       return { ok: false, status: 404, error: 'Story not found in catalog.' };
     }
 
@@ -2652,6 +3219,92 @@ class LorethosRepository {
     });
 
     return { ok: true };
+  }
+
+  public getCachedChapterTranslation(
+    storyId: string,
+    chapterNumber: number,
+    languageKey: string,
+    contentHash: string
+  ): CachedChapterTranslation | null {
+    if (!this.state.chapterTranslations) {
+      this.state.chapterTranslations = {};
+    }
+    const normalizedLang = languageKey.trim().toLowerCase();
+    const key = `${storyId}::${chapterNumber}::${normalizedLang}`;
+    const entry = this.state.chapterTranslations[key];
+    if (!entry || entry.contentHash !== contentHash || !entry.translatedText.trim()) {
+      return null;
+    }
+    return entry;
+  }
+
+  public saveCachedChapterTranslation(entry: CachedChapterTranslation): void {
+    if (!entry.translatedText.trim()) return;
+    if (!this.state.chapterTranslations) {
+      this.state.chapterTranslations = {};
+    }
+    const normalizedLang = entry.languageKey.trim().toLowerCase();
+    const key = `${entry.storyId}::${entry.chapterNumber}::${normalizedLang}`;
+    const stored: CachedChapterTranslation = {
+      ...entry,
+      key,
+      languageKey: normalizedLang,
+    };
+    this.state.chapterTranslations[key] = stored;
+    this.persistSnapshot();
+
+    this.mirrorToPostgres(async (pool) => {
+      await pool.query(
+        `INSERT INTO chapter_translations (
+          cache_key, story_id, story_slug, chapter_number, language_key, language_label,
+          translated_title, translated_paragraphs, translated_text, content_hash, model
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11)
+        ON CONFLICT (cache_key) DO UPDATE SET
+          language_label = EXCLUDED.language_label,
+          translated_title = EXCLUDED.translated_title,
+          translated_paragraphs = EXCLUDED.translated_paragraphs,
+          translated_text = EXCLUDED.translated_text,
+          content_hash = EXCLUDED.content_hash,
+          model = EXCLUDED.model,
+          created_at = NOW()`,
+        [
+          stored.key,
+          stored.storyId,
+          stored.storySlug,
+          stored.chapterNumber,
+          stored.languageKey,
+          stored.languageLabel,
+          stored.translatedTitle ?? null,
+          stored.translatedParagraphs ? JSON.stringify(stored.translatedParagraphs) : null,
+          stored.translatedText,
+          stored.contentHash,
+          stored.model,
+        ]
+      );
+    });
+
+    const sb = getConfiguredSupabaseDbClient();
+    if (sb) {
+      void Promise.resolve(
+        sb
+          .from('chapter_translations')
+          .upsert(
+            {
+              cache_key: stored.key,
+              story_id: stored.storyId,
+              story_slug: stored.storySlug,
+              chapter_number: stored.chapterNumber,
+              language_key: stored.languageKey,
+              language_label: stored.languageLabel,
+              translated_text: stored.translatedText,
+              content_hash: stored.contentHash,
+              model: stored.model,
+            },
+            { onConflict: 'cache_key' }
+          )
+      ).catch(() => undefined);
+    }
   }
 }
 

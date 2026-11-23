@@ -41,6 +41,7 @@ export interface Story {
   slug: string;
   title: string;
   subtitle: string;
+  authorId?: string;
   author: string;
   authorBio: string;
   genre: string;
@@ -61,6 +62,7 @@ export interface Story {
   featured: boolean;
   spotlightOrder?: number;
   updatedAt: string;
+  audioUrl?: string;
   trailerVideoUrl?: string;
   trailerPosterUrl?: string;
   trailerDuration?: string;
@@ -295,3 +297,17 @@ export interface LeaderboardResponse {
   generatedAt: string;
 }
 
+export interface CachedChapterTranslation {
+  key: string;
+  storyId: string;
+  storySlug: string;
+  chapterNumber: number;
+  languageKey: string;
+  languageLabel: string;
+  translatedTitle?: string;
+  translatedParagraphs?: string[];
+  translatedText: string;
+  contentHash: string;
+  model: string;
+  createdAt: string;
+}

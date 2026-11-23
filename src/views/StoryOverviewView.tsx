@@ -16,7 +16,10 @@ import {
 import { StoryTrailerPlayer } from '../components/StoryTrailerPlayer';
 import { VideoTrailerStudio } from '../components/VideoTrailerStudio';
 import { StoryLikeButton } from '../components/StoryLikeButton';
+import { ExclusiveAudioPlayer } from '../components/ExclusiveAudioPlayer';
 import { fetchLikesForStories } from '../lib/storyLikes';
+import { isOwnerEmail } from '../lib/writerStories';
+import { DEFAULT_WRITER_COVER_IMAGE } from '../utils/coverImage';
 import { supabase } from '../lib/supabase';
 import {
   AVERAGE_READING_WPM,
@@ -87,10 +90,11 @@ export const StoryOverviewView: React.FC = () => {
     );
   }
 
-  const isWriterOrAdmin = isAuthenticated && (user.role === 'writer' || user.role === 'admin');
+  const isOwner = isAuthenticated && (user.role === 'owner' || isOwnerEmail(user.email));
+  const isWriterOrAdmin = isAuthenticated && !isOwner && (user.role === 'writer' || user.role === 'admin');
   const isUnlockedForUser =
     isAuthenticated &&
-    (user.role === 'owner' ||
+    (isOwner ||
       (isWriterOrAdmin && !story.writerRequiresPurchase) ||
       user.unlockedStoryIds.includes(story.id) ||
       (user.subscription.status === 'active' && story.accessTier === 'subscription') ||
@@ -130,8 +134,15 @@ export const StoryOverviewView: React.FC = () => {
           <div className="lg:col-span-4 flex flex-col items-center">
             <div className="w-full max-w-xs rounded-xl overflow-hidden shadow-2xl border border-[#2D142C]/15 dark:border-white/15 relative">
               <img
-                src={story.coverImage}
+                src={story.coverImage || DEFAULT_WRITER_COVER_IMAGE}
                 alt={`${story.title} cover`}
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (target.src !== `${window.location.origin}${DEFAULT_WRITER_COVER_IMAGE}`) {
+                    target.src = DEFAULT_WRITER_COVER_IMAGE;
+                  }
+                }}
                 className="w-full h-auto aspect-[3/4] object-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
@@ -221,7 +232,13 @@ export const StoryOverviewView: React.FC = () => {
                 </span>
               </span>
               <span>&middot;</span>
-              <span>Chapters 1&ndash;{story.freeChaptersCount} Free</span>
+              <span>
+                {story.accessTier === 'free'
+                  ? 'All Chapters Free'
+                  : story.freeChaptersCount <= 1
+                  ? 'Chapter 1 Free'
+                  : `Chapters 1–${story.freeChaptersCount} Free`}
+              </span>
               <span>&middot;</span>
               <span>Updated {story.updatedAt}</span>
             </div>
@@ -321,7 +338,7 @@ export const StoryOverviewView: React.FC = () => {
                   <div className="flex items-center gap-2 text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 px-3 py-2 rounded-lg">
                     <Check className="w-4 h-4" />
                     <span>
-                      {user.role === 'owner'
+                      {isOwner
                         ? 'Owner All-Access Included'
                         : isWriterOrAdmin
                         ? 'Complimentary Writer Access'
@@ -338,7 +355,14 @@ export const StoryOverviewView: React.FC = () => {
               )}
 
               <div className="text-[11px] text-[#2D142C]/65 dark:text-white/65 font-sans-ui flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span>&check; Chapters 1 to {story.freeChaptersCount} are Free</span>
+                <span>
+                  &check;{' '}
+                  {story.accessTier === 'free'
+                    ? 'All Chapters Free to Read'
+                    : story.freeChaptersCount <= 1
+                    ? 'Chapter 1 is Free'
+                    : `Chapters 1 to ${story.freeChaptersCount} are Free`}
+                </span>
                 <span>&middot;</span>
                 <span>&check; Verified Paystack Checkout in Nigeria</span>
                 <span>&middot;</span>
@@ -348,6 +372,13 @@ export const StoryOverviewView: React.FC = () => {
 
           </div>
         </div>
+
+        {story.audioUrl && (
+          <ExclusiveAudioPlayer
+            src={story.audioUrl}
+            label={`Story Audio Preview · ${story.title}`}
+          />
+        )}
 
         {story.trailerVideoUrl && (
           <StoryTrailerPlayer
@@ -373,11 +404,16 @@ export const StoryOverviewView: React.FC = () => {
                 Chapter Directory ({story.chapters.length})
               </h2>
               <p className="font-sans-ui text-xs text-[#2D142C]/65 dark:text-white/65 mt-0.5">
-                Chapters 1&ndash;{story.freeChaptersCount} are free &middot; Est. reading times calculated at {AVERAGE_READING_WPM} words/min (avg. {readingSummary.averageWordCount.toLocaleString()} words, ~{readingSummary.averageChapterMinutes} min/ch).
+                {story.accessTier === 'free'
+                  ? 'All chapters are complimentary'
+                  : story.freeChaptersCount <= 1
+                  ? 'Chapter 1 is free'
+                  : `Chapters 1–${story.freeChaptersCount} are free`}{' '}
+                &middot; Est. reading times calculated at {AVERAGE_READING_WPM} words/min (avg. {readingSummary.averageWordCount.toLocaleString()} words, ~{readingSummary.averageChapterMinutes} min/ch).
               </p>
             </div>
 
-            {!isUnlockedForUser && !isWriterOrAdmin && user.role !== 'owner' && (
+            {!isUnlockedForUser && !isWriterOrAdmin && !isOwner && (
               <a
                 href={buildHref('pricing')}
                 onClick={(e) => handleLink(e, 'pricing')}
