@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { apiFetch } from '../lib/apiClient';
+import { apiFetch, parseJsonSafe } from '../lib/apiClient';
 import {
   ArrowLeft,
   ChevronLeft,
@@ -48,6 +48,7 @@ import {
 import { VoiceDictationButton } from '../components/VoiceDictationButton';
 import { isOwnerEmail } from '../lib/writerStories';
 import {
+  ACTIVE_NARRATION_LANGUAGES,
   NARRATION_LANGUAGES,
   POPULAR_NARRATION_LANGUAGES,
   detectLanguageFromSignals,
@@ -155,7 +156,6 @@ export const ReaderView: React.FC = () => {
   // TTS AI Audio Narration & Multilingual Translation state
   const [ttsVoice, setTtsVoice] = useState<'Kore' | 'Charon' | 'Zephyr' | 'Puck'>('Kore');
   const [ttsLanguage, setTtsLanguage] = useState<string>('en-US');
-  const [customLanguageInput, setCustomLanguageInput] = useState('');
   const [languageSearch, setLanguageSearch] = useState('');
   const [showAllLanguages, setShowAllLanguages] = useState(false);
   const [detectedLocale, setDetectedLocale] = useState<DetectedReaderLocale | null>(null);
@@ -169,7 +169,6 @@ export const ReaderView: React.FC = () => {
   const [textTranslateError, setTextTranslateError] = useState<string | null>(null);
   const [inlineTranslatorOpen, setInlineTranslatorOpen] = useState(false);
   const [inlineLangSearch, setInlineLangSearch] = useState('');
-  const [inlineCustomLangInput, setInlineCustomLangInput] = useState('');
   const [inlineShowAllLanguages, setInlineShowAllLanguages] = useState(false);
   const [translationFromCache, setTranslationFromCache] = useState(false);
   const [showTranslatedTranscript, setShowTranslatedTranscript] = useState(false);
@@ -324,7 +323,7 @@ export const ReaderView: React.FC = () => {
     setDetectedLocale(initialDetected);
 
     void apiFetch('/api/locale')
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => (res.ok ? parseJsonSafe<DetectedReaderLocale>(res) : null))
       .then((serverLoc: DetectedReaderLocale | null) => {
         if (!active || !serverLoc) return;
         const merged = detectLanguageFromSignals({
@@ -773,9 +772,9 @@ export const ReaderView: React.FC = () => {
           chapterNumber: chapter.chapterNumber
         })
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Could not reach chapter companion.');
+      const data = await parseJsonSafe<{ reply?: string; error?: string }>(res);
+      if (!res.ok || !data?.reply) {
+        throw new Error(data?.error || 'Could not reach chapter companion.');
       }
       setCompanionReply(data.reply);
       if (mode === 'ask') setLoreQuestion('');
@@ -786,9 +785,31 @@ export const ReaderView: React.FC = () => {
     }
   };
 
+  const normalizeClientTranslationError = (err: unknown, fallbackMessage: string): string => {
+    const raw = err instanceof Error ? err.message : String(err || '');
+    if (
+      /did not match the expected pattern|unexpected token|json|syntaxerror|invalid character/i.test(raw)
+    ) {
+      return `${fallbackMessage} Please try again in a moment.`;
+    }
+    return raw || fallbackMessage;
+  };
+
   const decodeBase64ToBlobUrl = (base64: string, mimeType: string): string => {
-    const clean = base64.replace(/\s+/g, '');
-    const binary = atob(clean);
+    const stripped = base64
+      .replace(/^data:[^;]+;base64,/i, '')
+      .replace(/\s+/g, '')
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .replace(/[^A-Za-z0-9+/=]/g, '');
+    const padLength = stripped.length % 4;
+    const padded = padLength === 0 ? stripped : stripped + '='.repeat(4 - padLength);
+    let binary: string;
+    try {
+      binary = atob(padded);
+    } catch {
+      throw new Error('Audio stream could not be decoded cleanly. Please tap Listen again.');
+    }
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
@@ -851,8 +872,12 @@ export const ReaderView: React.FC = () => {
     const synth = window.speechSynthesis;
     synth.cancel();
 
+    const safeRequestedTag = /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(speechLangTag.trim())
+      ? speechLangTag.trim()
+      : 'en-US';
+
     const voices = synth.getVoices();
-    const targetLower = speechLangTag.toLowerCase();
+    const targetLower = safeRequestedTag.toLowerCase();
     const primaryCode = targetLower.split('-')[0];
     const matchedVoice =
       voices.find((v) => v.lang.toLowerCase() === targetLower) ||
@@ -860,7 +885,11 @@ export const ReaderView: React.FC = () => {
       voices.find((v) => v.name.toLowerCase().includes(languageLabel.toLowerCase()));
 
     const utterance = new SpeechSynthesisUtterance(spokenText);
-    utterance.lang = matchedVoice?.lang || speechLangTag || 'en-US';
+    const resolvedVoiceLang =
+      matchedVoice?.lang && /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(matchedVoice.lang.trim())
+        ? matchedVoice.lang.trim()
+        : safeRequestedTag;
+    utterance.lang = resolvedVoiceLang || 'en-US';
     if (matchedVoice) {
       utterance.voice = matchedVoice;
     }
@@ -919,13 +948,22 @@ export const ReaderView: React.FC = () => {
       setShowTranslatedTranscript(true);
     }
 
-    synth.speak(utterance);
+    try {
+      synth.speak(utterance);
+    } catch {
+      setTtsPlaying(false);
+      setShowTranslatedTranscript(true);
+      setTtsNotice(
+        `Device speech synthesis could not start for ${languageLabel}. You can read the translated prose directly on screen.`
+      );
+    }
   };
 
   const latestLanguageRef = useRef(ttsLanguage);
   latestLanguageRef.current = ttsLanguage;
   const latestChapterLocationRef = useRef(`${storySlug}::${chapterNumber}`);
   latestChapterLocationRef.current = `${storySlug}::${chapterNumber}`;
+  const latestTextTranslateErrorRef = useRef<string | null>(null);
 
   const translateChapterToLanguage = async (
     langIdOrName: string
@@ -933,6 +971,13 @@ export const ReaderView: React.FC = () => {
     if (!chapterData) return null;
     const resolved = resolveNarrationLanguage(langIdOrName);
     if (!resolved) return null;
+
+    if (!resolved.available) {
+      const msg = `${resolved.label} translation and audio narration are coming soon. Currently available: English, French, Yoruba, Igbo, and Hausa.`;
+      latestTextTranslateErrorRef.current = msg;
+      setTextTranslateError(msg);
+      return null;
+    }
 
     if (resolved.id === 'en-US') {
       setActiveTranslatedText(null);
@@ -965,6 +1010,8 @@ export const ReaderView: React.FC = () => {
       return existingPromise;
     }
 
+    autoChapterTranslateAttemptRef.current = `${chapter.id}::${resolved.id}`;
+    latestTextTranslateErrorRef.current = null;
     setTextTranslating(true);
     setTextTranslateError(null);
 
@@ -979,9 +1026,28 @@ export const ReaderView: React.FC = () => {
             language: resolved.id,
           }),
         });
-        const data = await res.json();
+        const data = await parseJsonSafe<{
+          error?: string;
+          language?: string;
+          languageLabel?: string;
+          translatedTitle?: string;
+          translatedParagraphs?: unknown[];
+          translatedText?: string;
+          cached?: boolean;
+        }>(res);
         if (!res.ok) {
-          throw new Error(data.error || `Unable to translate chapter to ${resolved.label}.`);
+          const statusHint =
+            res.status === 429
+              ? `Translation rate limit reached briefly while translating to ${resolved.label}. Please wait a moment and try again.`
+              : res.status === 503
+              ? `Translation service is temporarily busy for ${resolved.label}. Please try again shortly.`
+              : res.status === 504
+              ? `Translation timed out for ${resolved.label}. Please try again.`
+              : `Unable to translate chapter to ${resolved.label} (HTTP ${res.status}).`;
+          throw new Error(data?.error || statusHint);
+        }
+        if (!data) {
+          throw new Error(`Received an unexpected response while translating to ${resolved.label}. Please try again.`);
         }
 
         const translatedParagraphs: string[] = Array.isArray(data.translatedParagraphs) && data.translatedParagraphs.length > 0
@@ -1027,13 +1093,16 @@ export const ReaderView: React.FC = () => {
 
         return cacheEntry;
       } catch (err) {
+        const cleanMsg = normalizeClientTranslationError(
+          err,
+          `Unable to translate chapter to ${resolved.label}.`
+        );
+        latestTextTranslateErrorRef.current = cleanMsg;
         if (
           latestLanguageRef.current === resolved.id &&
           latestChapterLocationRef.current === `${story.slug}::${chapter.chapterNumber}`
         ) {
-          setTextTranslateError(
-            err instanceof Error ? err.message : `Unable to translate chapter to ${resolved.label}.`
-          );
+          setTextTranslateError(cleanMsg);
         }
         return null;
       } finally {
@@ -1060,15 +1129,18 @@ export const ReaderView: React.FC = () => {
   const handleSelectNarrationLanguage = (langIdOrName: string) => {
     const resolved = resolveNarrationLanguage(langIdOrName);
     if (!resolved) return;
+    if (!resolved.available) {
+      const msg = `${resolved.label} is coming soon for both text translation and audio. Currently available: English, French, Yoruba, Igbo, and Hausa.`;
+      latestTextTranslateErrorRef.current = msg;
+      setTextTranslateError(msg);
+      setTtsNotice(msg);
+      return;
+    }
     setTextTranslateError(null);
     setTtsError(null);
     if (ttsLanguage !== resolved.id) {
       setTtsLanguage(resolved.id);
       latestLanguageRef.current = resolved.id;
-      if (resolved.isCustom) {
-        setCustomLanguageInput(resolved.label);
-        setInlineCustomLangInput(resolved.label);
-      }
       resetTtsPlaybackForSelection();
     }
     if (resolved.id === 'en-US') {
@@ -1125,7 +1197,15 @@ export const ReaderView: React.FC = () => {
       if (ttsLanguage !== 'en-US') {
         const cacheKey = makeChapterTranslationCacheKey(story.slug, chapter.chapterNumber, ttsLanguage);
         if (!translatedCacheMap[cacheKey]?.translatedText) {
-          await translateChapterToLanguage(ttsLanguage);
+          const translated = await translateChapterToLanguage(ttsLanguage);
+          if (!translated) {
+            const langLabel = resolveNarrationLanguage(ttsLanguage)?.label || ttsLanguage;
+            throw new Error(
+              latestTextTranslateErrorRef.current ||
+                textTranslateError ||
+                `Unable to translate chapter to ${langLabel}. Please try again.`
+            );
+          }
         }
       }
 
@@ -1139,9 +1219,27 @@ export const ReaderView: React.FC = () => {
           language: ttsLanguage,
         }),
       });
-      const data = await res.json();
+      const data = await parseJsonSafe<{
+        error?: string;
+        language?: string;
+        languageLabel?: string;
+        translatedText?: string;
+        translatedParagraphs?: unknown[];
+        translatedTitle?: string;
+        translationCached?: boolean;
+        ttsFallback?: boolean;
+        audioBase64?: string | null;
+        mimeType?: string;
+        speechLangTag?: string;
+        fallbackReason?: string;
+      }>(res);
       if (!res.ok) {
-        throw new Error(data.error || 'Unable to generate chapter narration.');
+        throw new Error(
+          data?.error || `Unable to generate chapter narration (HTTP ${res.status}).`
+        );
+      }
+      if (!data) {
+        throw new Error('Narration service returned an unexpected response. Please try again.');
       }
 
       const resolvedMeta = resolveNarrationLanguage(data.language || ttsLanguage);
@@ -1216,7 +1314,7 @@ export const ReaderView: React.FC = () => {
         }
       }
     } catch (err) {
-      setTtsError(err instanceof Error ? err.message : 'Narration playback failed.');
+      setTtsError(normalizeClientTranslationError(err, 'Narration playback failed.'));
     } finally {
       setTtsLoading(false);
     }
@@ -2260,7 +2358,7 @@ export const ReaderView: React.FC = () => {
             <div className="space-y-3.5 p-3.5 rounded-lg bg-[#F9F6F0] dark:bg-[#160C16] sepia:bg-[#F4ECE1] border border-current/10">
               {(() => {
                 const selectedLangMeta: NarrationLanguageOption =
-                  resolveNarrationLanguage(ttsLanguage) || POPULAR_NARRATION_LANGUAGES[0];
+                  resolveNarrationLanguage(ttsLanguage) || ACTIVE_NARRATION_LANGUAGES[0];
                 const searchLower = languageSearch.trim().toLowerCase();
                 const filteredLanguages = searchLower
                   ? NARRATION_LANGUAGES.filter(
@@ -2276,7 +2374,7 @@ export const ReaderView: React.FC = () => {
                 const suggestedIds = new Set(detectedLocale?.suggestedLanguageIds || []);
                 const localSuggestions = Array.from(suggestedIds)
                   .map((id) => getNarrationLanguageMeta(id))
-                  .filter((item): item is NarrationLanguageOption => Boolean(item));
+                  .filter((item): item is NarrationLanguageOption => Boolean(item && item.available));
                 const showCustomFromSearch =
                   Boolean(searchLower) &&
                   !filteredLanguages.some(
@@ -2328,12 +2426,12 @@ export const ReaderView: React.FC = () => {
                       </div>
                     )}
 
-                    {/* Searchable Any Language Picker & Quick-Picks */}
+                    {/* Language Picker (5 Active Languages + Coming Soon World Languages) */}
                     <div className="space-y-2.5 pt-1 border-b border-current/10 pb-3">
                       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
                         <span className="font-semibold flex items-center gap-1.5 opacity-85">
                           <Globe className="w-3.5 h-3.5 text-[#C85A32]" />
-                          <span>Any Language</span>
+                          <span>Narration &amp; Text Language</span>
                         </span>
                         <span className="text-[10px] opacity-65">
                           Selected: <strong className="text-[#C85A32]">{selectedLangMeta.label}</strong>
@@ -2350,17 +2448,18 @@ export const ReaderView: React.FC = () => {
                           aria-label="Search narration languages"
                           value={languageSearch}
                           onChange={(e) => setLanguageSearch(e.target.value)}
-                          placeholder="Search 60+ languages (French, Yoruba, Igbo, Hausa, Pidgin, Japanese...)"
+                          placeholder="Active: English, French, Yoruba, Igbo, Hausa · Search coming-soon languages..."
                           className="w-full pl-8 pr-3 py-1.5 text-[11px] rounded-lg border border-current/20 bg-white/70 dark:bg-black/20 focus:outline-none focus:border-[#C85A32]"
                         />
                       </div>
 
-                      <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-0.5">
+                      <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto pr-0.5">
                         {filteredLanguages.map((lang) => {
-                          const isSelected = ttsLanguage === lang.id;
-                          const isLocalMatch = suggestedIds.has(lang.id) && lang.id !== 'en-US';
+                          const isSelected = ttsLanguage === lang.id && lang.available;
+                          const isLocalMatch = suggestedIds.has(lang.id) && lang.id !== 'en-US' && lang.available;
                           const hasCached = Boolean(
-                            storySlug &&
+                            lang.available &&
+                              storySlug &&
                               chapterNumber &&
                               translatedCacheMap[
                                 makeChapterTranslationCacheKey(storySlug, chapterNumber, lang.id)
@@ -2370,22 +2469,32 @@ export const ReaderView: React.FC = () => {
                             <button
                               key={lang.id}
                               type="button"
+                              disabled={!lang.available}
                               onClick={() => handleSelectNarrationLanguage(lang.id)}
                               aria-pressed={isSelected}
                               title={
-                                isLocalMatch
+                                !lang.available
+                                  ? `${lang.label} audio & translation coming soon`
+                                  : isLocalMatch
                                   ? `${lang.nativeLabel} · Suggested for your region`
                                   : lang.nativeLabel
                               }
-                              className={`px-2.5 py-1 rounded-md border text-[11px] cursor-pointer transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
-                                isSelected
-                                  ? 'border-[#C85A32] bg-[#C85A32] text-white font-semibold'
+                              className={`px-2.5 py-1 rounded-md border text-[11px] transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                                !lang.available
+                                  ? 'border-current/10 opacity-55 cursor-not-allowed'
+                                  : isSelected
+                                  ? 'border-[#C85A32] bg-[#C85A32] text-white font-semibold cursor-pointer'
                                   : isLocalMatch
-                                  ? 'border-[#C85A32]/50 bg-[#C85A32]/[0.06] hover:border-[#C85A32]'
-                                  : 'border-current/15 opacity-85 hover:opacity-100 hover:border-[#C85A32]/60'
+                                  ? 'border-[#C85A32]/50 bg-[#C85A32]/[0.06] hover:border-[#C85A32] cursor-pointer'
+                                  : 'border-current/15 opacity-90 hover:opacity-100 hover:border-[#C85A32]/60 cursor-pointer'
                               }`}
                             >
                               <span>{lang.label}</span>
+                              {!lang.available && (
+                                <span className="text-[9px] uppercase tracking-wider opacity-75 font-medium">
+                                  Coming Soon
+                                </span>
+                              )}
                               {hasCached && !isSelected && (
                                 <span
                                   className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"
@@ -2397,16 +2506,9 @@ export const ReaderView: React.FC = () => {
                         })}
 
                         {showCustomFromSearch && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              handleSelectNarrationLanguage(languageSearch);
-                              setLanguageSearch('');
-                            }}
-                            className="px-2.5 py-1 rounded-md border border-dashed border-[#C85A32] text-[#C85A32] hover:bg-[#C85A32] hover:text-white text-[11px] font-semibold cursor-pointer whitespace-nowrap shrink-0"
-                          >
-                            Use &ldquo;{languageSearch.trim()}&rdquo;
-                          </button>
+                          <div className="px-2.5 py-1 rounded-md border border-dashed border-current/25 text-[11px] opacity-65 whitespace-nowrap shrink-0">
+                            &ldquo;{languageSearch.trim()}&rdquo; &middot; Coming Soon
+                          </div>
                         )}
                       </div>
 
@@ -2420,43 +2522,21 @@ export const ReaderView: React.FC = () => {
                             {showAllLanguages ? (
                               <>
                                 <ChevronUp className="w-3 h-3" />
-                                <span>Show Popular Languages Only</span>
+                                <span>Show Less</span>
                               </>
                             ) : (
                               <>
                                 <ChevronDown className="w-3 h-3" />
-                                <span>Browse All {NARRATION_LANGUAGES.length} Languages</span>
+                                <span>View {NARRATION_LANGUAGES.length - ACTIVE_NARRATION_LANGUAGES.length} Coming-Soon Languages</span>
                               </>
                             )}
                           </button>
                         )}
                       </div>
 
-                      {/* Custom / Other Any-Language Input */}
-                      <div className="flex items-center gap-1.5 pt-0.5">
-                        <input
-                          type="text"
-                          aria-label="Custom narration language"
-                          value={customLanguageInput}
-                          onChange={(e) => setCustomLanguageInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && customLanguageInput.trim()) {
-                              e.preventDefault();
-                              handleSelectNarrationLanguage(customLanguageInput);
-                            }
-                          }}
-                          placeholder="Other / Custom Language (e.g., Ibibio, Twi, Quechua...)"
-                          className="flex-1 min-w-0 px-2.5 py-1.5 text-[11px] rounded-lg border border-current/20 bg-white/70 dark:bg-black/20 focus:outline-none focus:border-[#C85A32]"
-                        />
-                        <button
-                          type="button"
-                          disabled={!customLanguageInput.trim()}
-                          onClick={() => handleSelectNarrationLanguage(customLanguageInput)}
-                          className="px-2.5 py-1.5 rounded-lg border border-[#C85A32]/50 text-[#C85A32] hover:bg-[#C85A32] hover:text-white disabled:opacity-45 text-[11px] font-semibold cursor-pointer whitespace-nowrap shrink-0 transition-colors"
-                        >
-                          Use Language
-                        </button>
-                      </div>
+                      <p className="text-[10px] opacity-65 leading-relaxed">
+                        Active for audio &amp; text translation: <strong>English, French, Yoruba, Igbo, and Hausa</strong>. All other world languages are coming soon.
+                      </p>
                     </div>
 
                     {/* Voice & Play Controls */}
@@ -2742,15 +2822,17 @@ export const ReaderView: React.FC = () => {
             const suggestedIds = new Set(detectedLocale?.suggestedLanguageIds || []);
             const quickBarIds: string[] = ['en-US'];
             for (const id of Array.from(suggestedIds)) {
-              if (id !== 'en-US' && !quickBarIds.includes(id)) quickBarIds.push(id);
+              const meta = getNarrationLanguageMeta(id);
+              if (meta?.available && id !== 'en-US' && !quickBarIds.includes(id)) {
+                quickBarIds.push(id);
+              }
             }
-            for (const fallbackId of ['fr-FR', 'es-ES', 'de-DE', 'yo-NG', 'ig-NG', 'ha-NG']) {
-              if (quickBarIds.length >= 6) break;
+            for (const fallbackId of ['fr-FR', 'yo-NG', 'ig-NG', 'ha-NG']) {
               if (!quickBarIds.includes(fallbackId)) quickBarIds.push(fallbackId);
             }
             const quickBarLangs = quickBarIds
               .map((id) => getNarrationLanguageMeta(id))
-              .filter((item): item is NarrationLanguageOption => Boolean(item));
+              .filter((item): item is NarrationLanguageOption => Boolean(item && item.available));
 
             const inlineSearchLower = inlineLangSearch.trim().toLowerCase();
             const inlineFilteredLangs = inlineSearchLower
@@ -2852,7 +2934,7 @@ export const ReaderView: React.FC = () => {
                       }`}
                     >
                       <Globe className="w-3.5 h-3.5" />
-                      <span>{isTranslatedView ? 'Change Language' : 'Any Language'}</span>
+                      <span>Coming Soon Languages</span>
                       {inlineTranslatorOpen ? (
                         <ChevronUp className="w-3 h-3" />
                       ) : (
@@ -2862,7 +2944,7 @@ export const ReaderView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Quick one-tap language buttons directly on the text */}
+                {/* Quick one-tap active language buttons directly on the text */}
                 <div className="flex flex-wrap items-center gap-1.5">
                   {quickBarLangs.map((lang) => {
                     const selected = ttsLanguage === lang.id;
@@ -2884,11 +2966,13 @@ export const ReaderView: React.FC = () => {
                       </button>
                     );
                   })}
-                  {ttsLanguage !== 'en-US' && !quickBarLangs.some((l) => l.id === ttsLanguage) && (
-                    <span className="px-2.5 py-1 rounded-md border border-[#C85A32] bg-[#C85A32] text-white text-[11px] font-semibold whitespace-nowrap">
-                      {activeLangMeta.label}
-                    </span>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setInlineTranslatorOpen((prev) => !prev)}
+                    className="px-2.5 py-1 rounded-md border border-dashed border-current/25 text-[11px] opacity-65 hover:opacity-90 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    Other Languages (Coming Soon)
+                  </button>
                 </div>
 
                 {inlineTranslatorOpen && (
@@ -2900,44 +2984,45 @@ export const ReaderView: React.FC = () => {
                         aria-label="Search languages for text translation"
                         value={inlineLangSearch}
                         onChange={(e) => setInlineLangSearch(e.target.value)}
-                        placeholder="Search any language (French, Yoruba, Igbo, Hausa, Pidgin, Arabic, Japanese...)"
+                        placeholder="Active: English, French, Yoruba, Igbo, Hausa · Search coming-soon languages..."
                         className="w-full pl-8 pr-3 py-1.5 text-[11px] rounded-lg border border-current/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
                       />
                     </div>
 
                     <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-0.5">
                       {inlineFilteredLangs.map((lang) => {
-                        const selected = ttsLanguage === lang.id;
+                        const selected = ttsLanguage === lang.id && lang.available;
                         return (
                           <button
                             key={`inline-all-${lang.id}`}
                             type="button"
+                            disabled={!lang.available}
+                            title={!lang.available ? `${lang.label} translation coming soon` : lang.nativeLabel}
                             onClick={() => {
                               handleSelectNarrationLanguage(lang.id);
                               setInlineTranslatorOpen(false);
                             }}
-                            className={`px-2.5 py-1 rounded-md border text-[11px] cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
-                              selected
-                                ? 'border-[#C85A32] bg-[#C85A32] text-white font-semibold'
-                                : 'border-current/15 opacity-85 hover:opacity-100 hover:border-[#C85A32]/60'
+                            className={`px-2.5 py-1 rounded-md border text-[11px] transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                              !lang.available
+                                ? 'border-current/10 opacity-55 cursor-not-allowed'
+                                : selected
+                                ? 'border-[#C85A32] bg-[#C85A32] text-white font-semibold cursor-pointer'
+                                : 'border-current/15 opacity-90 hover:opacity-100 hover:border-[#C85A32]/60 cursor-pointer'
                             }`}
                           >
-                            {lang.label}
+                            <span>{lang.label}</span>
+                            {!lang.available && (
+                              <span className="text-[9px] uppercase tracking-wider opacity-75 font-medium">
+                                Coming Soon
+                              </span>
+                            )}
                           </button>
                         );
                       })}
                       {showInlineCustomSearch && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            handleSelectNarrationLanguage(inlineLangSearch);
-                            setInlineLangSearch('');
-                            setInlineTranslatorOpen(false);
-                          }}
-                          className="px-2.5 py-1 rounded-md border border-dashed border-[#C85A32] text-[#C85A32] hover:bg-[#C85A32] hover:text-white text-[11px] font-semibold cursor-pointer whitespace-nowrap shrink-0"
-                        >
-                          Translate to &ldquo;{inlineLangSearch.trim()}&rdquo;
-                        </button>
+                        <div className="px-2.5 py-1 rounded-md border border-dashed border-current/25 text-[11px] opacity-65 whitespace-nowrap shrink-0">
+                          &ldquo;{inlineLangSearch.trim()}&rdquo; &middot; Coming Soon
+                        </div>
                       )}
                     </div>
 
@@ -2951,43 +3036,21 @@ export const ReaderView: React.FC = () => {
                           {inlineShowAllLanguages ? (
                             <>
                               <ChevronUp className="w-3 h-3" />
-                              <span>Show Popular Languages</span>
+                              <span>Show Less</span>
                             </>
                           ) : (
                             <>
                               <ChevronDown className="w-3 h-3" />
-                              <span>Browse All {NARRATION_LANGUAGES.length} Languages</span>
+                              <span>View All {NARRATION_LANGUAGES.length} Languages</span>
                             </>
                           )}
                         </button>
                       )}
                     </div>
 
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        if (!inlineCustomLangInput.trim()) return;
-                        handleSelectNarrationLanguage(inlineCustomLangInput);
-                        setInlineTranslatorOpen(false);
-                      }}
-                      className="flex items-center gap-1.5 pt-0.5"
-                    >
-                      <input
-                        type="text"
-                        aria-label="Custom language for chapter text"
-                        value={inlineCustomLangInput}
-                        onChange={(e) => setInlineCustomLangInput(e.target.value)}
-                        placeholder="Type any other language (e.g., Twi, Ibibio, Swahili, Quechua...)"
-                        className="flex-1 min-w-0 px-2.5 py-1.5 text-[11px] rounded-lg border border-current/20 bg-transparent focus:outline-none focus:border-[#C85A32]"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!inlineCustomLangInput.trim() || textTranslating}
-                        className="px-3 py-1.5 rounded-lg bg-[#C85A32] hover:bg-[#b04d28] disabled:opacity-45 text-white text-[11px] font-semibold cursor-pointer whitespace-nowrap shrink-0"
-                      >
-                        Translate Text
-                      </button>
-                    </form>
+                    <p className="text-[10px] opacity-65 leading-relaxed">
+                      Other world &amp; custom languages are coming soon for both written text and audio narration. Currently available: <strong>English, French, Yoruba, Igbo, and Hausa</strong>.
+                    </p>
                   </div>
                 )}
 

@@ -63,6 +63,7 @@ const PORT =
 const HOST = (cliHostRaw || process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
 const MODEL_NAME = 'gemini-4-hydrogen';
 const TRANSLATION_MODEL_NAME = 'gemini-2.5-flash';
+const LITE_TRANSLATION_MODEL_NAME = 'gemini-3.1-flash-lite';
 const DEFAULT_GEMINI_RETRY_DELAYS_MS = [1500, 3000, 5000];
 const SESSION_COOKIE_NAME = 'lorethos_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -457,19 +458,36 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs = 25000): Promise<T
   ]);
 }
 
+function getGeminiErrorStatus(err: unknown): number | undefined {
+  if (typeof (err as { status?: unknown })?.status === 'number') {
+    return (err as { status: number }).status;
+  }
+  if (typeof (err as { code?: unknown })?.code === 'number') {
+    return (err as { code: number }).code;
+  }
+  return undefined;
+}
+
+function isQuotaOrRateLimitError(err: unknown): boolean {
+  const status = getGeminiErrorStatus(err);
+  if (status === 429) return true;
+  const rawMessage = err instanceof Error ? err.message : String(err || '');
+  return (
+    /\b429\b/.test(rawMessage) ||
+    rawMessage.includes('RESOURCE_EXHAUSTED') ||
+    /quota exceeded|too many requests|rate limit/i.test(rawMessage)
+  );
+}
+
 function isTransientGeminiError(err: unknown): boolean {
   const rawMessage = err instanceof Error ? err.message : String(err || '');
   const lower = rawMessage.toLowerCase();
-  const status = typeof (err as { status?: unknown })?.status === 'number'
-    ? (err as { status: number }).status
-    : typeof (err as { code?: unknown })?.code === 'number'
-    ? (err as { code: number }).code
-    : undefined;
-  if (status === 503 || status === 502 || status === 504 || status === 429) {
+  const status = getGeminiErrorStatus(err);
+  if (status === 503 || status === 502 || status === 504) {
     return true;
   }
   return (
-    lower.includes('503') ||
+    /\b503\b/.test(rawMessage) ||
     lower.includes('unavailable') ||
     lower.includes('high demand') ||
     lower.includes('spikes in demand') ||
@@ -519,44 +537,72 @@ function formatGeminiError(err: unknown): { status: number; message: string } {
   } catch {
     // ignore parse failure
   }
+
+  const combinedLower = `${extractedReason} ${rawMessage}`.toLowerCase();
+  const status = getGeminiErrorStatus(err);
+
   if (rawMessage.includes('GEMINI_API_KEY is not configured')) {
     return {
       status: 503,
       message: 'AI features require a valid API key in Settings > Secrets.',
     };
   }
-  if (rawMessage.includes('403') || rawMessage.includes('PERMISSION_DENIED')) {
+  if (status === 403 || /\b403\b/.test(rawMessage) || rawMessage.includes('PERMISSION_DENIED')) {
     return {
       status: 403,
       message: extractedReason || 'AI provider denied this request. Check that your GEMINI_API_KEY in Settings > Secrets is valid and enabled for this model.',
     };
   }
-  if (rawMessage.includes('400') || rawMessage.includes('API_KEY_INVALID') || rawMessage.includes('INVALID_ARGUMENT')) {
+  if (
+    status === 400 ||
+    /\b400\b/.test(rawMessage) ||
+    rawMessage.includes('API_KEY_INVALID') ||
+    rawMessage.includes('INVALID_ARGUMENT')
+  ) {
     return {
       status: 400,
-      message: extractedReason || 'The AI service rejected the API key or request parameters. Please verify Settings > Secrets.',
+      message: extractedReason || 'The AI service rejected the request parameters or API key. Please verify Settings > Secrets.',
     };
   }
-  if (rawMessage.includes('429') || rawMessage.includes('RESOURCE_EXHAUSTED')) {
+  if (isQuotaOrRateLimitError(err)) {
+    const isExplicitBillingQuota =
+      /\b(billing|paid|free[_\s-]*tier|exceeded your current quota|plan and billing)\b/i.test(
+        combinedLower
+      );
     return {
       status: 429,
-      message: 'AI quota reached or paid billing tier required for this model. Check Settings > Secrets for a billing-enabled key.',
+      message: isExplicitBillingQuota
+        ? extractedReason ||
+          'AI model quota exceeded for your current API plan. Wait for quota reset or verify your key in Settings > Secrets.'
+        : extractedReason ||
+          'Temporary AI rate limit reached from translating quickly. Please wait a few seconds and try again.',
     };
   }
   if (
-    rawMessage.includes('503') ||
+    status === 503 ||
+    /\b503\b/.test(rawMessage) ||
     rawMessage.includes('UNAVAILABLE') ||
     /high demand|spikes in demand|overloaded|temporarily unavailable/i.test(rawMessage)
   ) {
     return {
       status: 503,
-      message: extractedReason || 'The AI narration service is temporarily busy. Please try again in a few moments.',
+      message: extractedReason || 'The AI service is temporarily experiencing high demand. Please try again in a few moments.',
     };
   }
-  if (rawMessage.includes('timed out')) {
+  if (status === 504 || rawMessage.includes('timed out') || rawMessage.includes('ETIMEDOUT')) {
     return {
       status: 504,
-      message: 'The AI service took too long to respond. Please try again.',
+      message: 'The AI service took too long to respond on this passage. Please try again.',
+    };
+  }
+  if (
+    rawMessage.startsWith('EMPTY_TRANSLATION:') ||
+    err instanceof SyntaxError ||
+    /expected pattern|unexpected token|json/i.test(combinedLower)
+  ) {
+    return {
+      status: 502,
+      message: 'The AI returned an unexpected response format. Please tap Retry.',
     };
   }
   return {
@@ -2412,7 +2458,10 @@ export async function createApp(options?: {
         })
       );
 
-      const raw = (response.text ?? '{}').trim();
+      const raw = (response.text ?? '{}')
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
       const parsed = JSON.parse(raw);
       res.json(parsed);
     } catch (err) {
@@ -2484,7 +2533,10 @@ export async function createApp(options?: {
         })
       );
 
-      const raw = (response.text ?? '{}').trim();
+      const raw = (response.text ?? '{}')
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
       const parsed = JSON.parse(raw);
       res.json(parsed);
     } catch (err) {
@@ -2493,8 +2545,23 @@ export async function createApp(options?: {
     }
   });
 
+  const stripMarkdownFences = (raw: string): string => {
+    let cleaned = raw.replace(/\r\n/g, '\n').trim();
+    // Unwrap full-response markdown code fences (```json ... ```, ```markdown ... ```, ``` ... ```)
+    const fencedMatch = cleaned.match(/^```[a-z0-9_-]*\s*\n([\s\S]*?)\n?```$/i);
+    if (fencedMatch && fencedMatch[1]) {
+      cleaned = fencedMatch[1].trim();
+    } else {
+      cleaned = cleaned
+        .replace(/^```[a-z0-9_-]*\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+    }
+    return cleaned;
+  };
+
   const splitTranslatedParagraphs = (raw: string): string[] => {
-    const cleaned = raw.replace(/\r\n/g, '\n').trim();
+    const cleaned = stripMarkdownFences(raw);
     if (!cleaned) return [];
     const blocks = cleaned
       .split(/\n{2,}/)
@@ -2508,24 +2575,103 @@ export async function createApp(options?: {
     return lineSplit.length > 0 ? lineSplit : [cleaned];
   };
 
+  const extractGeminiResponseText = (res: unknown): string => {
+    if (!res || typeof res !== 'object') return '';
+    const typed = res as {
+      text?: unknown;
+      candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }>;
+    };
+    if (typeof typed.text === 'string' && typed.text.trim()) {
+      return typed.text;
+    }
+    const parts = typed.candidates?.[0]?.content?.parts;
+    if (Array.isArray(parts)) {
+      return parts
+        .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+        .join('')
+        .trim();
+    }
+    return '';
+  };
+
   const parseTranslatedChunkOutput = (
     rawText: string,
     expectTitle: boolean,
     fallbackTitle: string
   ): { translatedTitle: string; paragraphs: string[] } => {
-    const normalized = rawText.replace(/\r\n/g, '\n').trim();
+    const normalized = stripMarkdownFences(rawText);
     if (!normalized) {
       return { translatedTitle: fallbackTitle, paragraphs: [] };
+    }
+
+    // Optional JSON tolerance: if the model returns JSON despite plain-text instructions, extract safely without failing
+    if (normalized.startsWith('{') || normalized.startsWith('[')) {
+      try {
+        const parsedJson = JSON.parse(normalized) as
+          | {
+              translatedTitle?: unknown;
+              title?: unknown;
+              paragraphs?: unknown;
+              translatedParagraphs?: unknown;
+              text?: unknown;
+              translation?: unknown;
+            }
+          | unknown[];
+        if (Array.isArray(parsedJson)) {
+          const paras = parsedJson
+            .map((item) => (typeof item === 'string' ? item.trim() : ''))
+            .filter(Boolean);
+          if (paras.length > 0) {
+            return { translatedTitle: fallbackTitle, paragraphs: paras };
+          }
+        } else if (parsedJson && typeof parsedJson === 'object') {
+          const objTitle =
+            typeof parsedJson.translatedTitle === 'string' && parsedJson.translatedTitle.trim()
+              ? parsedJson.translatedTitle.trim()
+              : typeof parsedJson.title === 'string' && parsedJson.title.trim()
+              ? parsedJson.title.trim()
+              : fallbackTitle;
+          const rawArr = Array.isArray(parsedJson.translatedParagraphs)
+            ? parsedJson.translatedParagraphs
+            : Array.isArray(parsedJson.paragraphs)
+            ? parsedJson.paragraphs
+            : null;
+          if (rawArr) {
+            const paras = rawArr
+              .map((item) => (typeof item === 'string' ? item.trim() : ''))
+              .filter(Boolean);
+            if (paras.length > 0) {
+              return { translatedTitle: expectTitle ? objTitle : fallbackTitle, paragraphs: paras };
+            }
+          }
+          const rawStr =
+            typeof parsedJson.text === 'string'
+              ? parsedJson.text
+              : typeof parsedJson.translation === 'string'
+              ? parsedJson.translation
+              : '';
+          if (rawStr.trim()) {
+            return {
+              translatedTitle: expectTitle ? objTitle : fallbackTitle,
+              paragraphs: splitTranslatedParagraphs(rawStr),
+            };
+          }
+        }
+      } catch {
+        // Fall through cleanly to plain-text parsing
+      }
     }
 
     if (expectTitle) {
       const firstNewline = normalized.indexOf('\n');
       const firstLine = (firstNewline === -1 ? normalized : normalized.slice(0, firstNewline)).trim();
-      const titleMatch = firstLine.match(/^TITLE:\s*(.+)$/i);
+      const cleanedFirstLine = firstLine.replace(/^[#*\s]+/, '').replace(/[*]+$/, '').trim();
+      const titleMatch = cleanedFirstLine.match(/^TITLE:\s*(.+)$/i);
       if (titleMatch && titleMatch[1].trim()) {
+        const cleanTitle = titleMatch[1].replace(/^\*{1,2}|\*{1,2}$/g, '').trim();
         const rest = firstNewline === -1 ? '' : normalized.slice(firstNewline + 1).trim();
         return {
-          translatedTitle: titleMatch[1].trim(),
+          translatedTitle: cleanTitle || fallbackTitle,
           paragraphs: rest ? splitTranslatedParagraphs(rest) : [],
         };
       }
@@ -2537,20 +2683,51 @@ export async function createApp(options?: {
     };
   };
 
-  const chunkParagraphsForTranslation = (paragraphs: string[], maxChars = 4500): string[][] => {
-    const chunks: string[][] = [];
-    let current: string[] = [];
-    let currentLen = 0;
+  const splitOversizedParagraph = (para: string, maxChars: number): string[] => {
+    const trimmed = para.trim();
+    if (trimmed.length <= maxChars) return [trimmed];
+    const pieces: string[] = [];
+    let remaining = trimmed;
+    while (remaining.length > maxChars) {
+      const windowSlice = remaining.slice(0, maxChars);
+      let splitAt = Math.max(
+        windowSlice.lastIndexOf('. '),
+        windowSlice.lastIndexOf('! '),
+        windowSlice.lastIndexOf('? ')
+      );
+      if (splitAt < Math.floor(maxChars * 0.45)) {
+        splitAt = windowSlice.lastIndexOf(' ');
+      }
+      if (splitAt < Math.floor(maxChars * 0.3)) {
+        splitAt = maxChars - 1;
+      }
+      const head = remaining.slice(0, splitAt + 1).trim();
+      if (head) pieces.push(head);
+      remaining = remaining.slice(splitAt + 1).trim();
+    }
+    if (remaining) pieces.push(remaining);
+    return pieces;
+  };
+
+  const chunkParagraphsForTranslation = (paragraphs: string[], maxChars = 2200): string[][] => {
+    const normalizedUnits: string[] = [];
     for (const para of paragraphs) {
       const trimmed = para.trim();
       if (!trimmed) continue;
-      if (current.length > 0 && currentLen + trimmed.length + 2 > maxChars) {
+      normalizedUnits.push(...splitOversizedParagraph(trimmed, maxChars));
+    }
+
+    const chunks: string[][] = [];
+    let current: string[] = [];
+    let currentLen = 0;
+    for (const unit of normalizedUnits) {
+      if (current.length > 0 && currentLen + unit.length + 2 > maxChars) {
         chunks.push(current);
-        current = [trimmed];
-        currentLen = trimmed.length;
+        current = [unit];
+        currentLen = unit.length;
       } else {
-        current.push(trimmed);
-        currentLen += trimmed.length + 2;
+        current.push(unit);
+        currentLen += unit.length + 2;
       }
     }
     if (current.length > 0) chunks.push(current);
@@ -2592,10 +2769,16 @@ export async function createApp(options?: {
       };
     }
 
-    const chunks = chunkParagraphsForTranslation(chapter.content);
+    const chunks = chunkParagraphsForTranslation(chapter.content, 2200);
     let resolvedTitle = chapter.title;
     const allTranslatedParagraphs: string[] = [];
     let modelUsed = TRANSLATION_MODEL_NAME;
+
+    const modelFallbackChain: Array<{ model: string; thinkingLevel?: ThinkingLevel }> = [
+      { model: TRANSLATION_MODEL_NAME },
+      { model: MODEL_NAME, thinkingLevel: ThinkingLevel.LOW },
+      { model: LITE_TRANSLATION_MODEL_NAME, thinkingLevel: ThinkingLevel.MINIMAL },
+    ];
 
     for (let idx = 0; idx < chunks.length; idx += 1) {
       const chunk = chunks[idx];
@@ -2605,44 +2788,69 @@ export async function createApp(options?: {
         : chunk.join('\n\n');
 
       const prompt = includeTitle
-        ? `Translate the following literary chapter title and paragraphs faithfully into natural, expressive written and spoken ${langMeta.label} (${langMeta.nativeLabel}). Preserve character names and proper nouns accurately, keep tonal marks or diacritics where natural for ${langMeta.label}, and maintain the literary storytelling rhythm. Start the very first line with "TITLE: " followed by the translated chapter title, leave a blank line, and output every translated paragraph separated by a blank line (\\n\\n) in exact order with no commentary or markdown.\n\n${sourceBlock}`
-        : `Translate the following continuation paragraphs faithfully into natural, expressive written and spoken ${langMeta.label} (${langMeta.nativeLabel}). Preserve character names, tonal marks/diacritics, and literary rhythm. Output ONLY the translated paragraphs separated by a blank line (\\n\\n) in exact order with no commentary or markdown.\n\n${sourceBlock}`;
+        ? `Translate into natural ${langMeta.label} (${langMeta.nativeLabel}). Preserve proper names, diacritics, and blank lines between paragraphs. Keep line 1 as "TITLE: <translated title>". Output plain translated text only.\n\n${sourceBlock}`
+        : `Translate into natural ${langMeta.label} (${langMeta.nativeLabel}). Preserve proper names, diacritics, and blank lines between paragraphs. Output plain translated text only.\n\n${sourceBlock}`;
 
-      const translateWithModel = async (modelId: string, withLowThinking = false) =>
-        withGeminiRetry(
+      const invokeModel = async (entry: { model: string; thinkingLevel?: ThinkingLevel }) => {
+        const config = entry.thinkingLevel
+          ? {
+              systemInstruction: `Literary translator to ${langMeta.label}. Output only the plain translated text.`,
+              thinkingConfig: { thinkingLevel: entry.thinkingLevel },
+            }
+          : {
+              systemInstruction: `Literary translator to ${langMeta.label}. Output only the plain translated text.`,
+            };
+
+        return withGeminiRetry(
           () =>
             withTimeout(
               ai.models.generateContent({
-                model: modelId,
+                model: entry.model,
                 contents: prompt,
-                config: withLowThinking
-                  ? {
-                      systemInstruction: `You are a master literary translator translating story prose fluently into ${langMeta.label} (${langMeta.nativeLabel}) for reading and audiobook narration.`,
-                      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-                    }
-                  : {
-                      systemInstruction: `You are a master literary translator translating story prose fluently into ${langMeta.label} (${langMeta.nativeLabel}) for reading and audiobook narration.`,
-                    },
+                config,
               }),
               28000
             ),
           geminiRetryDelays
         );
+      };
 
-      let chunkRes;
-      try {
-        chunkRes = await translateWithModel(TRANSLATION_MODEL_NAME, false);
-      } catch (primaryErr) {
-        const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-        if (/404|NOT_FOUND/i.test(msg)) {
-          modelUsed = MODEL_NAME;
-          chunkRes = await translateWithModel(MODEL_NAME, true);
-        } else {
-          throw primaryErr;
+      let chunkRes: unknown;
+      let lastChunkErr: unknown;
+      for (let mIdx = 0; mIdx < modelFallbackChain.length; mIdx += 1) {
+        const candidate = modelFallbackChain[mIdx];
+        try {
+          chunkRes = await invokeModel(candidate);
+          modelUsed = candidate.model;
+          lastChunkErr = null;
+          break;
+        } catch (modelErr) {
+          lastChunkErr = modelErr;
+          const rawMsg = modelErr instanceof Error ? modelErr.message : String(modelErr || '');
+          // Never swallow invalid/missing API key or permission denial
+          if (
+            rawMsg.includes('GEMINI_API_KEY is not configured') ||
+            rawMsg.includes('API_KEY_INVALID') ||
+            rawMsg.includes('PERMISSION_DENIED') ||
+            /\b403\b/.test(rawMsg)
+          ) {
+            throw modelErr;
+          }
+          const isFallbackable =
+            isQuotaOrRateLimitError(modelErr) ||
+            isTransientGeminiError(modelErr) ||
+            /404|NOT_FOUND/i.test(rawMsg);
+          if (!isFallbackable || mIdx === modelFallbackChain.length - 1) {
+            throw modelErr;
+          }
         }
       }
 
-      const rawOutput = (chunkRes.text ?? '').trim();
+      if (lastChunkErr && !chunkRes) {
+        throw lastChunkErr;
+      }
+
+      const rawOutput = extractGeminiResponseText(chunkRes).trim();
       if (!rawOutput) {
         throw new Error(`EMPTY_TRANSLATION:${langMeta.label}`);
       }
@@ -2654,7 +2862,7 @@ export async function createApp(options?: {
       if (parsed.paragraphs.length > 0) {
         allTranslatedParagraphs.push(...parsed.paragraphs);
       } else {
-        allTranslatedParagraphs.push(rawOutput);
+        allTranslatedParagraphs.push(stripMarkdownFences(rawOutput));
       }
     }
 
@@ -2700,6 +2908,15 @@ export async function createApp(options?: {
       const langMeta = resolveNarrationLanguage(requestedLangRaw);
       if (!langMeta) {
         res.status(400).json({ error: 'Please specify a valid target language.' });
+        return;
+      }
+      if (!langMeta.available) {
+        res.status(400).json({
+          error: `${langMeta.label} text translation and audio narration are coming soon. Currently available: English, French, Yoruba, Igbo, and Hausa.`,
+          comingSoon: true,
+          language: langMeta.id,
+          languageLabel: langMeta.label,
+        });
         return;
       }
 
@@ -2787,6 +3004,15 @@ export async function createApp(options?: {
       const langMeta = resolveNarrationLanguage(requestedLangRaw);
       if (!langMeta) {
         res.status(400).json({ error: 'Please specify a valid narration language.' });
+        return;
+      }
+      if (!langMeta.available) {
+        res.status(400).json({
+          error: `${langMeta.label} audio narration and text translation are coming soon. Currently available: English, French, Yoruba, Igbo, and Hausa.`,
+          comingSoon: true,
+          language: langMeta.id,
+          languageLabel: langMeta.label,
+        });
         return;
       }
 

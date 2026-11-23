@@ -12,68 +12,84 @@ export interface NarrationLanguageOption {
   isCustom?: boolean;
 }
 
+export const ACTIVE_NARRATION_LANGUAGE_IDS = new Set<string>([
+  'en-US',
+  'fr-FR',
+  'yo-NG',
+  'ig-NG',
+  'ha-NG',
+]);
+
+export function isNarrationLanguageAvailable(
+  input: string | NarrationLanguageOption | null | undefined
+): boolean {
+  if (!input) return false;
+  const id = typeof input === 'string' ? input : input.id;
+  return ACTIVE_NARRATION_LANGUAGE_IDS.has(id);
+}
+
 export const POPULAR_NARRATION_LANGUAGES: NarrationLanguageOption[] = [
   { id: 'en-US', label: 'English', nativeLabel: 'English', speechLangTag: 'en-US', popular: true, geminiTtsPreferred: true, available: true },
   { id: 'fr-FR', label: 'French', nativeLabel: 'Français', speechLangTag: 'fr-FR', popular: true, geminiTtsPreferred: true, available: true },
-  { id: 'de-DE', label: 'German', nativeLabel: 'Deutsch', speechLangTag: 'de-DE', popular: true, geminiTtsPreferred: true, available: true },
-  { id: 'es-ES', label: 'Spanish', nativeLabel: 'Español', speechLangTag: 'es-ES', popular: true, geminiTtsPreferred: true, available: true },
-  { id: 'pt-PT', label: 'Portuguese', nativeLabel: 'Português', speechLangTag: 'pt-PT', popular: true, geminiTtsPreferred: true, available: true },
-  { id: 'ar-SA', label: 'Arabic', nativeLabel: 'العربية', speechLangTag: 'ar-SA', popular: true, geminiTtsPreferred: true, available: true },
   { id: 'yo-NG', label: 'Yoruba', nativeLabel: 'Èdè Yorùbá', speechLangTag: 'yo-NG', regionHint: 'Nigeria', popular: true, available: true },
   { id: 'ig-NG', label: 'Igbo', nativeLabel: 'Asụsụ Igbo', speechLangTag: 'ig-NG', regionHint: 'Nigeria', popular: true, available: true },
   { id: 'ha-NG', label: 'Hausa', nativeLabel: 'Harshen Hausa', speechLangTag: 'ha-NG', regionHint: 'Nigeria', popular: true, available: true },
-  { id: 'pcm-NG', label: 'Nigerian Pidgin', nativeLabel: 'Naijá', speechLangTag: 'pcm-NG', regionHint: 'Nigeria', popular: true, available: true },
-  { id: 'sw-KE', label: 'Swahili', nativeLabel: 'Kiswahili', speechLangTag: 'sw-KE', regionHint: 'East Africa', popular: true, available: true },
-  { id: 'hi-IN', label: 'Hindi', nativeLabel: 'हिन्दी', speechLangTag: 'hi-IN', popular: true, geminiTtsPreferred: true, available: true },
-  { id: 'ja-JP', label: 'Japanese', nativeLabel: '日本語', speechLangTag: 'ja-JP', popular: true, geminiTtsPreferred: true, available: true },
-  { id: 'ko-KR', label: 'Korean', nativeLabel: '한국어', speechLangTag: 'ko-KR', popular: true, geminiTtsPreferred: true, available: true },
-  { id: 'zh-CN', label: 'Mandarin Chinese', nativeLabel: '中文 (普通话)', speechLangTag: 'zh-CN', popular: true, geminiTtsPreferred: true, available: true },
+  { id: 'de-DE', label: 'German', nativeLabel: 'Deutsch', speechLangTag: 'de-DE', popular: true, geminiTtsPreferred: true, available: false },
+  { id: 'es-ES', label: 'Spanish', nativeLabel: 'Español', speechLangTag: 'es-ES', popular: true, geminiTtsPreferred: true, available: false },
+  { id: 'pt-PT', label: 'Portuguese', nativeLabel: 'Português', speechLangTag: 'pt-PT', popular: true, geminiTtsPreferred: true, available: false },
+  { id: 'ar-SA', label: 'Arabic', nativeLabel: 'العربية', speechLangTag: 'ar-SA', popular: true, geminiTtsPreferred: true, available: false },
+  { id: 'pcm-NG', label: 'Nigerian Pidgin', nativeLabel: 'Naijá', speechLangTag: 'pcm-NG', regionHint: 'Nigeria', popular: true, available: false },
+  { id: 'sw-KE', label: 'Swahili', nativeLabel: 'Kiswahili', speechLangTag: 'sw-KE', regionHint: 'East Africa', popular: true, available: false },
+  { id: 'hi-IN', label: 'Hindi', nativeLabel: 'हिन्दी', speechLangTag: 'hi-IN', popular: true, geminiTtsPreferred: true, available: false },
+  { id: 'ja-JP', label: 'Japanese', nativeLabel: '日本語', speechLangTag: 'ja-JP', popular: true, geminiTtsPreferred: true, available: false },
+  { id: 'ko-KR', label: 'Korean', nativeLabel: '한국어', speechLangTag: 'ko-KR', popular: true, geminiTtsPreferred: true, available: false },
+  { id: 'zh-CN', label: 'Mandarin Chinese', nativeLabel: '中文 (普通话)', speechLangTag: 'zh-CN', popular: true, geminiTtsPreferred: true, available: false },
 ];
 
 export const ADDITIONAL_WORLD_LANGUAGES: NarrationLanguageOption[] = [
-  { id: 'it-IT', label: 'Italian', nativeLabel: 'Italiano', speechLangTag: 'it-IT', geminiTtsPreferred: true, available: true },
-  { id: 'nl-NL', label: 'Dutch', nativeLabel: 'Nederlands', speechLangTag: 'nl-NL', geminiTtsPreferred: true, available: true },
-  { id: 'ru-RU', label: 'Russian', nativeLabel: 'Русский', speechLangTag: 'ru-RU', geminiTtsPreferred: true, available: true },
-  { id: 'tr-TR', label: 'Turkish', nativeLabel: 'Türkçe', speechLangTag: 'tr-TR', geminiTtsPreferred: true, available: true },
-  { id: 'pl-PL', label: 'Polish', nativeLabel: 'Polski', speechLangTag: 'pl-PL', geminiTtsPreferred: true, available: true },
-  { id: 'uk-UA', label: 'Ukrainian', nativeLabel: 'Українська', speechLangTag: 'uk-UA', geminiTtsPreferred: true, available: true },
-  { id: 'sv-SE', label: 'Swedish', nativeLabel: 'Svenska', speechLangTag: 'sv-SE', geminiTtsPreferred: true, available: true },
-  { id: 'no-NO', label: 'Norwegian', nativeLabel: 'Norsk', speechLangTag: 'no-NO', geminiTtsPreferred: true, available: true },
-  { id: 'da-DK', label: 'Danish', nativeLabel: 'Dansk', speechLangTag: 'da-DK', geminiTtsPreferred: true, available: true },
-  { id: 'fi-FI', label: 'Finnish', nativeLabel: 'Suomi', speechLangTag: 'fi-FI', geminiTtsPreferred: true, available: true },
-  { id: 'el-GR', label: 'Greek', nativeLabel: 'Ελληνικά', speechLangTag: 'el-GR', geminiTtsPreferred: true, available: true },
-  { id: 'cs-CZ', label: 'Czech', nativeLabel: 'Čeština', speechLangTag: 'cs-CZ', geminiTtsPreferred: true, available: true },
-  { id: 'ro-RO', label: 'Romanian', nativeLabel: 'Română', speechLangTag: 'ro-RO', geminiTtsPreferred: true, available: true },
-  { id: 'hu-HU', label: 'Hungarian', nativeLabel: 'Magyar', speechLangTag: 'hu-HU', geminiTtsPreferred: true, available: true },
-  { id: 'id-ID', label: 'Indonesian', nativeLabel: 'Bahasa Indonesia', speechLangTag: 'id-ID', geminiTtsPreferred: true, available: true },
-  { id: 'ms-MY', label: 'Malay', nativeLabel: 'Bahasa Melayu', speechLangTag: 'ms-MY', geminiTtsPreferred: true, available: true },
-  { id: 'vi-VN', label: 'Vietnamese', nativeLabel: 'Tiếng Việt', speechLangTag: 'vi-VN', geminiTtsPreferred: true, available: true },
-  { id: 'th-TH', label: 'Thai', nativeLabel: 'ไทย', speechLangTag: 'th-TH', geminiTtsPreferred: true, available: true },
-  { id: 'tl-PH', label: 'Filipino / Tagalog', nativeLabel: 'Tagalog', speechLangTag: 'tl-PH', geminiTtsPreferred: true, available: true },
-  { id: 'bn-BD', label: 'Bengali', nativeLabel: 'বাংলা', speechLangTag: 'bn-BD', geminiTtsPreferred: true, available: true },
-  { id: 'ur-PK', label: 'Urdu', nativeLabel: 'اردو', speechLangTag: 'ur-PK', available: true },
-  { id: 'pa-IN', label: 'Punjabi', nativeLabel: 'ਪੰਜਾਬੀ', speechLangTag: 'pa-IN', available: true },
-  { id: 'ta-IN', label: 'Tamil', nativeLabel: 'தமிழ்', speechLangTag: 'ta-IN', geminiTtsPreferred: true, available: true },
-  { id: 'te-IN', label: 'Telugu', nativeLabel: 'తెలుగు', speechLangTag: 'te-IN', geminiTtsPreferred: true, available: true },
-  { id: 'mr-IN', label: 'Marathi', nativeLabel: 'मराठी', speechLangTag: 'mr-IN', geminiTtsPreferred: true, available: true },
-  { id: 'fa-IR', label: 'Persian (Farsi)', nativeLabel: 'فارسی', speechLangTag: 'fa-IR', available: true },
-  { id: 'he-IL', label: 'Hebrew', nativeLabel: 'עברית', speechLangTag: 'he-IL', geminiTtsPreferred: true, available: true },
-  { id: 'am-ET', label: 'Amharic', nativeLabel: 'አማርኛ', speechLangTag: 'am-ET', regionHint: 'Ethiopia', available: true },
-  { id: 'zu-ZA', label: 'Zulu', nativeLabel: 'isiZulu', speechLangTag: 'zu-ZA', regionHint: 'South Africa', available: true },
-  { id: 'xh-ZA', label: 'Xhosa', nativeLabel: 'isiXhosa', speechLangTag: 'xh-ZA', regionHint: 'South Africa', available: true },
-  { id: 'af-ZA', label: 'Afrikaans', nativeLabel: 'Afrikaans', speechLangTag: 'af-ZA', regionHint: 'South Africa', geminiTtsPreferred: true, available: true },
-  { id: 'ak-GH', label: 'Twi / Akan', nativeLabel: 'Akan', speechLangTag: 'ak-GH', regionHint: 'Ghana', available: true },
-  { id: 'wo-SN', label: 'Wolof', nativeLabel: 'Wolof', speechLangTag: 'wo-SN', regionHint: 'Senegal', available: true },
-  { id: 'sn-ZW', label: 'Shona', nativeLabel: 'chiShona', speechLangTag: 'sn-ZW', regionHint: 'Zimbabwe', available: true },
-  { id: 'so-SO', label: 'Somali', nativeLabel: 'Af-Soomaali', speechLangTag: 'so-SO', available: true },
-  { id: 'rw-RW', label: 'Kinyarwanda', nativeLabel: 'Ikinyarwanda', speechLangTag: 'rw-RW', regionHint: 'Rwanda', available: true },
-  { id: 'lg-UG', label: 'Luganda', nativeLabel: 'Oluganda', speechLangTag: 'lg-UG', regionHint: 'Uganda', available: true },
-  { id: 'ibb-NG', label: 'Ibibio', nativeLabel: 'Ibibio', speechLangTag: 'ibb-NG', regionHint: 'Nigeria', available: true },
-  { id: 'efi-NG', label: 'Efik', nativeLabel: 'Efik', speechLangTag: 'efi-NG', regionHint: 'Nigeria', available: true },
-  { id: 'bin-NG', label: 'Edo / Bini', nativeLabel: 'Ẹ̀dó', speechLangTag: 'bin-NG', regionHint: 'Nigeria', available: true },
-  { id: 'tiv-NG', label: 'Tiv', nativeLabel: 'Tiv', speechLangTag: 'tiv-NG', regionHint: 'Nigeria', available: true },
-  { id: 'ht-HT', label: 'Haitian Creole', nativeLabel: 'Kreyòl Ayisyen', speechLangTag: 'ht-HT', available: true },
-  { id: 'la-VA', label: 'Latin', nativeLabel: 'Latina', speechLangTag: 'la', available: true },
+  { id: 'it-IT', label: 'Italian', nativeLabel: 'Italiano', speechLangTag: 'it-IT', geminiTtsPreferred: true, available: false },
+  { id: 'nl-NL', label: 'Dutch', nativeLabel: 'Nederlands', speechLangTag: 'nl-NL', geminiTtsPreferred: true, available: false },
+  { id: 'ru-RU', label: 'Russian', nativeLabel: 'Русский', speechLangTag: 'ru-RU', geminiTtsPreferred: true, available: false },
+  { id: 'tr-TR', label: 'Turkish', nativeLabel: 'Türkçe', speechLangTag: 'tr-TR', geminiTtsPreferred: true, available: false },
+  { id: 'pl-PL', label: 'Polish', nativeLabel: 'Polski', speechLangTag: 'pl-PL', geminiTtsPreferred: true, available: false },
+  { id: 'uk-UA', label: 'Ukrainian', nativeLabel: 'Українська', speechLangTag: 'uk-UA', geminiTtsPreferred: true, available: false },
+  { id: 'sv-SE', label: 'Swedish', nativeLabel: 'Svenska', speechLangTag: 'sv-SE', geminiTtsPreferred: true, available: false },
+  { id: 'no-NO', label: 'Norwegian', nativeLabel: 'Norsk', speechLangTag: 'no-NO', geminiTtsPreferred: true, available: false },
+  { id: 'da-DK', label: 'Danish', nativeLabel: 'Dansk', speechLangTag: 'da-DK', geminiTtsPreferred: true, available: false },
+  { id: 'fi-FI', label: 'Finnish', nativeLabel: 'Suomi', speechLangTag: 'fi-FI', geminiTtsPreferred: true, available: false },
+  { id: 'el-GR', label: 'Greek', nativeLabel: 'Ελληνικά', speechLangTag: 'el-GR', geminiTtsPreferred: true, available: false },
+  { id: 'cs-CZ', label: 'Czech', nativeLabel: 'Čeština', speechLangTag: 'cs-CZ', geminiTtsPreferred: true, available: false },
+  { id: 'ro-RO', label: 'Romanian', nativeLabel: 'Română', speechLangTag: 'ro-RO', geminiTtsPreferred: true, available: false },
+  { id: 'hu-HU', label: 'Hungarian', nativeLabel: 'Magyar', speechLangTag: 'hu-HU', geminiTtsPreferred: true, available: false },
+  { id: 'id-ID', label: 'Indonesian', nativeLabel: 'Bahasa Indonesia', speechLangTag: 'id-ID', geminiTtsPreferred: true, available: false },
+  { id: 'ms-MY', label: 'Malay', nativeLabel: 'Bahasa Melayu', speechLangTag: 'ms-MY', geminiTtsPreferred: true, available: false },
+  { id: 'vi-VN', label: 'Vietnamese', nativeLabel: 'Tiếng Việt', speechLangTag: 'vi-VN', geminiTtsPreferred: true, available: false },
+  { id: 'th-TH', label: 'Thai', nativeLabel: 'ไทย', speechLangTag: 'th-TH', geminiTtsPreferred: true, available: false },
+  { id: 'tl-PH', label: 'Filipino / Tagalog', nativeLabel: 'Tagalog', speechLangTag: 'tl-PH', geminiTtsPreferred: true, available: false },
+  { id: 'bn-BD', label: 'Bengali', nativeLabel: 'বাংলা', speechLangTag: 'bn-BD', geminiTtsPreferred: true, available: false },
+  { id: 'ur-PK', label: 'Urdu', nativeLabel: 'اردو', speechLangTag: 'ur-PK', available: false },
+  { id: 'pa-IN', label: 'Punjabi', nativeLabel: 'ਪੰਜਾਬੀ', speechLangTag: 'pa-IN', available: false },
+  { id: 'ta-IN', label: 'Tamil', nativeLabel: 'தமிழ்', speechLangTag: 'ta-IN', geminiTtsPreferred: true, available: false },
+  { id: 'te-IN', label: 'Telugu', nativeLabel: 'తెలుగు', speechLangTag: 'te-IN', geminiTtsPreferred: true, available: false },
+  { id: 'mr-IN', label: 'Marathi', nativeLabel: 'मराठी', speechLangTag: 'mr-IN', geminiTtsPreferred: true, available: false },
+  { id: 'fa-IR', label: 'Persian (Farsi)', nativeLabel: 'فارسی', speechLangTag: 'fa-IR', available: false },
+  { id: 'he-IL', label: 'Hebrew', nativeLabel: 'עברית', speechLangTag: 'he-IL', geminiTtsPreferred: true, available: false },
+  { id: 'am-ET', label: 'Amharic', nativeLabel: 'አማርኛ', speechLangTag: 'am-ET', regionHint: 'Ethiopia', available: false },
+  { id: 'zu-ZA', label: 'Zulu', nativeLabel: 'isiZulu', speechLangTag: 'zu-ZA', regionHint: 'South Africa', available: false },
+  { id: 'xh-ZA', label: 'Xhosa', nativeLabel: 'isiXhosa', speechLangTag: 'xh-ZA', regionHint: 'South Africa', available: false },
+  { id: 'af-ZA', label: 'Afrikaans', nativeLabel: 'Afrikaans', speechLangTag: 'af-ZA', regionHint: 'South Africa', geminiTtsPreferred: true, available: false },
+  { id: 'ak-GH', label: 'Twi / Akan', nativeLabel: 'Akan', speechLangTag: 'ak-GH', regionHint: 'Ghana', available: false },
+  { id: 'wo-SN', label: 'Wolof', nativeLabel: 'Wolof', speechLangTag: 'wo-SN', regionHint: 'Senegal', available: false },
+  { id: 'sn-ZW', label: 'Shona', nativeLabel: 'chiShona', speechLangTag: 'sn-ZW', regionHint: 'Zimbabwe', available: false },
+  { id: 'so-SO', label: 'Somali', nativeLabel: 'Af-Soomaali', speechLangTag: 'so-SO', available: false },
+  { id: 'rw-RW', label: 'Kinyarwanda', nativeLabel: 'Ikinyarwanda', speechLangTag: 'rw-RW', regionHint: 'Rwanda', available: false },
+  { id: 'lg-UG', label: 'Luganda', nativeLabel: 'Oluganda', speechLangTag: 'lg-UG', regionHint: 'Uganda', available: false },
+  { id: 'ibb-NG', label: 'Ibibio', nativeLabel: 'Ibibio', speechLangTag: 'ibb-NG', regionHint: 'Nigeria', available: false },
+  { id: 'efi-NG', label: 'Efik', nativeLabel: 'Efik', speechLangTag: 'efi-NG', regionHint: 'Nigeria', available: false },
+  { id: 'bin-NG', label: 'Edo / Bini', nativeLabel: 'Ẹ̀dó', speechLangTag: 'bin-NG', regionHint: 'Nigeria', available: false },
+  { id: 'tiv-NG', label: 'Tiv', nativeLabel: 'Tiv', speechLangTag: 'tiv-NG', regionHint: 'Nigeria', available: false },
+  { id: 'ht-HT', label: 'Haitian Creole', nativeLabel: 'Kreyòl Ayisyen', speechLangTag: 'ht-HT', available: false },
+  { id: 'la-VA', label: 'Latin', nativeLabel: 'Latina', speechLangTag: 'la', available: false },
 ];
 
 export const NARRATION_LANGUAGES: NarrationLanguageOption[] = [
@@ -81,7 +97,11 @@ export const NARRATION_LANGUAGES: NarrationLanguageOption[] = [
   ...ADDITIONAL_WORLD_LANGUAGES,
 ];
 
-export const AVAILABLE_NARRATION_LANGUAGES = NARRATION_LANGUAGES;
+export const ACTIVE_NARRATION_LANGUAGES: NarrationLanguageOption[] = NARRATION_LANGUAGES.filter(
+  (lang) => lang.available
+);
+
+export const AVAILABLE_NARRATION_LANGUAGES = ACTIVE_NARRATION_LANGUAGES;
 
 const LANGUAGE_PREFIX_TO_ID: Record<string, string> = {
   en: 'en-US',
@@ -149,7 +169,7 @@ const LANGUAGE_PREFIX_TO_ID: Record<string, string> = {
 };
 
 const COUNTRY_TO_SUGGESTIONS: Record<string, { regionLabel: string; languageIds: string[] }> = {
-  NG: { regionLabel: 'Nigeria', languageIds: ['yo-NG', 'ig-NG', 'ha-NG', 'pcm-NG', 'en-US'] },
+  NG: { regionLabel: 'Nigeria', languageIds: ['yo-NG', 'ig-NG', 'ha-NG', 'en-US'] },
   GH: { regionLabel: 'Ghana', languageIds: ['ak-GH', 'en-US'] },
   KE: { regionLabel: 'Kenya', languageIds: ['sw-KE', 'en-US'] },
   TZ: { regionLabel: 'Tanzania', languageIds: ['sw-KE', 'en-US'] },
@@ -304,7 +324,7 @@ export function resolveNarrationLanguage(rawInput: unknown): NarrationLanguageOp
     label: sanitizedLabel,
     nativeLabel: sanitizedLabel,
     speechLangTag: /^[a-z]{2,3}(?:-[a-z]{2,4})?$/i.test(sanitizedLabel) ? sanitizedLabel : 'en',
-    available: true,
+    available: false,
     isCustom: true,
   };
 }
@@ -334,7 +354,7 @@ export function detectLanguageFromSignals(signals: {
     for (const tag of signals.languages) {
       if (typeof tag !== 'string' || !tag.trim()) continue;
       const meta = getNarrationLanguageMeta(tag);
-      if (meta) {
+      if (meta && meta.available) {
         suggestedSet.add(meta.id);
         if (detectedFrom === 'default' && meta.id !== 'en-US') {
           primaryLanguageId = meta.id;
@@ -346,7 +366,9 @@ export function detectLanguageFromSignals(signals: {
         const tagCountry = parts[1].toUpperCase();
         if (COUNTRY_TO_SUGGESTIONS[tagCountry]) {
           for (const id of COUNTRY_TO_SUGGESTIONS[tagCountry].languageIds) {
-            suggestedSet.add(id);
+            if (isNarrationLanguageAvailable(id)) {
+              suggestedSet.add(id);
+            }
           }
         }
       }
@@ -355,11 +377,14 @@ export function detectLanguageFromSignals(signals: {
 
   const countrySuggestion = effectiveCountry ? COUNTRY_TO_SUGGESTIONS[effectiveCountry] : undefined;
   if (countrySuggestion) {
-    for (const id of countrySuggestion.languageIds) {
+    const activeCountryLangs = countrySuggestion.languageIds.filter((id) =>
+      isNarrationLanguageAvailable(id)
+    );
+    for (const id of activeCountryLangs) {
       suggestedSet.add(id);
     }
-    if (detectedFrom === 'default') {
-      primaryLanguageId = countrySuggestion.languageIds[0] || 'en-US';
+    if (detectedFrom === 'default' && activeCountryLangs.length > 0) {
+      primaryLanguageId = activeCountryLangs[0] || 'en-US';
       detectedFrom = rawCountry ? 'country' : 'timezone';
     }
   }

@@ -3078,8 +3078,9 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     );
   });
 
-  test('Narration supports any language, custom languages, and locale auto-detection', async () => {
+  test('Narration & translation keep English, French, Yoruba, Igbo, and Hausa active while marking all other languages Coming Soon', async () => {
     const {
+      ACTIVE_NARRATION_LANGUAGES,
       NARRATION_LANGUAGES,
       POPULAR_NARRATION_LANGUAGES,
       resolveNarrationLanguage,
@@ -3088,18 +3089,30 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
 
     assert.ok(POPULAR_NARRATION_LANGUAGES.length >= 15);
     assert.ok(NARRATION_LANGUAGES.length >= 50);
-    assert.equal(NARRATION_LANGUAGES.every((lang) => lang.available === true), true);
+    assert.deepEqual(
+      ACTIVE_NARRATION_LANGUAGES.map((l) => l.id),
+      ['en-US', 'fr-FR', 'yo-NG', 'ig-NG', 'ha-NG']
+    );
+    assert.deepEqual(
+      NARRATION_LANGUAGES.filter((lang) => lang.available).map((l) => l.id),
+      ['en-US', 'fr-FR', 'yo-NG', 'ig-NG', 'ha-NG']
+    );
 
     const custom = resolveNarrationLanguage('Quechua');
     assert.ok(custom);
     assert.equal(custom.label, 'Quechua');
     assert.equal(custom.isCustom, true);
-    assert.equal(custom.available, true);
+    assert.equal(custom.available, false);
+
+    const spanish = resolveNarrationLanguage('es-ES');
+    assert.ok(spanish);
+    assert.equal(spanish.available, false);
 
     const yoruba = resolveNarrationLanguage('yoruba');
     assert.ok(yoruba);
     assert.equal(yoruba.id, 'yo-NG');
     assert.equal(yoruba.speechLangTag, 'yo-NG');
+    assert.equal(yoruba.available, true);
 
     assert.equal(resolveNarrationLanguage('   '), null);
     assert.equal(resolveNarrationLanguage('!!!'), null);
@@ -3113,7 +3126,7 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     assert.ok(ngLocale.suggestedLanguageIds.includes('yo-NG'));
     assert.ok(ngLocale.suggestedLanguageIds.includes('ig-NG'));
     assert.ok(ngLocale.suggestedLanguageIds.includes('ha-NG'));
-    assert.ok(ngLocale.suggestedLanguageIds.includes('pcm-NG'));
+    assert.equal(ngLocale.suggestedLanguageIds.includes('pcm-NG'), false);
 
     const localeRes = await fetch(`${baseUrl}/api/locale`, {
       headers: {
@@ -3138,6 +3151,38 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
       }),
     });
     assert.equal(emptyLangRes.status, 400);
+
+    // Non-active languages return Coming Soon cleanly on both audio (/api/ai/tts) and text (/api/ai/translate)
+    for (const comingSoonLang of ['es-ES', 'de-DE', 'pcm-NG', 'ja-JP', 'Quechua']) {
+      const ttsComingSoon = await fetch(`${baseUrl}/api/ai/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: 'the-obsidian-throne',
+          chapterNumber: 1,
+          voiceName: 'Kore',
+          language: comingSoonLang,
+        }),
+      });
+      assert.equal(ttsComingSoon.status, 400);
+      const ttsJson = await ttsComingSoon.json();
+      assert.equal(ttsJson.comingSoon, true);
+      assert.match(String(ttsJson.error || ''), /coming soon/i);
+
+      const translateComingSoon = await fetch(`${baseUrl}/api/ai/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: 'the-obsidian-throne',
+          chapterNumber: 1,
+          language: comingSoonLang,
+        }),
+      });
+      assert.equal(translateComingSoon.status, 400);
+      const translateJson = await translateComingSoon.json();
+      assert.equal(translateJson.comingSoon, true);
+      assert.match(String(translateJson.error || ''), /coming soon/i);
+    }
   });
 
   test('AI TTS uses gemini-2.5-flash, retries 503 spikes, caches translations across voice changes, and falls back to Web Speech', async () => {
@@ -3303,13 +3348,10 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
           language: 'Quechua',
         }),
       });
-      assert.equal(customRes.status, 200);
+      assert.equal(customRes.status, 400);
       const customJson = await customRes.json();
-      assert.equal(customJson.ttsFallback, true);
-      assert.equal(customJson.ttsProvider, 'web-speech');
-      assert.equal(customJson.languageLabel, 'Quechua');
-      assert.ok(String(customJson.translatedText || '').length > 0);
-      assert.ok(Array.isArray(customJson.translatedParagraphs) && customJson.translatedParagraphs.length >= 1);
+      assert.equal(customJson.comingSoon, true);
+      assert.match(String(customJson.error || ''), /coming soon/i);
 
       // 4. Direct on-page text translation (POST /api/ai/translate):
       // Locked chapter requires entitlement (403 without session)
@@ -3319,46 +3361,311 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
         body: JSON.stringify({
           storySlug: 'the-obsidian-throne',
           chapterNumber: 4,
-          language: 'es-ES',
+          language: 'ig-NG',
         }),
       });
       assert.equal(lockedTranslateRes.status, 403);
 
-      // Spanish text translation translates title + paragraphs, caches, and TTS reuses it with 0 extra translation calls
-      const callsBeforeSpanish = translationCalls.length;
-      const esTranslateRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
+      // Igbo text translation translates title + paragraphs, caches, and TTS reuses it with 0 extra translation calls
+      const callsBeforeIgbo = translationCalls.length;
+      const igTranslateRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
         body: JSON.stringify({
           storySlug: 'the-obsidian-throne',
           chapterNumber: 1,
-          language: 'es-ES',
+          language: 'ig-NG',
         }),
       });
-      assert.equal(esTranslateRes.status, 200);
-      const esTranslateJson = await esTranslateRes.json();
-      assert.equal(esTranslateJson.language, 'es-ES');
-      assert.equal(esTranslateJson.cached, false);
-      assert.ok(Array.isArray(esTranslateJson.translatedParagraphs) && esTranslateJson.translatedParagraphs.length >= 1);
-      assert.equal(translationCalls.length, callsBeforeSpanish + 1);
+      assert.equal(igTranslateRes.status, 200);
+      const igTranslateJson = await igTranslateRes.json();
+      assert.equal(igTranslateJson.language, 'ig-NG');
+      assert.equal(igTranslateJson.cached, false);
+      assert.ok(Array.isArray(igTranslateJson.translatedParagraphs) && igTranslateJson.translatedParagraphs.length >= 1);
+      assert.equal(translationCalls.length, callsBeforeIgbo + 1);
 
-      // Subsequent TTS for Spanish reuses cached text translation (no additional translation call!)
+      // Subsequent TTS for Igbo reuses cached text translation (no additional translation call!)
       forceUnsupportedTts = false;
-      const esTtsRes = await fetch(`${aiBaseUrl}/api/ai/tts`, {
+      const igTtsRes = await fetch(`${aiBaseUrl}/api/ai/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
         body: JSON.stringify({
           storySlug: 'the-obsidian-throne',
           chapterNumber: 1,
           voiceName: 'Puck',
-          language: 'es-ES',
+          language: 'ig-NG',
         }),
       });
-      assert.equal(esTtsRes.status, 200);
-      const esTtsJson = await esTtsRes.json();
-      assert.equal(esTtsJson.translationCached, true);
-      assert.deepEqual(esTtsJson.translatedParagraphs, esTranslateJson.translatedParagraphs);
-      assert.equal(translationCalls.length, callsBeforeSpanish + 1);
+      assert.equal(igTtsRes.status, 200);
+      const igTtsJson = await igTtsRes.json();
+      assert.equal(igTtsJson.translationCached, true);
+      assert.deepEqual(igTtsJson.translatedParagraphs, igTranslateJson.translatedParagraphs);
+      assert.equal(translationCalls.length, callsBeforeIgbo + 1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        aiServer.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  test('chapter translation tolerates markdown/JSON outputs, falls back on 429, chunks long chapters, and reports accurate errors', async () => {
+    const { createApp } = await import('../server');
+    const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+    // Create a 3,200-word chapter (~19,200 chars across multiple paragraphs) to verify lightweight chunking
+    const paragraphUnit = Array.from({ length: 160 }, (_, idx) => `word${idx}`).join(' ');
+    const longChapterBody = Array.from(
+      { length: 20 },
+      (_, idx) => `Paragraph ${idx + 1}: ${paragraphUnit}.`
+    ).join('\n\n');
+
+    type CallRecord = { model: string; promptLength: number };
+    const calls: CallRecord[] = [];
+    let scenario:
+      | 'markdown-fence'
+      | 'json-wrapped'
+      | '429-fallback-to-lite'
+      | 'all-429-rate-limit'
+      | 'all-429-billing-quota'
+      | 'all-503-overload'
+      | 'chunked-long' = 'markdown-fence';
+
+    const mockAi = {
+      models: {
+        generateContent: async (params: { model: string; contents: unknown }) => {
+          const promptStr = typeof params.contents === 'string' ? params.contents : JSON.stringify(params.contents);
+          calls.push({ model: params.model, promptLength: promptStr.length });
+
+          if (scenario === 'markdown-fence') {
+            return {
+              text: '```markdown\n**TITLE: Orí Kì í Tẹ̀**\n\nÀwọn òkè ń pariwo ní òru.\n\nÌtàn náà tẹ̀síwájú.\n```',
+            };
+          }
+
+          if (scenario === 'json-wrapped') {
+            return {
+              text: '  ```json\n{"translatedTitle":"Der Eiserne Mond","translatedParagraphs":["Erster Absatz.","Zweiter Absatz."]}\n```  ',
+            };
+          }
+
+          if (scenario === '429-fallback-to-lite') {
+            if (params.model === 'gemini-2.5-flash' || params.model === 'gemini-4-hydrogen') {
+              throw new Error('429 RESOURCE_EXHAUSTED: Per-minute requests rate limit exceeded.');
+            }
+            return {
+              text: 'TITLE: Àgbáyé Tuntun\n\nỌ̀nà náà ṣí sílẹ̀ fún àwọn olùkà.',
+            };
+          }
+
+          if (scenario === 'all-429-rate-limit') {
+            throw new Error('429 RESOURCE_EXHAUSTED: Too many requests per minute.');
+          }
+
+          if (scenario === 'all-429-billing-quota') {
+            throw new Error(
+              '429 RESOURCE_EXHAUSTED: You exceeded your current quota, please check your plan and billing details.'
+            );
+          }
+
+          if (scenario === 'all-503-overload') {
+            throw new Error(
+              '503 UNAVAILABLE: This model is currently experiencing high demand. Spikes in demand are usually temporary.'
+            );
+          }
+
+          // chunked-long
+          return {
+            text:
+              calls.length === 1
+                ? 'TITLE: Long Crossing (Pidgin)\n\nFirst pidgin passage don land.'
+                : `Chunk ${calls.length} pidgin passage continue.`,
+          };
+        },
+      },
+    };
+
+    const aiApp = await createApp({
+      withVite: false,
+      aiRetryDelaysMs: [1, 1, 1],
+      geminiClientFactory: () => mockAi as unknown as import('@google/genai').GoogleGenAI,
+    });
+
+    const aiServer = await new Promise<http.Server>((resolve) => {
+      const s = aiApp.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    try {
+      const addr = aiServer.address();
+      assert.ok(addr && typeof addr === 'object');
+      const aiBaseUrl = `http://127.0.0.1:${addr.port}`;
+
+      const shortStoryRes = await fetch(`${aiBaseUrl}/api/writer/stories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          title: `Fresh Translation Tale ${suffix}`,
+          author: 'Adanna Nwosu',
+          genre: 'Mythic Fantasy',
+          coverImage: '/assets/images/book_cover_crimson_dynasty_1794465562273.jpg',
+          synopsis: 'Fresh story for isolated translation regression checks.',
+          publicationStatus: 'published',
+          accessTier: 'free',
+          chapters: [
+            {
+              title: 'Chapter 1: Obsidian Gate',
+              body: 'The obsidian gate hummed softly beneath the crescent moon.\n\nNo lantern flickered along the ridge.',
+            },
+          ],
+        }),
+      });
+      assert.equal(shortStoryRes.status, 201);
+      const shortStory = (await shortStoryRes.json()).story as { slug: string };
+
+      // 1. Markdown fences + bold TITLE parse cleanly without pattern errors (Yoruba)
+      scenario = 'markdown-fence';
+      calls.length = 0;
+      const yoRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: shortStory.slug,
+          chapterNumber: 1,
+          language: 'yo-NG',
+        }),
+      });
+      assert.equal(yoRes.status, 200);
+      const yoJson = await yoRes.json();
+      assert.equal(yoJson.translatedTitle, 'Orí Kì í Tẹ̀');
+      assert.deepEqual(yoJson.translatedParagraphs, [
+        'Àwọn òkè ń pariwo ní òru.',
+        'Ìtàn náà tẹ̀síwájú.',
+      ]);
+
+      // 2. JSON-wrapped response inside code fences parses cleanly (French)
+      scenario = 'json-wrapped';
+      calls.length = 0;
+      const frRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: shortStory.slug,
+          chapterNumber: 1,
+          language: 'fr-FR',
+        }),
+      });
+      assert.equal(frRes.status, 200);
+      const frJson = await frRes.json();
+      assert.equal(frJson.translatedTitle, 'Der Eiserne Mond');
+      assert.deepEqual(frJson.translatedParagraphs, ['Erster Absatz.', 'Zweiter Absatz.']);
+
+      // 3. 429 rate-limit on gemini-2.5-flash + gemini-4-hydrogen automatically falls back to gemini-3.1-flash-lite (Igbo)
+      scenario = '429-fallback-to-lite';
+      calls.length = 0;
+      const igRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: shortStory.slug,
+          chapterNumber: 1,
+          language: 'ig-NG',
+        }),
+      });
+      assert.equal(igRes.status, 200);
+      const igJson = await igRes.json();
+      assert.equal(igJson.translatedTitle, 'Àgbáyé Tuntun');
+      assert.deepEqual(
+        calls.map((c) => c.model),
+        ['gemini-2.5-flash', 'gemini-4-hydrogen', 'gemini-3.1-flash-lite']
+      );
+
+      // 4. Exhausted per-minute 429 does NOT falsely say "paid billing tier required" (Hausa)
+      scenario = 'all-429-rate-limit';
+      calls.length = 0;
+      const haRateLimitRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: shortStory.slug,
+          chapterNumber: 1,
+          language: 'ha-NG',
+        }),
+      });
+      assert.equal(haRateLimitRes.status, 429);
+      const haRateLimitJson = await haRateLimitRes.json();
+      assert.equal(/paid billing tier required/i.test(String(haRateLimitJson.error || '')), false);
+      assert.match(String(haRateLimitJson.error || ''), /rate limit/i);
+
+      // 5. Explicit billing quota 429 preserves accurate quota/plan message (Hausa)
+      scenario = 'all-429-billing-quota';
+      calls.length = 0;
+      const haBillingRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: shortStory.slug,
+          chapterNumber: 1,
+          language: 'ha-NG',
+        }),
+      });
+      assert.equal(haBillingRes.status, 429);
+      const haBillingJson = await haBillingRes.json();
+      assert.match(String(haBillingJson.error || ''), /quota|plan|billing/i);
+
+      // 6. 503 overload returns 503 temporary high-demand error (not billing/quota)
+      scenario = 'all-503-overload';
+      calls.length = 0;
+      const haOverloadRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: shortStory.slug,
+          chapterNumber: 1,
+          language: 'ha-NG',
+        }),
+      });
+      assert.equal(haOverloadRes.status, 503);
+      const haOverloadJson = await haOverloadRes.json();
+      assert.match(String(haOverloadJson.error || ''), /high demand/i);
+      assert.equal(/paid billing tier required/i.test(String(haOverloadJson.error || '')), false);
+
+      // 7. 3,200-word chapter (~19,200 chars) splits into multiple lightweight <= ~2,500-char prompt chunks and reassembles cleanly
+      const createStoryRes = await fetch(`${aiBaseUrl}/api/writer/stories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          title: `Chunked Odyssey ${suffix}`,
+          author: 'Olumide Adeyemi',
+          genre: 'Mythic Fantasy',
+          coverImage: '/assets/images/book_cover_crimson_dynasty_1794465562273.jpg',
+          synopsis: 'Long-form epic to verify chunked multilingual translation.',
+          publicationStatus: 'published',
+          accessTier: 'free',
+          chapters: [{ title: 'Chapter 1: Long Crossing', body: longChapterBody }],
+        }),
+      });
+      assert.equal(createStoryRes.status, 201);
+      const createdStory = (await createStoryRes.json()).story as { slug: string };
+
+      scenario = 'chunked-long';
+      calls.length = 0;
+      const longRes = await fetch(`${aiBaseUrl}/api/ai/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerCookie },
+        body: JSON.stringify({
+          storySlug: createdStory.slug,
+          chapterNumber: 1,
+          language: 'yo-NG',
+        }),
+      });
+      assert.equal(longRes.status, 200);
+      const longJson = await longRes.json();
+      assert.ok(calls.length >= 8, `Expected >= 8 lightweight chunks for 3,200 words, got ${calls.length}`);
+      assert.ok(
+        calls.every((c) => c.promptLength <= 2600),
+        `Expected all chunk prompts to remain lightweight (<= 2600 chars), max was ${Math.max(...calls.map((c) => c.promptLength))}`
+      );
+      assert.equal(longJson.translatedTitle, 'Long Crossing (Pidgin)');
+      assert.equal(longJson.translatedParagraphs.length, calls.length);
     } finally {
       await new Promise<void>((resolve, reject) => {
         aiServer.close((err) => (err ? reject(err) : resolve()));
@@ -3366,9 +3673,3 @@ describe('Lorethos API Security & Workflow Release Gates', () => {
     }
   });
 });
-
-
-
-
-
-
