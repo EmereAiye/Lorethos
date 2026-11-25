@@ -397,30 +397,32 @@ export const Navbar: React.FC = () => {
           <div
             role="group"
             aria-label="Color theme"
-            className="hidden sm:flex items-center bg-[#2D142C]/5 dark:bg-white/5 sepia:bg-[#2C1E18]/10 p-0.5 rounded-lg border border-[#2D142C]/10 dark:border-white/10 sepia:border-[#2C1E18]/15 text-xs font-sans-ui"
+            className="hidden sm:flex items-center gap-0.5 bg-[#C85A32]/[0.08] dark:bg-white/[0.07] sepia:bg-[#C85A32]/12 p-0.5 rounded-lg border border-[#C85A32]/30 dark:border-[#E07A4B]/35 sepia:border-[#C85A32]/35 text-xs font-sans-ui"
           >
             <button
               type="button"
               onClick={() => setTheme('day')}
               aria-label="Day theme"
               aria-pressed={readerSettings.theme === 'day'}
+              title="Day (Bright) mode"
               className={`p-1.5 rounded-md flex items-center justify-center transition-all cursor-pointer ${
                 readerSettings.theme === 'day'
-                  ? 'bg-white text-[#2D142C] shadow-xs font-semibold'
-                  : 'text-[#2D142C]/60 hover:text-[#2D142C]'
+                  ? 'bg-gradient-to-r from-[#C85A32] to-[#E07A4B] text-white shadow-sm font-semibold'
+                  : 'text-[#B84924] dark:text-[#F39165] sepia:text-[#A9421F] hover:bg-[#C85A32]/15 dark:hover:bg-[#E07A4B]/20'
               }`}
             >
-              <Sun className="w-3.5 h-3.5" />
+              <Sun className="w-3.5 h-3.5" strokeWidth={2.2} />
             </button>
             <button
               type="button"
               onClick={() => setTheme('sepia')}
               aria-label="Sepia theme"
               aria-pressed={readerSettings.theme === 'sepia'}
+              title="Sepia reading mode"
               className={`p-1.5 rounded-md flex items-center justify-center transition-all cursor-pointer ${
                 readerSettings.theme === 'sepia'
-                  ? 'bg-[#EDE3D5] text-[#2C1E18] shadow-xs font-semibold'
-                  : 'text-[#2C1E18]/60 hover:text-[#2C1E18]'
+                  ? 'bg-gradient-to-r from-[#C85A32] to-[#E07A4B] text-white shadow-sm font-semibold'
+                  : 'text-[#B84924] dark:text-[#F39165] sepia:text-[#A9421F] hover:bg-[#C85A32]/15 dark:hover:bg-[#E07A4B]/20'
               }`}
             >
               <span className="text-[11px] font-bold leading-none px-0.5">Sepia</span>
@@ -430,13 +432,14 @@ export const Navbar: React.FC = () => {
               onClick={() => setTheme('night')}
               aria-label="Night theme"
               aria-pressed={readerSettings.theme === 'night'}
+              title="Night (Dark) mode"
               className={`p-1.5 rounded-md flex items-center justify-center transition-all cursor-pointer ${
                 readerSettings.theme === 'night'
-                  ? 'bg-[#231323] text-white shadow-xs font-semibold'
-                  : 'text-white/60 hover:text-white'
+                  ? 'bg-gradient-to-r from-[#C85A32] to-[#E07A4B] text-white shadow-sm font-semibold'
+                  : 'text-[#B84924] dark:text-[#F39165] sepia:text-[#A9421F] hover:bg-[#C85A32]/15 dark:hover:bg-[#E07A4B]/20'
               }`}
             >
-              <Moon className="w-3.5 h-3.5" />
+              <Moon className="w-3.5 h-3.5" strokeWidth={2.2} />
             </button>
           </div>
 
@@ -713,10 +716,10 @@ export const Navbar: React.FC = () => {
                   key={t}
                   type="button"
                   onClick={() => setTheme(t)}
-                  className={`px-3 py-1.5 rounded border capitalize cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-md border capitalize cursor-pointer transition-all ${
                     readerSettings.theme === t
-                      ? 'border-[#C85A32] bg-[#C85A32]/10 text-[#C85A32] font-semibold'
-                      : 'border-current/15'
+                      ? 'border-transparent bg-gradient-to-r from-[#C85A32] to-[#E07A4B] text-white font-semibold shadow-xs'
+                      : 'border-[#C85A32]/30 text-[#B84924] dark:text-[#F39165] sepia:text-[#A9421F] hover:bg-[#C85A32]/10'
                   }`}
                 >
                   {t}

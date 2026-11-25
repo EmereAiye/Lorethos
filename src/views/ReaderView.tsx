@@ -1659,41 +1659,51 @@ export const ReaderView: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-            <div role="group" aria-label="Reader color theme" className="flex items-center bg-current/5 p-0.5 rounded-lg border border-current/15 text-[10px] sm:text-[11px]">
+            <div
+              role="group"
+              aria-label="Reader color theme"
+              className="flex items-center gap-0.5 bg-[#C85A32]/[0.08] dark:bg-white/[0.07] sepia:bg-[#C85A32]/12 p-0.5 rounded-lg border border-[#C85A32]/30 dark:border-[#E07A4B]/35 sepia:border-[#C85A32]/35 text-[10px] sm:text-[11px]"
+            >
               <button
                 type="button"
                 onClick={() => updateReaderSettings({ theme: 'day' })}
                 aria-label="Day theme"
                 aria-pressed={readerSettings.theme === 'day'}
-                className={`px-1.5 sm:px-2 py-1 rounded transition-all cursor-pointer flex items-center gap-1 ${
-                  readerSettings.theme === 'day' ? 'bg-white text-[#2D142C] shadow-xs font-semibold' : 'opacity-65 hover:opacity-100'
+                className={`px-1.5 sm:px-2 py-1 rounded-md transition-all cursor-pointer flex items-center gap-1 ${
+                  readerSettings.theme === 'day'
+                    ? 'bg-gradient-to-r from-[#C85A32] to-[#E07A4B] text-white shadow-sm font-semibold'
+                    : 'text-[#B84924] dark:text-[#F39165] sepia:text-[#A9421F] hover:bg-[#C85A32]/15 dark:hover:bg-[#E07A4B]/20'
                 }`}
               >
-                <Sun className="w-3 h-3" />
-                <span className="hidden md:inline">Day</span>
+                <Sun className="w-3 h-3" strokeWidth={2.2} />
+                <span className="hidden md:inline font-semibold">Day</span>
               </button>
               <button
                 type="button"
                 onClick={() => updateReaderSettings({ theme: 'sepia' })}
                 aria-label="Sepia theme"
                 aria-pressed={readerSettings.theme === 'sepia'}
-                className={`px-1.5 sm:px-2 py-1 rounded transition-all cursor-pointer flex items-center gap-1 ${
-                  readerSettings.theme === 'sepia' ? 'bg-[#EDE3D5] text-[#2C1E18] shadow-xs font-semibold' : 'opacity-65 hover:opacity-100'
+                className={`px-1.5 sm:px-2 py-1 rounded-md transition-all cursor-pointer flex items-center gap-1 ${
+                  readerSettings.theme === 'sepia'
+                    ? 'bg-gradient-to-r from-[#C85A32] to-[#E07A4B] text-white shadow-sm font-semibold'
+                    : 'text-[#B84924] dark:text-[#F39165] sepia:text-[#A9421F] hover:bg-[#C85A32]/15 dark:hover:bg-[#E07A4B]/20'
                 }`}
               >
-                <span>Sepia</span>
+                <span className="font-semibold">Sepia</span>
               </button>
               <button
                 type="button"
                 onClick={() => updateReaderSettings({ theme: 'night' })}
                 aria-label="Night theme"
                 aria-pressed={readerSettings.theme === 'night'}
-                className={`px-1.5 sm:px-2 py-1 rounded transition-all cursor-pointer flex items-center gap-1 ${
-                  readerSettings.theme === 'night' ? 'bg-[#231323] text-white shadow-xs font-semibold' : 'opacity-65 hover:opacity-100'
+                className={`px-1.5 sm:px-2 py-1 rounded-md transition-all cursor-pointer flex items-center gap-1 ${
+                  readerSettings.theme === 'night'
+                    ? 'bg-gradient-to-r from-[#C85A32] to-[#E07A4B] text-white shadow-sm font-semibold'
+                    : 'text-[#B84924] dark:text-[#F39165] sepia:text-[#A9421F] hover:bg-[#C85A32]/15 dark:hover:bg-[#E07A4B]/20'
                 }`}
               >
-                <Moon className="w-3 h-3" />
-                <span className="hidden md:inline">Night</span>
+                <Moon className="w-3 h-3" strokeWidth={2.2} />
+                <span className="hidden md:inline font-semibold">Night</span>
               </button>
             </div>
 
@@ -2144,8 +2154,10 @@ export const ReaderView: React.FC = () => {
                     key={t}
                     type="button"
                     onClick={() => updateReaderSettings({ theme: t })}
-                    className={`py-2 px-3 rounded-lg border text-center font-medium cursor-pointer capitalize ${
-                      readerSettings.theme === t ? 'border-[#C85A32] ring-1 ring-[#C85A32]' : 'border-current/15'
+                    className={`py-2 px-3 rounded-lg border text-center font-medium cursor-pointer capitalize transition-all ${
+                      readerSettings.theme === t
+                        ? 'border-transparent bg-gradient-to-r from-[#C85A32] to-[#E07A4B] text-white font-semibold shadow-sm'
+                        : 'border-[#C85A32]/30 text-[#B84924] dark:text-[#F39165] sepia:text-[#A9421F] hover:bg-[#C85A32]/10'
                     }`}
                   >
                     {t}

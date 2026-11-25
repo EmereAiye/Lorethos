@@ -1852,10 +1852,10 @@ export const AccountView: React.FC = () => {
                         key={t}
                         type="button"
                         onClick={() => updateReaderSettings({ theme: t })}
-                        className={`py-2 px-3 rounded border capitalize cursor-pointer ${
+                        className={`py-2 px-3 rounded-lg border capitalize cursor-pointer transition-all ${
                           readerSettings.theme === t
-                            ? 'border-[#C85A32] font-semibold text-[#C85A32]'
-                            : 'border-[#2D142C]/15 dark:border-white/15'
+                            ? 'border-transparent bg-gradient-to-r from-[#C85A32] to-[#E07A4B] font-semibold text-white shadow-sm'
+                            : 'border-[#C85A32]/30 text-[#B84924] dark:text-[#F39165] sepia:text-[#A9421F] hover:bg-[#C85A32]/10'
                         }`}
                       >
                         {t}
